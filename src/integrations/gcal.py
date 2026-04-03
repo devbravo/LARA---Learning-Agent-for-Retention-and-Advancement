@@ -1,1 +1,89 @@
-# Google Calendar integration
+import json
+import os
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parents[2] / ".env", override=True)
+
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
+
+_CREDENTIALS_PATH = Path(
+    os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials/gcal_credentials.json")
+)
+_TOKEN_PATH = Path("credentials/token.json")
+
+
+def _get_service():
+    required = {"GOOGLE_CALENDAR_ID", "GOOGLE_CREDENTIALS_PATH"}
+    missing = [k for k in required if not os.environ.get(k)]
+    if missing:
+        raise EnvironmentError(f"Missing required env vars: {', '.join(missing)}")
+
+    if not _CREDENTIALS_PATH.exists():
+        raise FileNotFoundError(
+            f"Google credentials file not found at {_CREDENTIALS_PATH}. "
+            "Download it from Google Cloud Console → APIs & Services → Credentials."
+        )
+
+    creds = None
+    if _TOKEN_PATH.exists():
+        creds = Credentials.from_authorized_user_file(_TOKEN_PATH, SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(_CREDENTIALS_PATH, SCOPES)
+            creds = flow.run_local_server(port=0)
+        _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _TOKEN_PATH.write_text(creds.to_json())
+
+    return build("calendar", "v3", credentials=creds)
+
+
+def get_events(day: date) -> list[dict]:
+    """Fetch all events for a given day from GOOGLE_CALENDAR_ID."""
+    calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
+
+    time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+    time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+
+    try:
+        service = _get_service()
+        result = (
+            service.events()
+            .list(
+                calendarId=calendar_id,
+                timeMin=time_min,
+                timeMax=time_max,
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
+        )
+    except HttpError as e:
+        raise RuntimeError(f"Google Calendar API error {e.resp.status}: {e.reason}") from e
+
+    events = []
+    for item in result.get("items", []):
+        events.append({
+            "id": item.get("id"),
+            "summary": item.get("summary", "(No title)"),
+            "start": item.get("start", {}),
+            "end": item.get("end", {}),
+            "creator": item.get("creator", {}),
+        })
+    return events
+
+
+if __name__ == "__main__":
+    events = get_events(date.today())
+    print(json.dumps(events, indent=2))
