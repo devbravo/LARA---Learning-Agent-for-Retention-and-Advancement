@@ -15,11 +15,18 @@ def get_connection() -> sqlite3.Connection:
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_connection() as conn:
+        # Migrate existing DB: add active column if missing
+        try:
+            conn.execute("ALTER TABLE topics ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass  # column already exists
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS topics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
                 tier INTEGER NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
                 easiness_factor REAL DEFAULT 2.5,
                 interval_days INTEGER DEFAULT 1,
                 repetitions INTEGER DEFAULT 0,
