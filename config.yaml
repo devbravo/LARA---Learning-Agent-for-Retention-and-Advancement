@@ -1,41 +1,62 @@
+schedule:
+  daily_briefing:
+    hour: 7
+    minute: 0
+    misfire_grace_time: 3600
+  sunday_planning:
+    hour: 9
+    minute: 0
+    misfire_grace_time: 300
+
 protected_blocks:
   - start: "15:00"
     end: "19:30"
 
 focus_windows:
-  - start: "08:00"
-    end: "11:00"
-  - start: "11:00"
-    end: "13:00"
+  - start: "07:00"
+    end: "09:00"
+  - start: "10:00"
+    end: "15:00"
+
+timezone: "America/Paramaribo"
+
+min_window_minutes: 25
+max_session_minutes: 90
 
 topics:
   - name: "Gen AI System Design"
     tier: 1
     active: true
+    default_duration_minutes: 120
   - name: "Data Structures and Algorithms"
     tier: 1
     active: true
+    default_duration_minutes: 60
   - name: "Sales Engineering"
     tier: 1
     active: true
+    default_duration_minutes: 60
   - name: "LangGraph"
     tier: 2
     active: true
+    default_duration_minutes: 60
   - name: "RAG"
     tier: 2
     active: true
+    default_duration_minutes: 60
   - name: "Agentic patterns"
     tier: 2
     active: true
+    default_duration_minutes: 60
   - name: "FastAPI"
     tier: 2
     active: true
-  - name: "AWS ML Specialty"
+    default_duration_minutes: 60
+  - name: "AWS Solutions Architect"
     tier: 3
     active: true
-  - name: "RL fundamentals"
-    tier: 3
-    active: true
+    default_duration_minutes: 60
   - name: "LLM internals"
     tier: 3
     active: true
+    default_duration_minutes: 60

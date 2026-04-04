@@ -8,38 +8,41 @@ Jobs:
 Timezone: America/Paramaribo
 Guard:    never invoke during the 15:00–19:30 protected block.
 """
-
-import logging
 import os
-from datetime import datetime
-from pathlib import Path
-
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-from dotenv import load_dotenv
+import yaml
 import pytz
+import logging
+
+from pathlib import Path
+from datetime import datetime
+from dotenv import load_dotenv
+
+from src.agent import graph as _graph
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 load_dotenv(Path(__file__).parents[1] / ".env", override=True)
 
-from src.agent import graph as _graph
-
 logger = logging.getLogger(__name__)
 
-_TZ = pytz.timezone("America/Paramaribo")
-logger.info("Current time in Paramaribo: %s", datetime.now(_TZ))
+def _load_config() -> dict:
+    with open(Path(__file__).parents[1] / "config.yaml") as f:
+        return yaml.safe_load(f)
 
-_PROTECTED_START = (15, 0)   # HH, MM
-_PROTECTED_END   = (19, 30)
+_TZ = pytz.timezone(_load_config()["timezone"])
+logger.info("Current time in Paramaribo: %s", datetime.now(_TZ))
 
 
 def _is_protected_block() -> bool:
-    """Return True if current local time falls inside the protected block."""
-    now = datetime.now()
-    start_min = _PROTECTED_START[0] * 60 + _PROTECTED_START[1]
-    end_min   = _PROTECTED_END[0]   * 60 + _PROTECTED_END[1]
-    now_min   = now.hour * 60 + now.minute
-    return start_min <= now_min < end_min
-
+    """Return True if current local time falls inside any protected block."""
+    config = _load_config()
+    now = datetime.now(_TZ).time()
+    for block in config.get("protected_blocks", []):
+        start = datetime.strptime(block["start"], "%H:%M").time()
+        end = datetime.strptime(block["end"], "%H:%M").time()
+        if start <= now < end:
+            return True
+    return False
 
 def _run_daily_briefing() -> None:
     chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
@@ -54,26 +57,30 @@ def _run_daily_briefing() -> None:
 
 
 def build_scheduler() -> AsyncIOScheduler:
+    config = _load_config()
     scheduler = AsyncIOScheduler(timezone=_TZ)
+
+    daily = config["schedule"]["daily_briefing"]
+    sunday = config["schedule"]["sunday_planning"]
 
     # Mon–Sat at 08:00
     scheduler.add_job(
         _run_daily_briefing,
-        trigger=CronTrigger(day_of_week="mon-sat", hour=9, minute=25, timezone=_TZ),
+        trigger=CronTrigger(day_of_week="mon-sat", hour=daily["hour"], minute=daily["minute"], timezone=_TZ),
         id="daily_briefing_weekday",
-        name="Daily Briefing (Mon–Sat 09:25)",
+        name=f"Daily Briefing (Mon–Sat {daily['hour']:02d}:{daily['minute']:02d})",
         replace_existing=True,
-        misfire_grace_time=3600,
+        misfire_grace_time=daily["misfire_grace_time"],
     )
 
     # Sunday at 09:00 (weekly planning variant)
     scheduler.add_job(
         _run_daily_briefing,
-        trigger=CronTrigger(day_of_week="sun", hour=9, minute=0, timezone=_TZ),
+        trigger=CronTrigger(day_of_week="sun", hour=sunday["hour"], minute=sunday["minute"], timezone=_TZ),
         id="daily_briefing_sunday",
-        name="Weekly Planning (Sun 09:00)",
+        name=f"Weekly Planning (Sun {sunday['hour']:02d}:{sunday['minute']:02d})",
         replace_existing=True,
-        misfire_grace_time=300,
+        misfire_grace_time=sunday["misfire_grace_time"],
     )
 
     return scheduler

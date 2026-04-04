@@ -6,6 +6,7 @@ All exceptions are caught and surfaced as user-friendly messages in state.
 """
 
 import re
+import pytz
 from datetime import date, datetime
 from pathlib import Path
 from typing import TypedDict
@@ -34,8 +35,9 @@ class AgentState(TypedDict, total=False):
     trigger: str               # "daily" | "study_picker" | "done" | "confirm"
     chat_id: int
     duration_min: int | None
-    proposed_topic: str | None
-    proposed_slot: dict | None
+    proposed_topic: str | None          # single-slot flow (study_picker)
+    proposed_slot: dict | None          # single-slot flow (study_picker)
+    proposed_slots: list[dict] | None   # multi-slot flow (daily_briefing)
     session_summary: dict | None
     quality_score: int | None
     messages: list[str]        # outbound Telegram messages
@@ -158,6 +160,13 @@ def gap_finder(state: AgentState) -> AgentState:
 # Node: daily_briefing
 # ---------------------------------------------------------------------------
 
+def _get_topic_config(topic_name: str, config: dict) -> dict:
+    for t in config.get("topics", []):
+        if t["name"] == topic_name:
+            return t
+    return {}
+
+
 def daily_briefing(state: AgentState) -> AgentState:
     """
     Assembles the morning plan from calendar + SM-2 + gap finder.
@@ -169,7 +178,9 @@ def daily_briefing(state: AgentState) -> AgentState:
 
         events = _gcal.get_events(today)
         due_topics = _sm2.get_due_topics()
-        free_windows = _gap_finder.find_free_windows(events, today, config, after_time=datetime.now().time())
+        _TZ = pytz.timezone(_load_config()["timezone"])
+        # after_time = datetime.now(_TZ).time()
+        free_windows = _gap_finder.find_free_windows(events, today, config, )
 
         # --- Build message ---
         day_str = today.strftime("%A %B %-d")
@@ -186,44 +197,56 @@ def daily_briefing(state: AgentState) -> AgentState:
                 summary = ev.get("summary", "(No title)")
                 lines.append(f"  {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
         else:
-            lines.append("📅 Your day: No events scheduled")
+            lines.append("📅 Your day: No meetings today")
         lines.append("")
 
-        # Study windows → assign topics
+        # Study windows → assign topics, build proposed_slots list
+        from datetime import timedelta
+
         proposed_topic = None
         proposed_slot = None
+        proposed_slots: list[dict] = []
+
         if free_windows:
-            lines.append("🧠 Study windows:")
+            lines.append("🧠 Today's study plan:")
             for i, win in enumerate(free_windows):
                 topic = due_topics[i] if i < len(due_topics) else None
+                if topic is None:
+                    break  # no more topics to assign
+                topic_cfg = _get_topic_config(topic["name"], config)
+                duration = topic_cfg.get("default_duration_minutes", 60)
                 t_start = _fmt_time(win["start"])
-                t_end = _fmt_time(win["end"])
-                dur = win["duration_min"]
-                topic_label = topic["name"] if topic else "Free block"
-                lines.append(f"  {t_start}–{t_end} → {topic_label} ({dur}min)")
-                if i == 0 and topic:
+                start_dt = datetime.combine(today, win["start"])
+                end_dt = start_dt + timedelta(minutes=duration)
+                t_end = _fmt_time(end_dt.time())
+                lines.append(f"  {t_start}–{t_end} → {topic['name']} ({duration}min)")
+
+                slot = {
+                    "topic": topic["name"],
+                    "start": win["start"],
+                    "end": end_dt.time(),
+                    "duration_min": duration,
+                }
+                proposed_slots.append(slot)
+
+                # Keep single-slot fields pointing at the first block (backwards compat)
+                if i == 0:
                     proposed_topic = topic["name"]
-                    proposed_slot = win
+                    proposed_slot = slot
         else:
             lines.append("🧠 Study windows: None found today")
         lines.append("")
 
-        # SM-2 picks
-        if due_topics:
-            lines.append("📌 SM-2 picks today:")
-            for i, t in enumerate(due_topics[:3], 1):
-                ef = round(t["easiness_factor"], 1)
-                label = _topic_due_label(t)
-                lines.append(f"  {i}. {t['name']} — {label} (EF: {ef})")
+        if proposed_slots:
+            lines.append("Confirm these study blocks? [Yes, book them] [Skip]")
         else:
-            lines.append("📌 SM-2 picks today: Nothing due — great job!")
-        lines.append("")
-        lines.append("Confirm these study blocks? [Yes, book them] [Skip]")
+            lines.append("No study blocks to confirm today.")
 
         message = "\n".join(lines)
         return {
             "proposed_topic": proposed_topic,
             "proposed_slot": proposed_slot,
+            "proposed_slots": proposed_slots if proposed_slots else None,
             "messages": [message],
         }
 
@@ -491,20 +514,39 @@ def output(state: AgentState) -> AgentState:
         # Log but don't crash — message already in state
         print(f"[output] Telegram send failed: {e}")
 
-    # Book calendar event if we have a confirmed slot
+    # Book calendar events on confirmation
     trigger = state.get("trigger", "")
     if trigger == "confirm":
-        try:
-            topic = state.get("proposed_topic")
-            slot = state.get("proposed_slot")
-            if topic and slot:
-                today = date.today()
-                t_start = _fmt_time(slot["start"])
-                t_end = _fmt_time(slot["end"])
-                start_iso = f"{today.isoformat()}T{t_start}:00"
-                end_iso = f"{today.isoformat()}T{t_end}:00"
-                _gcal.write_event(topic=topic, start=start_iso, end=end_iso)
-        except Exception as e:
-            print(f"[output] Calendar write failed: {e}")
+        today = date.today()
+        slots = state.get("proposed_slots")
+
+        if slots:
+            # Daily briefing flow — book every proposed slot
+            for slot in slots:
+                try:
+                    t_start = _fmt_time(slot["start"])
+                    t_end = _fmt_time(slot["end"])
+                    _gcal.write_event(
+                        topic=slot["topic"],
+                        start=f"{today.isoformat()}T{t_start}:00",
+                        end=f"{today.isoformat()}T{t_end}:00",
+                    )
+                except Exception as e:
+                    print(f"[output] Calendar write failed for {slot.get('topic')}: {e}")
+        else:
+            # study_picker flow — single slot
+            try:
+                topic = state.get("proposed_topic")
+                slot = state.get("proposed_slot")
+                if topic and slot:
+                    t_start = _fmt_time(slot["start"])
+                    t_end = _fmt_time(slot["end"])
+                    _gcal.write_event(
+                        topic=topic,
+                        start=f"{today.isoformat()}T{t_start}:00",
+                        end=f"{today.isoformat()}T{t_end}:00",
+                    )
+            except Exception as e:
+                print(f"[output] Calendar write failed: {e}")
 
     return {}
