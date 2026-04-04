@@ -18,12 +18,20 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
-from src.integrations.telegram_client import send_buttons, _send_message
+from src.integrations.telegram_client import remove_buttons, send_buttons, send_message
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Learning Manager", docs_url=None, redoc_url=None)
+
+# Deduplication guard — keeps last 1000 processed update_ids in memory
+_processed_updates: set[int] = set()
+_MAX_PROCESSED = 1000
+
+# Confirmed bookings — tracks message_ids that have already been booked
+# Prevents double-booking when the user taps "Yes, book them" more than once
+_confirmed_message_ids: set[int] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -52,15 +60,28 @@ async def webhook(
     update = await request.json()
     logger.debug("Webhook update: %s", update)
 
-    # --- Extract chat_id, text, and callback data ---
+    # --- Deduplication ---
+    update_id: int | None = update.get("update_id")
+    if update_id is not None:
+        if update_id in _processed_updates:
+            logger.info("Duplicate update_id=%s — skipping", update_id)
+            return JSONResponse({"ok": True})
+        _processed_updates.add(update_id)
+        if len(_processed_updates) > _MAX_PROCESSED:
+            _processed_updates.discard(min(_processed_updates))
+
+    # --- Extract chat_id, text, callback data, and message_id ---
     chat_id: int | None = None
     message_text: str | None = None
     callback_data: str | None = None
+    message_id: int | None = None
 
     if "callback_query" in update:
         cq = update["callback_query"]
-        chat_id = cq.get("message", {}).get("chat", {}).get("id")
+        cq_msg = cq.get("message", {})
+        chat_id = cq_msg.get("chat", {}).get("id")
         callback_data = cq.get("data", "").strip()
+        message_id = cq_msg.get("message_id")
 
     elif "message" in update:
         msg = update["message"]
@@ -81,7 +102,18 @@ async def webhook(
             trigger = "study_picker"
             extra["duration_min"] = int(callback_data.replace(" min", ""))
         elif cb in ("yes, book them", "confirm"):
+            if message_id is not None and message_id in _confirmed_message_ids:
+                logger.info("message_id=%s already confirmed — ignoring repeat tap", message_id)
+                import asyncio
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: send_message("✅ Already booked! Check your Google Calendar."),
+                )
+                return JSONResponse({"ok": True})
             trigger = "confirm"
+            if message_id is not None:
+                extra["message_id"] = message_id
+                _confirmed_message_ids.add(message_id)
         elif cb == "skip":
             trigger = "skip"
         else:

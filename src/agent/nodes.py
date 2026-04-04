@@ -34,6 +34,7 @@ def _load_config() -> dict:
 class AgentState(TypedDict, total=False):
     trigger: str               # "daily" | "study_picker" | "done" | "confirm"
     chat_id: int
+    message_id: int | None              # Telegram message_id of the confirm keyboard
     duration_min: int | None
     proposed_topic: str | None          # single-slot flow (study_picker)
     proposed_slot: dict | None          # single-slot flow (study_picker)
@@ -518,6 +519,12 @@ def output(state: AgentState) -> AgentState:
     trigger = state.get("trigger", "")
     if trigger == "confirm":
         today = date.today()
+        config = _load_config()
+        tz = pytz.timezone(config["timezone"])
+        offset = datetime.now(tz).strftime("%z")          # e.g. "-0300"
+        offset_str = f"{offset[:3]}:{offset[3:]}"         # e.g. "-03:00"
+
+        booked: list[str] = []
         slots = state.get("proposed_slots")
 
         if slots:
@@ -528,9 +535,10 @@ def output(state: AgentState) -> AgentState:
                     t_end = _fmt_time(slot["end"])
                     _gcal.write_event(
                         topic=slot["topic"],
-                        start=f"{today.isoformat()}T{t_start}:00",
-                        end=f"{today.isoformat()}T{t_end}:00",
+                        start=f"{today.isoformat()}T{t_start}:00{offset_str}",
+                        end=f"{today.isoformat()}T{t_end}:00{offset_str}",
                     )
+                    booked.append(slot["topic"])
                 except Exception as e:
                     print(f"[output] Calendar write failed for {slot.get('topic')}: {e}")
         else:
@@ -543,10 +551,28 @@ def output(state: AgentState) -> AgentState:
                     t_end = _fmt_time(slot["end"])
                     _gcal.write_event(
                         topic=topic,
-                        start=f"{today.isoformat()}T{t_start}:00",
-                        end=f"{today.isoformat()}T{t_end}:00",
+                        start=f"{today.isoformat()}T{t_start}:00{offset_str}",
+                        end=f"{today.isoformat()}T{t_end}:00{offset_str}",
                     )
+                    booked.append(topic)
             except Exception as e:
                 print(f"[output] Calendar write failed: {e}")
+
+        # Remove inline keyboard from original confirm message
+        chat_id = state.get("chat_id")
+        message_id = state.get("message_id")
+        if chat_id and message_id:
+            try:
+                _telegram.remove_buttons(chat_id, message_id)
+            except Exception as e:
+                print(f"[output] remove_buttons failed: {e}")
+
+        # Send booking confirmation
+        if booked:
+            summary = "\n".join(f"  • {t}" for t in booked)
+            try:
+                _telegram.send_message(f"✅ Booked {len(booked)} study session(s):\n{summary}")
+            except Exception as e:
+                print(f"[output] Confirmation send failed: {e}")
 
     return {}
