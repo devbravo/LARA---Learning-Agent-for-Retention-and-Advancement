@@ -16,7 +16,7 @@ from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
 from src.integrations import claude_api as _claude
 from src.integrations import gcal as _gcal
-from src.integrations import telegram as _telegram
+from src.integrations import telegram_client as _telegram
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
 
@@ -169,7 +169,7 @@ def daily_briefing(state: AgentState) -> AgentState:
 
         events = _gcal.get_events(today)
         due_topics = _sm2.get_due_topics()
-        free_windows = _gap_finder.find_free_windows(events, today, config)
+        free_windows = _gap_finder.find_free_windows(events, today, config, after_time=datetime.now().time())
 
         # --- Build message ---
         day_str = today.strftime("%A %B %-d")
@@ -218,7 +218,7 @@ def daily_briefing(state: AgentState) -> AgentState:
         else:
             lines.append("📌 SM-2 picks today: Nothing due — great job!")
         lines.append("")
-        lines.append("Confirm these study blocks? [Yes, book them] [Edit] [Skip]")
+        lines.append("Confirm these study blocks? [Yes, book them] [Skip]")
 
         message = "\n".join(lines)
         return {

@@ -17,6 +17,7 @@ from pathlib import Path
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
+import pytz
 
 load_dotenv(Path(__file__).parents[1] / ".env", override=True)
 
@@ -24,7 +25,9 @@ from src.agent import graph as _graph
 
 logger = logging.getLogger(__name__)
 
-_TZ = "America/Paramaribo"
+_TZ = pytz.timezone("America/Paramaribo")
+logger.info("Current time in Paramaribo: %s", datetime.now(_TZ))
+
 _PROTECTED_START = (15, 0)   # HH, MM
 _PROTECTED_END   = (19, 30)
 
@@ -56,11 +59,11 @@ def build_scheduler() -> AsyncIOScheduler:
     # Mon–Sat at 08:00
     scheduler.add_job(
         _run_daily_briefing,
-        trigger=CronTrigger(day_of_week="mon-sat", hour=8, minute=0, timezone=_TZ),
+        trigger=CronTrigger(day_of_week="mon-sat", hour=9, minute=25, timezone=_TZ),
         id="daily_briefing_weekday",
-        name="Daily Briefing (Mon–Sat 08:45)",
+        name="Daily Briefing (Mon–Sat 09:25)",
         replace_existing=True,
-        misfire_grace_time=300,
+        misfire_grace_time=3600,
     )
 
     # Sunday at 09:00 (weekly planning variant)

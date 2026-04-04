@@ -18,7 +18,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
-from src.integrations.telegram import send_buttons
+from src.integrations.telegram_client import send_buttons, _send_message
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ async def webhook(
 
     if trigger is None or trigger == "skip":
         # skip is a no-op
-        return JSONResponse({"ok": True})
+        return await _send_message("Okay, no study blocks booked. See you tomorrow! 👋")
 
     logger.info("Trigger detected: %s, chat_id: %s, extra: %s", trigger, chat_id, extra)
 

@@ -152,8 +152,8 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # Patch Telegram sends so nothing goes to the bot during dry run
-    with patch("src.integrations.telegram.send_message") as mock_msg, \
-         patch("src.integrations.telegram.send_buttons") as mock_btn:
+    with patch("src.integrations.telegram_client.send_message") as mock_msg, \
+         patch("src.integrations.telegram_client.send_buttons") as mock_btn:
 
         final_state = invoke(trigger="daily", chat_id=CHAT_ID)
 
