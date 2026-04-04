@@ -33,6 +33,7 @@ from src.agent.nodes import (
     gap_finder,
     log_session,
     output,
+    route_from_daily_briefing,
     route_from_done_parser,
     route_from_router,
     router,
@@ -82,7 +83,11 @@ def build_graph(checkpointer=None):
     )
 
     # Main flows
-    builder.add_edge("daily_briefing", "confirm")
+    builder.add_conditional_edges(
+        "daily_briefing",
+        route_from_daily_briefing,
+        {"confirm": "confirm", "output": "output"},
+    )
     builder.add_edge("study_picker", "brief_generator")
     builder.add_edge("brief_generator", "confirm")
     builder.add_edge("confirm", END)

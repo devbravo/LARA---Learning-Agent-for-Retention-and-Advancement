@@ -39,6 +39,7 @@ class AgentState(TypedDict, total=False):
     proposed_topic: str | None          # single-slot flow (study_picker)
     proposed_slot: dict | None          # single-slot flow (study_picker)
     proposed_slots: list[dict] | None   # multi-slot flow (daily_briefing)
+    has_study_plan: bool                # False → skip confirm, go straight to output
     session_summary: dict | None
     quality_score: int | None
     messages: list[str]        # outbound Telegram messages
@@ -114,6 +115,11 @@ def route_from_router(state: AgentState) -> str:
         "confirm": "output",
     }
     return mapping.get(trigger, "output")
+
+
+def route_from_daily_briefing(state: AgentState) -> str:
+    """Conditional edge: skip confirm entirely when there's nothing to book."""
+    return "confirm" if state.get("has_study_plan") else "output"
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +236,7 @@ def daily_briefing(state: AgentState) -> AgentState:
                 }
                 proposed_slots.append(slot)
 
-                # Keep single-slot fields pointing at the first block (backwards compat)
+                # Keep single-slot fields pointing at the first block (backwards compatible)
                 if i == 0:
                     proposed_topic = topic["name"]
                     proposed_slot = slot
@@ -238,16 +244,18 @@ def daily_briefing(state: AgentState) -> AgentState:
             lines.append("🧠 Study windows: None found today")
         lines.append("")
 
-        if proposed_slots:
+        has_study_plan = bool(proposed_slots)
+        if has_study_plan:
             lines.append("Confirm these study blocks? [Yes, book them] [Skip]")
         else:
-            lines.append("No study blocks to confirm today.")
+            lines.append("No study windows available today — calendar fully booked.")
 
         message = "\n".join(lines)
         return {
             "proposed_topic": proposed_topic,
             "proposed_slot": proposed_slot,
             "proposed_slots": proposed_slots if proposed_slots else None,
+            "has_study_plan": has_study_plan,
             "messages": [message],
         }
 
