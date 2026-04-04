@@ -58,7 +58,7 @@ def build_scheduler() -> AsyncIOScheduler:
         _run_daily_briefing,
         trigger=CronTrigger(day_of_week="mon-sat", hour=8, minute=0, timezone=_TZ),
         id="daily_briefing_weekday",
-        name="Daily Briefing (Mon–Sat 08:45)",
+        name="Daily Briefing (Mon–Sat 08:55)",
         replace_existing=True,
         misfire_grace_time=300,
     )
