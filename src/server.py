@@ -129,8 +129,12 @@ async def webhook(
             trigger = "menu"
 
     if trigger is None or trigger == "skip":
-        # skip is a no-op
-        return await _send_message("Okay, no study blocks booked. See you tomorrow! 👋")
+        import asyncio
+        asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: send_message("Okay, no study blocks booked. See you tomorrow! 👋"),
+        )
+        return JSONResponse({"ok": True})
 
     logger.info("Trigger detected: %s, chat_id: %s, extra: %s", trigger, chat_id, extra)
 
