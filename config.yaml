@@ -9,13 +9,10 @@ focus_windows:
     end: "13:00"
 
 topics:
-  - name: "System Design"
+  - name: "Gen AI System Design"
     tier: 1
     active: true
-  - name: "ML System Design"
-    tier: 1
-    active: true
-  - name: "DSA"
+  - name: "Data Structures and Algorithms"
     tier: 1
     active: true
   - name: "Sales Engineering"
