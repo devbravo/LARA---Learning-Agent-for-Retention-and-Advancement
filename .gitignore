@@ -15,3 +15,7 @@ build/
 # SQLite runtime files
 *.db-wal
 *.db-shm
+
+# SQLite runtime files
+*.db-wal
+*.db-shm
