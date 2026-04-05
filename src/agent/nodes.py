@@ -205,8 +205,8 @@ def daily_briefing(state: AgentState) -> AgentState:
         events = _gcal.get_events(today)
         due_topics = _sm2.get_due_topics()
         _TZ = pytz.timezone(_load_config()["timezone"])
-        # after_time = datetime.now(_TZ).time()
-        free_windows = _gap_finder.find_free_windows(events, today, config, )
+        after_time = datetime.now(_TZ).time()
+        free_windows = _gap_finder.find_free_windows(events, today, config, after_time)
         timed_events = [e for e in events if "dateTime" in e.get("start", {})]
         prebooked = _get_prebooked_topics(timed_events, due_topics)
 
@@ -318,13 +318,17 @@ def study_picker(state: AgentState) -> AgentState:
             }
 
         topic = due_topics[0] if due_topics else None
+        print(f"[DEBUG study_picker] topic: {topic['name']}, duration: {duration_min}")
         if topic is None:
             return {"messages": ["🎉 Nothing due for review right now — enjoy your break!"]}
+
+        print(f"[DEBUG study_picker] about to return - topic: {topic['name']}, slot: {slot}")
 
         context = topic.get("weak_areas") or "General review"
         return {
             "proposed_topic": topic["name"],
             "proposed_slot": slot,
+            "proposed_slots": None,
             "messages": state.get("messages", []) + [
                 f"📚 Ready to study {topic['name']} for {duration_min} min "
                 f"at {_fmt_time(slot['start'])}–{_fmt_time(slot['end'])}. Generating brief…"
@@ -542,13 +546,15 @@ def output(state: AgentState) -> AgentState:
     Sends final message via Telegram.
     If a confirmed slot exists, books it on Google Calendar.
     """
-    try:
-        messages = state.get("messages") or []
-        text = messages[-1] if messages else "Done."
-        _telegram.send_message(text)
-    except Exception as e:
-        # Log but don't crash — message already in state
-        print(f"[output] Telegram send failed: {e}")
+    trigger = state.get("trigger", "")
+    if trigger != "confirm":
+        try:
+            messages = state.get("messages") or []
+            text = messages[-1] if messages else "Done."
+            _telegram.send_message(text)
+
+        except Exception as e:
+            print(f"[output] Telegram send failed: {e}")
 
     # Book calendar events on confirmation
     trigger = state.get("trigger", "")
@@ -562,6 +568,10 @@ def output(state: AgentState) -> AgentState:
 
         booked: list[str] = []
         slots = state.get("proposed_slots")
+        print(f"[DEBUG output] trigger: {trigger}")
+        print(f"[DEBUG output] proposed_slots: {state.get('proposed_slots')}")
+        print(f"[DEBUG output] proposed_topic: {state.get('proposed_topic')}")
+        print(f"[DEBUG output] proposed_slot: {state.get('proposed_slot')}")
 
 
         if slots:

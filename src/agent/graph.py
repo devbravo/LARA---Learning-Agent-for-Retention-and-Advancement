@@ -130,14 +130,14 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
     initial_state: AgentState = {
         "trigger": trigger,
         "chat_id": chat_id,
-        "message_id": kwargs.get("message_id"),
-        "duration_min": kwargs.get("duration_min"),
-        "proposed_topic": kwargs.get("proposed_topic"),
-        "proposed_slot": kwargs.get("proposed_slot"),
-        "session_summary": kwargs.get("session_summary"),
-        "quality_score": kwargs.get("quality_score"),
-        "messages": kwargs.get("messages", []),
     }
+    # Only include kwargs that are explicitly provided — don't overwrite
+    # checkpointed state with None values
+    for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot", "session_summary", "quality_score",
+                "messages"):
+        if kwargs.get(key) is not None:
+            initial_state[key] = kwargs[key]
+
     config = {"configurable": {"thread_id": str(chat_id)}}
     return graph.invoke(initial_state, config=config)
 
