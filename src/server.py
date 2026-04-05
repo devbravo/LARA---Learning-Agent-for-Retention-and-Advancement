@@ -109,8 +109,6 @@ async def webhook(
                         logger.info("message_id=%s already in-flight or processed — ignoring repeat tap", message_id)
                         return JSONResponse({"ok": True})
                     _in_flight_message_ids.add(message_id)
-                    if len(_in_flight_message_ids) > _MAX_CONFIRMED:
-                        _in_flight_message_ids.discard(min(_in_flight_message_ids))
             trigger = "study_picker"
             extra["duration_min"] = int(callback_data.replace(" min", ""))
             if message_id is not None:
