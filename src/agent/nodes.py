@@ -472,9 +472,14 @@ def confirm(state: AgentState) -> AgentState:
     try:
         messages = state.get("messages") or []
         text = messages[-1] if messages else "Ready to study?"
-        _telegram.send_buttons(text, ["Yes, book them", "Skip"])
+
+        if state.get("proposed_slots"):
+            # Daily briefing flow, needs confirmation before booking
+            _telegram.send_buttons(text, ["Yes, book them", "Skip"])
+        else:
+            # Study picker flow, no booking needed, just send the brief
+            _telegram.send_message(text)
     except Exception as e:
-        # Best-effort: try plain message
         try:
             _telegram.send_message(f"⚠️ Button send failed: {e}\n\n{messages[-1] if messages else ''}")
         except Exception:
