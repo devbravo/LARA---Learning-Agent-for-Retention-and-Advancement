@@ -50,6 +50,7 @@ def find_free_windows(
     events: list[dict],
     target_date: date,
     config: dict,
+    after_time: time | None = None,
 ) -> list[dict]:
     """
     Returns free study windows on target_date.
@@ -60,6 +61,7 @@ def find_free_windows(
     - Calendar events overlapping focus windows are subtracted
     - All-day events (no 'start.dateTime') are skipped
     - Minimum gap returned: 25 minutes
+    - If after_time is provided, all windows are clipped to start no earlier than after_time
     """
     focus_windows = config.get("focus_windows", [])
     protected_blocks = config.get("protected_blocks", [])
@@ -76,6 +78,14 @@ def find_free_windows(
     # Add protected blocks as busy intervals
     for pb in protected_blocks:
         busy.append((_time_to_dt(pb["start"], target_date), _time_to_dt(pb["end"], target_date)))
+
+    # Treat after_time as an additional busy block covering midnight → after_time
+    if after_time is not None:
+        clip_dt = datetime(target_date.year, target_date.month, target_date.day,
+                           after_time.hour, after_time.minute, after_time.second)
+        midnight = datetime(target_date.year, target_date.month, target_date.day, 0, 0)
+        if clip_dt > midnight:
+            busy.append((midnight, clip_dt))
 
     result = []
     for fw in focus_windows:

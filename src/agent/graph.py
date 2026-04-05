@@ -33,6 +33,7 @@ from src.agent.nodes import (
     gap_finder,
     log_session,
     output,
+    route_from_daily_briefing,
     route_from_done_parser,
     route_from_router,
     router,
@@ -82,7 +83,11 @@ def build_graph(checkpointer=None):
     )
 
     # Main flows
-    builder.add_edge("daily_briefing", "confirm")
+    builder.add_conditional_edges(
+        "daily_briefing",
+        route_from_daily_briefing,
+        {"confirm": "confirm", "output": "output"},
+    )
     builder.add_edge("study_picker", "brief_generator")
     builder.add_edge("brief_generator", "confirm")
     builder.add_edge("confirm", END)
@@ -125,6 +130,7 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
     initial_state: AgentState = {
         "trigger": trigger,
         "chat_id": chat_id,
+        "message_id": kwargs.get("message_id"),
         "duration_min": kwargs.get("duration_min"),
         "proposed_topic": kwargs.get("proposed_topic"),
         "proposed_slot": kwargs.get("proposed_slot"),
@@ -152,8 +158,8 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # Patch Telegram sends so nothing goes to the bot during dry run
-    with patch("src.integrations.telegram.send_message") as mock_msg, \
-         patch("src.integrations.telegram.send_buttons") as mock_btn:
+    with patch("src.integrations.telegram_client.send_message") as mock_msg, \
+         patch("src.integrations.telegram_client.send_buttons") as mock_btn:
 
         final_state = invoke(trigger="daily", chat_id=CHAT_ID)
 
@@ -163,9 +169,16 @@ if __name__ == "__main__":
         print("\n--- Morning Briefing ---\n")
         print(briefing)
         print("\n--- State ---")
-        print(f"  proposed_topic : {final_state.get('proposed_topic')}")
-        slot = final_state.get("proposed_slot")
-        if slot:
-            from src.agent.nodes import _fmt_time
-            print(f"  proposed_slot  : {_fmt_time(slot['start'])}–{_fmt_time(slot['end'])} ({slot['duration_min']}min)")
+        from src.agent.nodes import _fmt_time
+        slots = final_state.get("proposed_slots")
+        if slots:
+            for i, slot in enumerate(slots, 1):
+                t = f"{_fmt_time(slot['start'])}–{_fmt_time(slot['end'])} ({slot['duration_min']}min)"
+                print(f"  proposed_slots[{i}] : {slot['topic']} @ {t}")
+        else:
+            # study_picker fallback
+            print(f"  proposed_topic : {final_state.get('proposed_topic')}")
+            slot = final_state.get("proposed_slot")
+            if slot:
+                print(f"  proposed_slot  : {_fmt_time(slot['start'])}–{_fmt_time(slot['end'])} ({slot['duration_min']}min)")
         print("=" * 60)

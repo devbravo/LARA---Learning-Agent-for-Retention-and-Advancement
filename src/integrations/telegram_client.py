@@ -45,12 +45,29 @@ async def _send_buttons(text: str, buttons: list[str]) -> None:
         raise RuntimeError(f"Telegram send_buttons failed: {e}") from e
 
 
+async def _remove_buttons(chat_id: int, message_id: int) -> None:
+    bot, _ = _get_bot()
+    try:
+        async with bot:
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=None,
+            )
+    except TelegramError as e:
+        raise RuntimeError(f"Telegram remove_buttons failed: {e}") from e
+
+
 def send_message(text: str) -> None:
     asyncio.run(_send_message(text))
 
 
 def send_buttons(text: str, buttons: list[str]) -> None:
     asyncio.run(_send_buttons(text, buttons))
+
+
+def remove_buttons(chat_id: int, message_id: int) -> None:
+    asyncio.run(_remove_buttons(chat_id, message_id))
 
 
 if __name__ == "__main__":
