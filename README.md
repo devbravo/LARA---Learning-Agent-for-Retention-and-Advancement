@@ -1,6 +1,6 @@
-# Learning Manager Agent
+# Kairos
 
-A personal AI study coach for Diego Sabajo. Tracks study topics using SM-2 spaced repetition, sends proactive daily plans via Telegram, reads Google Calendar to plan around your real schedule, generates focused study briefs via Claude, and books `[Study]` events on Google Calendar after confirmation.
+Personal Learning Assistant for Diego Sabajo. Tracks study topics using SM-2 spaced repetition, sends proactive daily plans via Telegram, reads Google Calendar to plan around your real schedule, generates focused study briefs via Claude, and books `[Study]` events on Google Calendar after confirmation.
 
 ---
 
@@ -162,7 +162,7 @@ This starts both the FastAPI server (port 8000) and the APScheduler in a single 
 ```
 INFO: Scheduled: Daily Briefing (Mon–Sat 08:00)  next_run=...
 INFO: Scheduled: Weekly Planning (Sun 09:00)      next_run=...
-INFO: Starting Learning Manager on 0.0.0.0:8000
+INFO: Starting Kairos on 0.0.0.0:8000
 ```
 
 ### Health check
