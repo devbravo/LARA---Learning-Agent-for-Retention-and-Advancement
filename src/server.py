@@ -113,6 +113,8 @@ async def webhook(
                 return JSONResponse({"ok": True})
             trigger = "confirm"
             if message_id is not None:
+                # Mark immediately — before graph runs — to block race condition
+                _confirmed_message_ids.add(message_id)
                 extra["message_id"] = message_id
         elif cb == "skip":
             trigger = "skip"
@@ -169,14 +171,6 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
         logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
         _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
         logger.info("Graph invocation complete: trigger=%s", trigger)
-        # Mark as confirmed only after a successful booking so that a failed
-        # invocation doesn't permanently prevent the user from retrying.
-        if trigger == "confirm":
-            message_id = kwargs.get("message_id")
-            if message_id is not None:
-                _confirmed_message_ids.add(message_id)
-                if len(_confirmed_message_ids) > _MAX_CONFIRMED:
-                    _confirmed_message_ids.discard(min(_confirmed_message_ids))
     except Exception as e:
         logger.error(
             "Graph invocation failed [trigger=%s chat_id=%s]: %s",
