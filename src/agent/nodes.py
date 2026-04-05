@@ -546,13 +546,15 @@ def output(state: AgentState) -> AgentState:
     Sends final message via Telegram.
     If a confirmed slot exists, books it on Google Calendar.
     """
-    try:
-        messages = state.get("messages") or []
-        text = messages[-1] if messages else "Done."
-        _telegram.send_message(text)
-    except Exception as e:
-        # Log but don't crash — message already in state
-        print(f"[output] Telegram send failed: {e}")
+    trigger = state.get("trigger", "")
+    if trigger != "confirm":
+        try:
+            messages = state.get("messages") or []
+            text = messages[-1] if messages else "Done."
+            _telegram.send_message(text)
+
+        except Exception as e:
+            print(f"[output] Telegram send failed: {e}")
 
     # Book calendar events on confirmation
     trigger = state.get("trigger", "")
