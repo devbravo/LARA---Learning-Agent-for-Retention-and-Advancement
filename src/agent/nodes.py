@@ -273,7 +273,7 @@ def daily_briefing(state: AgentState) -> AgentState:
 
         has_study_plan = bool(proposed_slots)
         if has_study_plan:
-            lines.append("Confirm these study blocks? [Yes, book them] [Skip]")
+            lines.append("Confirm these study blocks?")
         else:
             lines.append("No study windows available today — calendar fully booked.")
 

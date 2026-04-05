@@ -8,6 +8,7 @@ Endpoints:
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,7 +33,9 @@ _MAX_PROCESSED = 1000
 # Confirmed bookings — tracks message_ids that have already been booked
 # Prevents double-booking when the user taps "Yes, book them" more than once
 _confirmed_message_ids: set[int] = set()
+_in_flight_message_ids: set[int] = set()
 _MAX_CONFIRMED = 1000
+_confirm_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -103,19 +106,32 @@ async def webhook(
             trigger = "study_picker"
             extra["duration_min"] = int(callback_data.replace(" min", ""))
         elif cb in ("yes, book them", "confirm"):
-            if message_id is not None and message_id in _confirmed_message_ids:
-                logger.info("message_id=%s already confirmed — ignoring repeat tap", message_id)
-                import asyncio
-                asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: send_message("✅ Already booked! Check your Google Calendar."),
-                )
-                return JSONResponse({"ok": True})
+            if message_id is not None:
+                with _confirm_lock:
+                    if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
+                        logger.info("message_id=%s already confirmed or in-flight — ignoring repeat tap", message_id)
+                        import asyncio
+                        asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: send_message("✅ Already booked! Check your Google Calendar."),
+                        )
+                        return JSONResponse({"ok": True})
+                    _in_flight_message_ids.add(message_id)
+                    if len(_in_flight_message_ids) > _MAX_CONFIRMED:
+                        _in_flight_message_ids.discard(min(_in_flight_message_ids))
             trigger = "confirm"
             if message_id is not None:
                 extra["message_id"] = message_id
         elif cb == "skip":
+            if message_id is not None:
+                with _confirm_lock:
+                    if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
+                        return JSONResponse({"ok": True})
+                    _confirmed_message_ids.add(message_id)
+                    if len(_confirmed_message_ids) > _MAX_CONFIRMED:
+                        _confirmed_message_ids.discard(min(_confirmed_message_ids))
             trigger = "skip"
+
         else:
             # Unknown callback — ignore
             return JSONResponse({"ok": True})
@@ -165,15 +181,14 @@ async def webhook(
 
 def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
     """Invoke the graph, catching all exceptions so executor threads never crash."""
+    message_id: int | None = kwargs.get("message_id")
     try:
         logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
         _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
         logger.info("Graph invocation complete: trigger=%s", trigger)
-        # Mark as confirmed only after a successful booking so that a failed
-        # invocation doesn't permanently prevent the user from retrying.
-        if trigger == "confirm":
-            message_id = kwargs.get("message_id")
-            if message_id is not None:
+        if trigger == "confirm" and message_id is not None:
+            with _confirm_lock:
+                _in_flight_message_ids.discard(message_id)
                 _confirmed_message_ids.add(message_id)
                 if len(_confirmed_message_ids) > _MAX_CONFIRMED:
                     _confirmed_message_ids.discard(min(_confirmed_message_ids))
@@ -182,3 +197,6 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
             "Graph invocation failed [trigger=%s chat_id=%s]: %s",
             trigger, chat_id, e, exc_info=True,
         )
+        if trigger == "confirm" and message_id is not None:
+            with _confirm_lock:
+                _in_flight_message_ids.discard(message_id)

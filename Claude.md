@@ -103,11 +103,7 @@ After parsing, send rating buttons. Only log_session fires after a rating tap.
 🧠 Study windows:
   <time>–<time> → <topic> (<duration>)
 
-📌 SM-2 picks today:
-  1. <Topic> — due (EF: <x.x>)
-  2. <Topic> — due tomorrow (EF: <x.x>)
-
-Confirm these study blocks? [Yes, book them] [Edit] [Skip]
+Confirm these study blocks? [Yes, book them] [Skip]
 ```
 
 **Never message during:** 15:00–19:30 (hard protected block)
