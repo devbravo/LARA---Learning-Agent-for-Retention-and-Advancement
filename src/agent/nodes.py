@@ -221,7 +221,8 @@ def daily_briefing(state: AgentState) -> AgentState:
                 if topic is None:
                     break  # no more topics to assign
                 topic_cfg = _get_topic_config(topic["name"], config)
-                duration = topic_cfg.get("default_duration_minutes", 60)
+                default_duration = topic_cfg.get("default_duration_minutes", 60)
+                duration = min(default_duration, win["duration_min"])
                 t_start = _fmt_time(win["start"])
                 start_dt = datetime.combine(today, win["start"])
                 end_dt = start_dt + timedelta(minutes=duration)

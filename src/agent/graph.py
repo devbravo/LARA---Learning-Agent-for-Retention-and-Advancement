@@ -130,6 +130,7 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
     initial_state: AgentState = {
         "trigger": trigger,
         "chat_id": chat_id,
+        "message_id": kwargs.get("message_id"),
         "duration_min": kwargs.get("duration_min"),
         "proposed_topic": kwargs.get("proposed_topic"),
         "proposed_slot": kwargs.get("proposed_slot"),

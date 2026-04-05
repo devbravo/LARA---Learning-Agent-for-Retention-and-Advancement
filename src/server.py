@@ -18,7 +18,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
-from src.integrations.telegram_client import remove_buttons, send_buttons, send_message
+from src.integrations.telegram_client import send_buttons, send_message
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ _MAX_PROCESSED = 1000
 # Confirmed bookings — tracks message_ids that have already been booked
 # Prevents double-booking when the user taps "Yes, book them" more than once
 _confirmed_message_ids: set[int] = set()
+_MAX_CONFIRMED = 1000
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +114,6 @@ async def webhook(
             trigger = "confirm"
             if message_id is not None:
                 extra["message_id"] = message_id
-                _confirmed_message_ids.add(message_id)
         elif cb == "skip":
             trigger = "skip"
         else:
@@ -128,7 +128,10 @@ async def webhook(
             # Unrecognised text — show duration menu
             trigger = "menu"
 
-    if trigger is None or trigger == "skip":
+    if trigger is None:
+        return JSONResponse({"ok": True})
+
+    if trigger == "skip":
         import asyncio
         asyncio.get_event_loop().run_in_executor(
             None,
@@ -166,6 +169,14 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
         logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
         _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
         logger.info("Graph invocation complete: trigger=%s", trigger)
+        # Mark as confirmed only after a successful booking so that a failed
+        # invocation doesn't permanently prevent the user from retrying.
+        if trigger == "confirm":
+            message_id = kwargs.get("message_id")
+            if message_id is not None:
+                _confirmed_message_ids.add(message_id)
+                if len(_confirmed_message_ids) > _MAX_CONFIRMED:
+                    _confirmed_message_ids.discard(min(_confirmed_message_ids))
     except Exception as e:
         logger.error(
             "Graph invocation failed [trigger=%s chat_id=%s]: %s",
