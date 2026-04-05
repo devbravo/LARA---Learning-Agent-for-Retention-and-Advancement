@@ -267,7 +267,6 @@ def daily_briefing(state: AgentState) -> AgentState:
                 if i == 0:
                     proposed_topic = topic["name"]
                     proposed_slot = slot
-            print(f"[DEBUG] proposed_slots: {[s['topic'] for s in proposed_slots]}")
         else:
             lines.append("🧠 Study windows: None found today")
         lines.append("")
