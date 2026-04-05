@@ -18,12 +18,21 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
-from src.integrations.telegram import send_buttons
+from src.integrations.telegram_client import send_buttons, send_message
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Learning Manager", docs_url=None, redoc_url=None)
+
+# Deduplication guard — keeps last 1000 processed update_ids in memory
+_processed_updates: set[int] = set()
+_MAX_PROCESSED = 1000
+
+# Confirmed bookings — tracks message_ids that have already been booked
+# Prevents double-booking when the user taps "Yes, book them" more than once
+_confirmed_message_ids: set[int] = set()
+_MAX_CONFIRMED = 1000
 
 
 # ---------------------------------------------------------------------------
@@ -52,15 +61,28 @@ async def webhook(
     update = await request.json()
     logger.debug("Webhook update: %s", update)
 
-    # --- Extract chat_id, text, and callback data ---
+    # --- Deduplication ---
+    update_id: int | None = update.get("update_id")
+    if update_id is not None:
+        if update_id in _processed_updates:
+            logger.info("Duplicate update_id=%s — skipping", update_id)
+            return JSONResponse({"ok": True})
+        _processed_updates.add(update_id)
+        if len(_processed_updates) > _MAX_PROCESSED:
+            _processed_updates.discard(min(_processed_updates))
+
+    # --- Extract chat_id, text, callback data, and message_id ---
     chat_id: int | None = None
     message_text: str | None = None
     callback_data: str | None = None
+    message_id: int | None = None
 
     if "callback_query" in update:
         cq = update["callback_query"]
-        chat_id = cq.get("message", {}).get("chat", {}).get("id")
+        cq_msg = cq.get("message", {})
+        chat_id = cq_msg.get("chat", {}).get("id")
         callback_data = cq.get("data", "").strip()
+        message_id = cq_msg.get("message_id")
 
     elif "message" in update:
         msg = update["message"]
@@ -81,7 +103,17 @@ async def webhook(
             trigger = "study_picker"
             extra["duration_min"] = int(callback_data.replace(" min", ""))
         elif cb in ("yes, book them", "confirm"):
+            if message_id is not None and message_id in _confirmed_message_ids:
+                logger.info("message_id=%s already confirmed — ignoring repeat tap", message_id)
+                import asyncio
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: send_message("✅ Already booked! Check your Google Calendar."),
+                )
+                return JSONResponse({"ok": True})
             trigger = "confirm"
+            if message_id is not None:
+                extra["message_id"] = message_id
         elif cb == "skip":
             trigger = "skip"
         else:
@@ -96,8 +128,15 @@ async def webhook(
             # Unrecognised text — show duration menu
             trigger = "menu"
 
-    if trigger is None or trigger == "skip":
-        # skip is a no-op
+    if trigger is None:
+        return JSONResponse({"ok": True})
+
+    if trigger == "skip":
+        import asyncio
+        asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: send_message("Okay, no study blocks booked. See you tomorrow! 👋"),
+        )
         return JSONResponse({"ok": True})
 
     logger.info("Trigger detected: %s, chat_id: %s, extra: %s", trigger, chat_id, extra)
@@ -130,6 +169,14 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
         logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
         _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
         logger.info("Graph invocation complete: trigger=%s", trigger)
+        # Mark as confirmed only after a successful booking so that a failed
+        # invocation doesn't permanently prevent the user from retrying.
+        if trigger == "confirm":
+            message_id = kwargs.get("message_id")
+            if message_id is not None:
+                _confirmed_message_ids.add(message_id)
+                if len(_confirmed_message_ids) > _MAX_CONFIRMED:
+                    _confirmed_message_ids.discard(min(_confirmed_message_ids))
     except Exception as e:
         logger.error(
             "Graph invocation failed [trigger=%s chat_id=%s]: %s",
