@@ -195,6 +195,9 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
     try:
         logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
         _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
+        logger.info("Graph invoke done, checking state.db size")
+        import os
+        logger.info("state.db size: %s bytes", os.path.getsize("db/state.db"))
         logger.info("Graph invocation complete: trigger=%s", trigger)
         if trigger in ("confirm", "study_picker") and message_id is not None:
             with _confirm_lock:
