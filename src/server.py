@@ -127,8 +127,6 @@ async def webhook(
                         )
                         return JSONResponse({"ok": True})
                     _in_flight_message_ids.add(message_id)
-                    if len(_in_flight_message_ids) > _MAX_CONFIRMED:
-                        _in_flight_message_ids.discard(min(_in_flight_message_ids))
             trigger = "confirm"
             if message_id is not None:
                 extra["message_id"] = message_id
@@ -138,8 +136,6 @@ async def webhook(
                     if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
                         return JSONResponse({"ok": True})
                     _confirmed_message_ids.add(message_id)
-                    if len(_confirmed_message_ids) > _MAX_CONFIRMED:
-                        _confirmed_message_ids.discard(min(_confirmed_message_ids))
             trigger = "skip"
 
         else:
