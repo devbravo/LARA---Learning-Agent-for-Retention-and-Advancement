@@ -1,6 +1,6 @@
-# Learning Manager Agent — CLAUDE.md
+# Kairos — CLAUDE.md
 
-Personal learning agent for Diego Sabajo. Tracks study topics via SM-2
+Personal Learning Assistant for Diego Sabajo. Tracks study topics via SM-2
 spaced repetition, sends proactive daily plans via Telegram, reads Google
 Calendar to plan around real schedule, generates study briefs via Claude API,
 and books [Study] events on Google Calendar after user confirmation.

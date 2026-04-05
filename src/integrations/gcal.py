@@ -98,6 +98,7 @@ def write_event(topic: str, start: str, end: str) -> dict:
     calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
     body = {
         "summary": f"[Study] {topic}",
+        "description": "Booked by Kairos - Personal Learning Assistant",
         "start": {"dateTime": start, "timeZone": "UTC"},
         "end": {"dateTime": end, "timeZone": "UTC"},
     }
