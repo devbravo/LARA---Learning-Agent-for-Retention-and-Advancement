@@ -174,13 +174,20 @@ def _get_topic_config(topic_name: str, config: dict) -> dict:
     return {}
 
 
+def _is_topic_in_summary(topic_name: str, summary: str) -> bool:
+    norm_topic = topic_name.lower().replace(" and ", " & ")
+    norm_summary = summary.lower().replace(" and ", " & ")
+    return norm_topic in norm_summary or norm_summary in norm_topic
+
+
 def _get_prebooked_topics(events: list, due_topics: list) -> set:
     prebooked = set()
     for topic in due_topics:
-        topic_name_lower = topic["name"].lower().replace(" and ", " & ")
         for ev in events:
-            summary = ev.get("summary", "").lower().replace(" and ", " & ")
-            if topic_name_lower in summary or summary in topic_name_lower:
+            raw_summary = ev.get("summary") or ""
+            if not raw_summary:
+                continue
+            if _is_topic_in_summary(topic["name"], raw_summary):
                 prebooked.add(topic["name"])
                 break
     return prebooked
@@ -217,8 +224,7 @@ def daily_briefing(state: AgentState) -> AgentState:
                 dur_str = f"{dur}min" if dur else ""
                 summary = ev.get("summary", "(No title)")
                 booked_marker = " ✓ already booked" if any(
-                    tn.lower().replace(" and ", " & ") in summary.lower().replace(" and ", " & ")
-                    for tn in prebooked
+                    _is_topic_in_summary(tn, summary) for tn in prebooked
                 ) else ""
                 lines.append(f"  {t} {summary}{' (' + dur_str + ')' if dur_str else ''}{booked_marker}")
         else:
@@ -256,10 +262,12 @@ def daily_briefing(state: AgentState) -> AgentState:
                 }
                 proposed_slots.append(slot)
 
+
                 # Keep single-slot fields pointing at the first block (backwards compatible)
                 if i == 0:
                     proposed_topic = topic["name"]
                     proposed_slot = slot
+            print(f"[DEBUG] proposed_slots: {[s['topic'] for s in proposed_slots]}")
         else:
             lines.append("🧠 Study windows: None found today")
         lines.append("")
@@ -545,6 +553,7 @@ def output(state: AgentState) -> AgentState:
 
     # Book calendar events on confirmation
     trigger = state.get("trigger", "")
+
     if trigger == "confirm":
         today = date.today()
         config = _load_config()
@@ -554,6 +563,7 @@ def output(state: AgentState) -> AgentState:
 
         booked: list[str] = []
         slots = state.get("proposed_slots")
+
 
         if slots:
             # Daily briefing flow — book every proposed slot
