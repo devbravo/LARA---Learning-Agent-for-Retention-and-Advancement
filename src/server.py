@@ -117,7 +117,12 @@ async def webhook(
                 _confirmed_message_ids.add(message_id)
                 extra["message_id"] = message_id
         elif cb == "skip":
+            if message_id is not None and message_id in _confirmed_message_ids:
+                return JSONResponse({"ok": True})
+            if message_id is not None:
+                _confirmed_message_ids.add(message_id)
             trigger = "skip"
+
         else:
             # Unknown callback — ignore
             return JSONResponse({"ok": True})
