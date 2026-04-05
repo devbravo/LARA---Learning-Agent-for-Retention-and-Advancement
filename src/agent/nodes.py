@@ -589,21 +589,10 @@ def output(state: AgentState) -> AgentState:
                 except Exception as e:
                     print(f"[output] Calendar write failed for {slot.get('topic')}: {e}")
         else:
-            # study_picker flow — single slot
-            try:
-                topic = state.get("proposed_topic")
-                slot = state.get("proposed_slot")
-                if topic and slot:
-                    t_start = _fmt_time(slot["start"])
-                    t_end = _fmt_time(slot["end"])
-                    _gcal.write_event(
-                        topic=topic,
-                        start=f"{today.isoformat()}T{t_start}:00{offset_str}",
-                        end=f"{today.isoformat()}T{t_end}:00{offset_str}",
-                    )
-                    booked.append(topic)
-            except Exception as e:
-                print(f"[output] Calendar write failed: {e}")
+            # study_picker flow — no GCal write, session is happening now
+            topic = state.get("proposed_topic")
+            if topic:
+                booked.append(topic)
 
         # Remove inline keyboard from original confirm message
         chat_id = state.get("chat_id")
@@ -616,9 +605,8 @@ def output(state: AgentState) -> AgentState:
 
         # Send booking confirmation
         if booked:
-            summary = "\n".join(f"  • {t}" for t in booked)
             try:
-                _telegram.send_message(f"✅ Booked {len(booked)} study session(s):\n{summary}")
+                _telegram.send_message(f"💪 Go study {booked[0]}! Paste a session summary when you're done.")
             except Exception as e:
                 print(f"[output] Confirmation send failed: {e}")
 
