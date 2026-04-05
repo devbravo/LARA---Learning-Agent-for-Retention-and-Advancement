@@ -174,6 +174,25 @@ def _get_topic_config(topic_name: str, config: dict) -> dict:
     return {}
 
 
+def _is_topic_in_summary(topic_name: str, summary: str) -> bool:
+    norm_topic = topic_name.lower().replace(" and ", " & ")
+    norm_summary = summary.lower().replace(" and ", " & ")
+    return norm_topic in norm_summary or norm_summary in norm_topic
+
+
+def _get_prebooked_topics(events: list, due_topics: list) -> set:
+    prebooked = set()
+    for topic in due_topics:
+        for ev in events:
+            raw_summary = ev.get("summary") or ""
+            if not raw_summary:
+                continue
+            if _is_topic_in_summary(topic["name"], raw_summary):
+                prebooked.add(topic["name"])
+                break
+    return prebooked
+
+
 def daily_briefing(state: AgentState) -> AgentState:
     """
     Assembles the morning plan from calendar + SM-2 + gap finder.
@@ -188,13 +207,15 @@ def daily_briefing(state: AgentState) -> AgentState:
         _TZ = pytz.timezone(_load_config()["timezone"])
         # after_time = datetime.now(_TZ).time()
         free_windows = _gap_finder.find_free_windows(events, today, config, )
+        timed_events = [e for e in events if "dateTime" in e.get("start", {})]
+        prebooked = _get_prebooked_topics(timed_events, due_topics)
+
 
         # --- Build message ---
         day_str = today.strftime("%A %B %-d")
         lines = [f"☀️ Good morning Diego — {day_str}", ""]
 
         # Today's calendar events (skip all-day)
-        timed_events = [e for e in events if "dateTime" in e.get("start", {})]
         if timed_events:
             lines.append("📅 Your day:")
             for ev in timed_events:
@@ -202,7 +223,10 @@ def daily_briefing(state: AgentState) -> AgentState:
                 dur = _event_duration_min(ev)
                 dur_str = f"{dur}min" if dur else ""
                 summary = ev.get("summary", "(No title)")
-                lines.append(f"  {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
+                booked_marker = " ✓ already booked" if any(
+                    _is_topic_in_summary(tn, summary) for tn in prebooked
+                ) else ""
+                lines.append(f"  {t} {summary}{' (' + dur_str + ')' if dur_str else ''}{booked_marker}")
         else:
             lines.append("📅 Your day: No meetings today")
         lines.append("")
@@ -216,8 +240,9 @@ def daily_briefing(state: AgentState) -> AgentState:
 
         if free_windows:
             lines.append("🧠 Today's study plan:")
+            available_topics = [t for t in due_topics if t["name"] not in prebooked]
             for i, win in enumerate(free_windows):
-                topic = due_topics[i] if i < len(due_topics) else None
+                topic = available_topics[i] if i < len(available_topics) else None
                 if topic is None:
                     break  # no more topics to assign
                 topic_cfg = _get_topic_config(topic["name"], config)
@@ -236,6 +261,7 @@ def daily_briefing(state: AgentState) -> AgentState:
                     "duration_min": duration,
                 }
                 proposed_slots.append(slot)
+
 
                 # Keep single-slot fields pointing at the first block (backwards compatible)
                 if i == 0:
@@ -526,6 +552,7 @@ def output(state: AgentState) -> AgentState:
 
     # Book calendar events on confirmation
     trigger = state.get("trigger", "")
+
     if trigger == "confirm":
         today = date.today()
         config = _load_config()
@@ -535,6 +562,7 @@ def output(state: AgentState) -> AgentState:
 
         booked: list[str] = []
         slots = state.get("proposed_slots")
+
 
         if slots:
             # Daily briefing flow — book every proposed slot

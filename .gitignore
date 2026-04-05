@@ -11,3 +11,11 @@ dist/
 build/
 .DS_Store
 .idea/
+
+# SQLite runtime files
+*.db-wal
+*.db-shm
+
+# SQLite runtime files
+*.db-wal
+*.db-shm
