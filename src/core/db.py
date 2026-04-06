@@ -53,7 +53,8 @@ def seed_topics() -> None:
 
     with get_connection() as conn:
         conn.executemany(
-            "INSERT OR IGNORE INTO topics (name, tier) VALUES (:name, :tier)",
+            """INSERT OR IGNORE INTO topics (name, tier, active) 
+               VALUES (:name, :tier, :active)""",
             config["topics"],
         )
 
