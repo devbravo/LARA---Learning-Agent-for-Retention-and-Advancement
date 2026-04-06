@@ -2,9 +2,9 @@
 LangGraph graph definition for the Learning Manager agent.
 
 Flow:
-  START → router → (conditional) → daily_briefing | on_demand | done_parser | output
-  daily_briefing  → confirm → END
-  on_demand    → brief_generator → confirm → END
+  START → router → (conditional) → daily_planning | on_demand | done_parser | output
+  daily_planning  → confirm → END
+  on_demand    → generate_brief → confirm → END
   done_parser     → (conditional) → log_session | output
   log_session     → output → END
   output          → END
@@ -25,15 +25,15 @@ from langgraph.graph import END, START, StateGraph
 
 from src.agent.nodes import (
     AgentState,
-    brief_generator,
+    generate_brief,
     calendar_reader,
     confirm,
-    daily_briefing,
+    daily_planning,
     done_parser,
     gap_finder,
     log_session,
     output,
-    route_from_daily_briefing,
+    route_from_daily_planning,
     route_from_done_parser,
     route_from_router,
     router,
@@ -56,13 +56,13 @@ def build_graph(checkpointer=None):
 
     # Register all nodes
     builder.add_node("router", router)
-    builder.add_node("daily_briefing", daily_briefing)
+    builder.add_node("daily_planning", daily_planning)
     builder.add_node("on_demand", on_demand)
     builder.add_node("done_parser", done_parser)
     builder.add_node("calendar_reader", calendar_reader)
     builder.add_node("sm2_engine", sm2_engine)
     builder.add_node("gap_finder", gap_finder)
-    builder.add_node("brief_generator", brief_generator)
+    builder.add_node("generate_brief", generate_brief)
     builder.add_node("confirm", confirm)
     builder.add_node("log_session", log_session)
     builder.add_node("output", output)
@@ -75,7 +75,7 @@ def build_graph(checkpointer=None):
         "router",
         route_from_router,
         {
-            "daily_briefing": "daily_briefing",
+            "daily_planning": "daily_planning",
             "on_demand": "on_demand",
             "done_parser": "done_parser",
             "output": "output",
@@ -84,12 +84,12 @@ def build_graph(checkpointer=None):
 
     # Main flows
     builder.add_conditional_edges(
-        "daily_briefing",
-        route_from_daily_briefing,
+        "daily_planning",
+        route_from_daily_planning,
         {"confirm": "confirm", "output": "output"},
     )
-    builder.add_edge("on_demand", "brief_generator")
-    builder.add_edge("brief_generator", "confirm")
+    builder.add_edge("on_demand", "generate_brief")
+    builder.add_edge("generate_brief", "confirm")
     builder.add_edge("confirm", END)
 
     # done flow

@@ -38,7 +38,7 @@ class AgentState(TypedDict, total=False):
     duration_min: int | None
     proposed_topic: str | None          # single-slot flow (on_demand)
     proposed_slot: dict | None          # single-slot flow (on_demand)
-    proposed_slots: list[dict] | None   # multi-slot flow (daily_briefing)
+    proposed_slots: list[dict] | None   # multi-slot flow (daily_planning)
     has_study_plan: bool                # False → skip confirm, go straight to output
     session_summary: dict | None
     quality_score: int | None
@@ -109,7 +109,7 @@ def route_from_router(state: AgentState) -> str:
     """Conditional edge: maps trigger → next node name."""
     trigger = state.get("trigger", "")
     mapping = {
-        "daily": "daily_briefing",
+        "daily": "daily_planning",
         "on_demand": "on_demand",
         "done": "done_parser",
         "confirm": "output",
@@ -117,7 +117,7 @@ def route_from_router(state: AgentState) -> str:
     return mapping.get(trigger, "output")
 
 
-def route_from_daily_briefing(state: AgentState) -> str:
+def route_from_daily_planning(state: AgentState) -> str:
     """Conditional edge: skip confirm entirely when there's nothing to book."""
     return "confirm" if state.get("has_study_plan") else "output"
 
@@ -164,7 +164,7 @@ def gap_finder(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
-# Node: daily_briefing
+# Node: daily_planning
 # ---------------------------------------------------------------------------
 
 def _get_topic_config(topic_name: str, config: dict) -> dict:
@@ -193,7 +193,7 @@ def _get_prebooked_topics(events: list, due_topics: list) -> set:
     return prebooked
 
 
-def daily_briefing(state: AgentState) -> AgentState:
+def daily_planning(state: AgentState) -> AgentState:
     """
     Assembles the morning plan from calendar + SM-2 + gap finder.
     Sets proposed_topic and proposed_slot.
@@ -300,40 +300,21 @@ def on_demand(state: AgentState) -> AgentState:
     Validates the requested duration fits a free window, sets proposed_topic/slot.
     """
     try:
-        today = date.today()
-        config = _load_config()
-        duration_min = state.get("duration_min") or 30
-
-        events = _gcal.get_events(today)
         due_topics = _sm2.get_due_topics()
-        free_windows = _gap_finder.find_free_windows(events, today, config)
-
-        slot = _gap_finder.find_slot_for_duration(free_windows, duration_min)
-        if slot is None:
-            return {
-                "messages": [
-                    f"⚠️ No free window of {duration_min} minutes found today.\n"
-                    "Try a shorter duration or check back later."
-                ]
-            }
-
         topic = due_topics[0] if due_topics else None
         if topic is None:
             return {"messages": ["🎉 Nothing due for review right now — enjoy your break!"]}
 
-        context = topic.get("weak_areas") or "General review"
+        duration_min = state.get("duration_min") or 30
         return {
             "proposed_topic": topic["name"],
-            "proposed_slot": slot,
+            "proposed_slot": None,
             "proposed_slots": None,
-            "messages": state.get("messages", []) + [
-                f"📚 Ready to study {topic['name']} for {duration_min} min "
-                f"at {_fmt_time(slot['start'])}–{_fmt_time(slot['end'])}. Generating brief…"
-            ],
+            "messages": [f"📚 Generating a {duration_min} min brief for {topic['name']}…"],
         }
 
     except Exception as e:
-        return {"messages": [f"⚠️ Study picker failed: {e}"]}
+        return {"messages": [f"⚠️ On-demand session failed: {e}"]}
 
 
 # ---------------------------------------------------------------------------
@@ -421,10 +402,10 @@ def route_from_done_parser(state: AgentState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Node: brief_generator
+# Node: generate_brief
 # ---------------------------------------------------------------------------
 
-def brief_generator(state: AgentState) -> AgentState:
+def generate_brief(state: AgentState) -> AgentState:
     """Calls Claude API to generate a study brief. Only node that calls an LLM."""
     try:
         topic = state.get("proposed_topic") or "General Study"
@@ -463,7 +444,9 @@ def brief_generator(state: AgentState) -> AgentState:
 
 def confirm(state: AgentState) -> AgentState:
     """
-    Sends the assembled plan to Telegram with confirmation buttons.
+    Sends the assembled plan to Telegram.
+    Daily briefing flow: sends inline buttons (Yes, book them / Skip).
+    On-demand flow: sends the study brief as a plain message (no booking needed).
     Does NOT advance state — next trigger arrives via webhook.
     """
     try:
@@ -603,7 +586,18 @@ def output(state: AgentState) -> AgentState:
         # Send booking confirmation
         if booked:
             try:
-                _telegram.send_message(f"💪 Go study {booked[0]}! Paste a session summary when you're done.")
+                if slots:
+                    # Daily briefing flow — summarise all booked topics
+                    topic_list = ", ".join(booked)
+                    _telegram.send_message(
+                        f"✅ Booked {len(booked)} study block(s): {topic_list}. "
+                        "Paste a session summary when you're done."
+                    )
+                else:
+                    # On-demand flow — single topic, happening now
+                    _telegram.send_message(
+                        f"💪 Go study {booked[0]}! Paste a session summary when you're done."
+                    )
             except Exception as e:
                 print(f"[output] Confirmation send failed: {e}")
 

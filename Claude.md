@@ -14,13 +14,13 @@ and books [Study] events on Google Calendar after user confirmation.
 | Node | Responsibility |
 |---|---|
 | `router` | Entry point. Reads checkpointed state. Routes by intent. |
-| `daily_briefing` | Assembles morning plan from calendar + SM-2 + gap finder |
+| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder |
 | `on_demand` | Handles "I have X min" flow. Validates slot availability. |
 | `done_parser` | Parses pasted session summary from Telegram |
 | `calendar_reader` | Read-only GCal fetch. Shared by briefing and picker. |
 | `sm2_engine` | Returns due topics ranked by tier + easiness factor. Pure Python. |
 | `gap_finder` | Computes free windows respecting protected blocks. Pure Python. |
-| `brief_generator` | Calls Claude API directly. Only node that uses an LLM. |
+| `generate_brief` | Calls Claude API directly. Only node that uses an LLM. |
 | `confirm` | Sends plan to Telegram. Awaits button tap. |
 | `log_session` | Writes session log. Updates SM-2 state. Clears conversation state. |
 | `output` | Final Telegram send + GCal write after confirmation. |
@@ -37,16 +37,16 @@ and books [Study] events on Google Calendar after user confirmation.
 | `write_calendar_event` | `output` |
 | `log_study_session` | `log_session` |
 
-**Not tools:** `generate_brief` is called directly inside `brief_generator` node.
+**Not tools:** `generate_brief` is called directly inside `generate_brief` node.
 Conversation state is handled by LangGraph's `SqliteSaver` checkpointer — never manually.
 
 ## Triggers
 
 | Trigger | What it starts |
 |---|---|
-| APScheduler 8am daily | `daily_briefing` → `confirm` → `output` |
-| APScheduler Sunday 9am | Weekly planning variant of `daily_briefing` |
-| Telegram button tap (duration) | `on_demand` → `brief_generator` → `confirm` → `output` |
+| APScheduler 8am daily | `daily_planning` → `confirm` → `output` |
+| APScheduler Sunday 9am | Weekly planning variant of `daily_planning` |
+| Telegram button tap (duration) | `on_demand` → `generate_brief` → `confirm` → `output` |
 | Telegram "done" message | `done_parser` → `log_session` → `output` |
 | Telegram confirmed booking | `output` → `write_calendar_event` |
 
@@ -139,7 +139,7 @@ STATE_DATABASE_PATH=db/state.db
 
 - POC first — minimum features that solve the real problem
 - No LLM where a formula works — SM-2 and gap_finder are pure Python
-- Claude API only inside `brief_generator` — no other node calls the LLM
+- Claude API only inside `generate_brief` — no other node calls the LLM
 - Calendar safety rule is non-negotiable — enforce it at the tool level
 - Test tools in isolation before wiring into LangGraph
 - Error handling is required in all integrations and in `done_parser`

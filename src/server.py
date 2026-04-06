@@ -110,7 +110,7 @@ async def webhook(
                         return JSONResponse({"ok": True})
                     _in_flight_message_ids.add(message_id)
             trigger = "on_demand"
-            extra["duration_min"] = int(callback_data.replace(" min", ""))
+            extra["duration_min"] = int(cb.replace(" min", ""))
             if message_id is not None:
                 extra["message_id"] = message_id
         elif cb in ("yes, book them", "confirm"):

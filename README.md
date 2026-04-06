@@ -25,7 +25,7 @@ Telegram ──► FastAPI /webhook ──► LangGraph graph ──► Telegram
                Google Calendar      SQLite            Claude API
                (read + write)    (SM-2 state,       (study briefs
                                   sessions log)       only)
-APScheduler ──► daily_briefing (08:00 Mon–Sat, 09:00 Sun)
+APScheduler ──► daily_planning (08:00 Mon–Sat, 09:00 Sun)
 ```
 
 ### LangGraph nodes
@@ -33,13 +33,13 @@ APScheduler ──► daily_briefing (08:00 Mon–Sat, 09:00 Sun)
 | Node | Responsibility |
 |---|---|
 | `router` | Entry point — routes by trigger type |
-| `daily_briefing` | Assembles morning plan from calendar + SM-2 + gap finder |
+| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder |
 | `on_demand` | Handles "I have X min" flow, validates slot availability |
 | `done_parser` | Parses and validates pasted session summaries |
 | `calendar_reader` | Read-only GCal fetch |
 | `sm2_engine` | Returns due topics ranked by tier + easiness factor |
 | `gap_finder` | Computes free windows respecting protected blocks |
-| `brief_generator` | Calls Claude API — the only LLM call in the graph |
+| `generate_brief` | Calls Claude API — the only LLM call in the graph |
 | `confirm` | Sends plan to Telegram with inline keyboard; waits for tap |
 | `log_session` | Writes session log, updates SM-2 state |
 | `output` | Final Telegram send + GCal write after confirmation |
