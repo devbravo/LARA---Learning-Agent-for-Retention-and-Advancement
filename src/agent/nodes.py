@@ -32,12 +32,12 @@ def _load_config() -> dict:
 # ---------------------------------------------------------------------------
 
 class AgentState(TypedDict, total=False):
-    trigger: str               # "daily" | "study_picker" | "done" | "confirm"
+    trigger: str               # "daily" | "on_demand" | "done" | "confirm"
     chat_id: int
     message_id: int | None              # Telegram message_id of the confirm keyboard
     duration_min: int | None
-    proposed_topic: str | None          # single-slot flow (study_picker)
-    proposed_slot: dict | None          # single-slot flow (study_picker)
+    proposed_topic: str | None          # single-slot flow (on_demand)
+    proposed_slot: dict | None          # single-slot flow (on_demand)
     proposed_slots: list[dict] | None   # multi-slot flow (daily_briefing)
     has_study_plan: bool                # False → skip confirm, go straight to output
     session_summary: dict | None
@@ -110,7 +110,7 @@ def route_from_router(state: AgentState) -> str:
     trigger = state.get("trigger", "")
     mapping = {
         "daily": "daily_briefing",
-        "study_picker": "study_picker",
+        "on_demand": "on_demand",
         "done": "done_parser",
         "confirm": "output",
     }
@@ -291,10 +291,10 @@ def daily_briefing(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
-# Node: study_picker
+# Node: on_demand
 # ---------------------------------------------------------------------------
 
-def study_picker(state: AgentState) -> AgentState:
+def on_demand(state: AgentState) -> AgentState:
     """
     Handles 'I have X min' flow.
     Validates the requested duration fits a free window, sets proposed_topic/slot.
@@ -318,11 +318,8 @@ def study_picker(state: AgentState) -> AgentState:
             }
 
         topic = due_topics[0] if due_topics else None
-        print(f"[DEBUG study_picker] topic: {topic['name']}, duration: {duration_min}")
         if topic is None:
             return {"messages": ["🎉 Nothing due for review right now — enjoy your break!"]}
-
-        print(f"[DEBUG study_picker] about to return - topic: {topic['name']}, slot: {slot}")
 
         context = topic.get("weak_areas") or "General review"
         return {
@@ -573,11 +570,6 @@ def output(state: AgentState) -> AgentState:
 
         booked: list[str] = []
         slots = state.get("proposed_slots")
-        print(f"[DEBUG output] trigger: {trigger}")
-        print(f"[DEBUG output] proposed_slots: {state.get('proposed_slots')}")
-        print(f"[DEBUG output] proposed_topic: {state.get('proposed_topic')}")
-        print(f"[DEBUG output] proposed_slot: {state.get('proposed_slot')}")
-
 
         if slots:
             # Daily briefing flow — book every proposed slot
@@ -594,7 +586,7 @@ def output(state: AgentState) -> AgentState:
                 except Exception as e:
                     print(f"[output] Calendar write failed for {slot.get('topic')}: {e}")
         else:
-            # study_picker flow — no GCal write, session is happening now
+            # on_demand flow — no GCal write, session is happening now
             topic = state.get("proposed_topic")
             if topic:
                 booked.append(topic)

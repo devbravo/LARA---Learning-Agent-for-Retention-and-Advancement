@@ -15,7 +15,7 @@ and books [Study] events on Google Calendar after user confirmation.
 |---|---|
 | `router` | Entry point. Reads checkpointed state. Routes by intent. |
 | `daily_briefing` | Assembles morning plan from calendar + SM-2 + gap finder |
-| `study_picker` | Handles "I have X min" flow. Validates slot availability. |
+| `on_demand` | Handles "I have X min" flow. Validates slot availability. |
 | `done_parser` | Parses pasted session summary from Telegram |
 | `calendar_reader` | Read-only GCal fetch. Shared by briefing and picker. |
 | `sm2_engine` | Returns due topics ranked by tier + easiness factor. Pure Python. |
@@ -46,7 +46,7 @@ Conversation state is handled by LangGraph's `SqliteSaver` checkpointer — neve
 |---|---|
 | APScheduler 8am daily | `daily_briefing` → `confirm` → `output` |
 | APScheduler Sunday 9am | Weekly planning variant of `daily_briefing` |
-| Telegram button tap (duration) | `study_picker` → `brief_generator` → `confirm` → `output` |
+| Telegram button tap (duration) | `on_demand` → `brief_generator` → `confirm` → `output` |
 | Telegram "done" message | `done_parser` → `log_session` → `output` |
 | Telegram confirmed booking | `output` → `write_calendar_event` |
 
@@ -91,7 +91,7 @@ After parsing, send rating buttons. Only log_session fires after a rating tap.
 
 ## Telegram UX
 
-**Duration picker:** inline keyboard `[30 min] [60 min] [90 min]`
+**Duration picker:** inline keyboard `[30 min] [45 min] [60 min]`
 
 **Morning briefing:**
 ```

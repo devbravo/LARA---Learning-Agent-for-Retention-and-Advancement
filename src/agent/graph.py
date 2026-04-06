@@ -2,9 +2,9 @@
 LangGraph graph definition for the Learning Manager agent.
 
 Flow:
-  START → router → (conditional) → daily_briefing | study_picker | done_parser | output
+  START → router → (conditional) → daily_briefing | on_demand | done_parser | output
   daily_briefing  → confirm → END
-  study_picker    → brief_generator → confirm → END
+  on_demand    → brief_generator → confirm → END
   done_parser     → (conditional) → log_session | output
   log_session     → output → END
   output          → END
@@ -38,7 +38,7 @@ from src.agent.nodes import (
     route_from_router,
     router,
     sm2_engine,
-    study_picker,
+    on_demand,
 )
 
 _DB_DIR = Path(__file__).parents[2] / "db"
@@ -57,7 +57,7 @@ def build_graph(checkpointer=None):
     # Register all nodes
     builder.add_node("router", router)
     builder.add_node("daily_briefing", daily_briefing)
-    builder.add_node("study_picker", study_picker)
+    builder.add_node("on_demand", on_demand)
     builder.add_node("done_parser", done_parser)
     builder.add_node("calendar_reader", calendar_reader)
     builder.add_node("sm2_engine", sm2_engine)
@@ -76,7 +76,7 @@ def build_graph(checkpointer=None):
         route_from_router,
         {
             "daily_briefing": "daily_briefing",
-            "study_picker": "study_picker",
+            "on_demand": "on_demand",
             "done_parser": "done_parser",
             "output": "output",
         },
@@ -88,7 +88,7 @@ def build_graph(checkpointer=None):
         route_from_daily_briefing,
         {"confirm": "confirm", "output": "output"},
     )
-    builder.add_edge("study_picker", "brief_generator")
+    builder.add_edge("on_demand", "brief_generator")
     builder.add_edge("brief_generator", "confirm")
     builder.add_edge("confirm", END)
 
@@ -121,7 +121,7 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
     Convenience wrapper to invoke the graph.
 
     Args:
-        trigger:  'daily' | 'study_picker' | 'done' | 'confirm'
+        trigger:  'daily' | 'on_demand' | 'done' | 'confirm'
         chat_id:  Telegram chat ID (used as LangGraph thread_id)
         **kwargs: Additional state fields (duration_min, messages, etc.)
 
@@ -176,7 +176,7 @@ if __name__ == "__main__":
                 t = f"{_fmt_time(slot['start'])}–{_fmt_time(slot['end'])} ({slot['duration_min']}min)"
                 print(f"  proposed_slots[{i}] : {slot['topic']} @ {t}")
         else:
-            # study_picker fallback
+            # on_demand fallback
             print(f"  proposed_topic : {final_state.get('proposed_topic')}")
             slot = final_state.get("proposed_slot")
             if slot:
