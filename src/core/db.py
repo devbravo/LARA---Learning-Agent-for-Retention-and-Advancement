@@ -21,12 +21,23 @@ def init_db() -> None:
         except Exception:
             pass  # column already exists
 
+        # Migrate existing DB: add status column if missing
+        try:
+            conn.execute("ALTER TABLE topics ADD COLUMN status TEXT DEFAULT 'active'")
+        except Exception:
+            pass  # column already exists
+
+        try:
+            conn.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
+        except Exception:
+            pass
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS topics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
                 tier INTEGER NOT NULL,
-                active INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'active',
                 easiness_factor REAL DEFAULT 2.5,
                 interval_days INTEGER DEFAULT 1,
                 repetitions INTEGER DEFAULT 0,
@@ -47,18 +58,28 @@ def init_db() -> None:
         """)
 
 
+def _map_status(topic: dict) -> dict:
+    """Map active boolean from topics.yaml to status string."""
+    t = dict(topic)
+    if "status" not in t:
+        t["status"] = "active" if t.get("active", True) else "inactive"
+    return t
+
+
 def seed_topics() -> None:
     with open(TOPICS_PATH) as f:
         config = yaml.safe_load(f)
 
+    rows = [_map_status(t) for t in config["topics"]]
+
     with get_connection() as conn:
         conn.executemany(
-            """INSERT INTO topics (name, tier, active)
-               VALUES (:name, :tier, :active)
+            """INSERT INTO topics (name, tier, status)
+               VALUES (:name, :tier, :status)
                ON CONFLICT(name) DO UPDATE SET
                    tier = excluded.tier,
-                   active = excluded.active""",
-            config["topics"],
+                   status = excluded.status""",
+            rows,
         )
 
 
@@ -68,10 +89,10 @@ if __name__ == "__main__":
 
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, name, tier, easiness_factor, interval_days, repetitions, next_review FROM topics ORDER BY tier, name"
+            "SELECT id, name, tier, status, easiness_factor, interval_days, repetitions, next_review FROM topics ORDER BY tier, name"
         ).fetchall()
 
-    print(f"{'ID':<4} {'Name':<25} {'Tier':<6} {'EF':<6} {'Interval':<10} {'Reps':<6} {'Next Review'}")
-    print("-" * 70)
+    print(f"{'ID':<4} {'Name':<35} {'Tier':<6} {'Status':<12} {'EF':<6} {'Interval':<10} {'Reps':<6} {'Next Review'}")
+    print("-" * 90)
     for row in rows:
-        print(f"{row['id']:<4} {row['name']:<25} {row['tier']:<6} {row['easiness_factor']:<6} {row['interval_days']:<10} {row['repetitions']:<6} {row['next_review']}")
+        print(f"{row['id']:<4} {row['name']:<35} {row['tier']:<6} {row['status']:<12} {row['easiness_factor']:<6} {row['interval_days']:<10} {row['repetitions']:<6} {row['next_review']}")

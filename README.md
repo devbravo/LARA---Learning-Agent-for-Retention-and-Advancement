@@ -211,7 +211,7 @@ Tap any message → bot responds with `[30 min] [45 min] [60 min]`
 After an external study session, paste this into the chat:
 
 ```
-📋 Session summary
+Session summary
 Topic: LangGraph
 Duration: 45 min
 Weak areas: state management, conditional edges

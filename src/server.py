@@ -7,8 +7,10 @@ Endpoints:
 """
 
 import logging
+import asyncio
 import os
 import threading
+
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -118,7 +120,6 @@ async def webhook(
                 with _confirm_lock:
                     if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
                         logger.info("message_id=%s already confirmed or in-flight — ignoring repeat tap", message_id)
-                        import asyncio
                         asyncio.get_event_loop().run_in_executor(
                             None,
                             lambda: send_message("✅ Already booked! Check your Google Calendar."),
@@ -135,13 +136,28 @@ async def webhook(
                         return JSONResponse({"ok": True})
                     _confirmed_message_ids.add(message_id)
             trigger = "skip"
+        elif cb in ("😕 hard", "😐 ok", "😊 easy"):
+            if message_id is not None:
+                with _confirm_lock:
+                    if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
+                        logger.info("message_id=%s already rated - ignoring repeat tap", message_id)
+                        asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: send_message("✅ Already rated! Thanks for your feedback."))
+                        return JSONResponse({"ok": True})
+                    _in_flight_message_ids.add(message_id)
+                trigger = "rate"
+                score_map = {"😕 hard": 2, "😐 ok": 3, "😊 easy": 5}
+                extra["quality_score"] = score_map[cb]
+                if message_id is not None:
+                    extra["message_id"] = message_id
 
         else:
             # Unknown callback — ignore
             return JSONResponse({"ok": True})
 
     elif message_text:
-        if message_text.startswith("📋 Session summary"):
+        if message_text.startswith("Session summary"):
             trigger = "done"
             extra["messages"] = [message_text]
         else:
@@ -152,7 +168,6 @@ async def webhook(
         return JSONResponse({"ok": True})
 
     if trigger == "skip":
-        import asyncio
         asyncio.get_event_loop().run_in_executor(
             None,
             lambda: send_message("Okay, no study blocks booked. See you tomorrow! 👋"),
@@ -163,7 +178,6 @@ async def webhook(
 
     # --- Menu: send duration picker directly, no graph needed ---
     if trigger == "menu":
-        import asyncio
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
             None,
@@ -172,7 +186,6 @@ async def webhook(
         return JSONResponse({"ok": True})
 
     # --- Invoke graph (fire-and-forget in background) ---
-    import asyncio
 
     loop = asyncio.get_event_loop()
     loop.run_in_executor(
@@ -190,10 +203,9 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
         logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
         _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
         logger.info("Graph invoke done, checking state.db size")
-        import os
         logger.info("state.db size: %s bytes", os.path.getsize("db/state.db"))
         logger.info("Graph invocation complete: trigger=%s", trigger)
-        if trigger in ("confirm", "on_demand") and message_id is not None:
+        if trigger in ("confirm", "on_demand", "rate") and message_id is not None:
             with _confirm_lock:
                 _in_flight_message_ids.discard(message_id)
                 _confirmed_message_ids.add(message_id)
@@ -204,6 +216,6 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
             "Graph invocation failed [trigger=%s chat_id=%s]: %s",
             trigger, chat_id, e, exc_info=True,
         )
-        if trigger in ("confirm", "on_demand") and message_id is not None:
+        if trigger in ("confirm", "on_demand", "rate") and message_id is not None:
             with _confirm_lock:
                 _in_flight_message_ids.discard(message_id)
