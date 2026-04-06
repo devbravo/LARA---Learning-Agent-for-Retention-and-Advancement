@@ -278,6 +278,18 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("🧠 Study windows: None found today")
         lines.append("")
 
+        # In-progress topics (informational only — not assigned to windows)
+        from src.core.db import get_connection
+        with get_connection() as conn:
+            in_progress_rows = conn.execute(
+                "SELECT name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
+            ).fetchall()
+        if in_progress_rows:
+            lines.append("📌 In progress (via AlgoMonster):")
+            for row in in_progress_rows:
+                lines.append(f"  • {row['name']}")
+            lines.append("")
+
         has_study_plan = bool(proposed_slots)
         if has_study_plan:
             lines.append("Confirm these study blocks?")

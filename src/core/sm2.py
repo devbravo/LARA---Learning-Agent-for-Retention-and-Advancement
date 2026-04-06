@@ -41,7 +41,7 @@ def calculate_next_review(
 
 
 def get_due_topics(db_path: str | None = None) -> list[dict]:
-    """Return topics where next_review <= today and active = 1, ordered by tier ASC, easiness_factor ASC."""
+    """Return topics where next_review <= today and status = 'active', ordered by tier ASC, easiness_factor ASC."""
     path = db_path or str(DB_PATH)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
@@ -51,7 +51,7 @@ def get_due_topics(db_path: str | None = None) -> list[dict]:
             SELECT id, name, tier, easiness_factor, interval_days, repetitions, next_review, weak_areas
             FROM topics
             WHERE next_review <= date('now')
-              AND active = 1
+              AND status = 'active'
             ORDER BY tier ASC, easiness_factor ASC
             """
         ).fetchall()
