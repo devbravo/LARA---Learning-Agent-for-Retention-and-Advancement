@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 
 DB_PATH = Path(__file__).parents[2] / "db" / "learning.db"
-CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
+TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
 
 
 def get_connection() -> sqlite3.Connection:
@@ -48,12 +48,16 @@ def init_db() -> None:
 
 
 def seed_topics() -> None:
-    with open(CONFIG_PATH) as f:
+    with open(TOPICS_PATH) as f:
         config = yaml.safe_load(f)
 
     with get_connection() as conn:
         conn.executemany(
-            "INSERT OR IGNORE INTO topics (name, tier) VALUES (:name, :tier)",
+            """INSERT INTO topics (name, tier, active)
+               VALUES (:name, :tier, :active)
+               ON CONFLICT(name) DO UPDATE SET
+                   tier = excluded.tier,
+                   active = excluded.active""",
             config["topics"],
         )
 

@@ -20,10 +20,16 @@ from src.integrations import gcal as _gcal
 from src.integrations import telegram_client as _telegram
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
+_TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
 
 
 def _load_config() -> dict:
     with open(_CONFIG_PATH) as f:
+        return yaml.safe_load(f)
+
+
+def _load_topics() -> dict:
+    with open(_TOPICS_PATH) as f:
         return yaml.safe_load(f)
 
 
@@ -240,12 +246,13 @@ def daily_planning(state: AgentState) -> AgentState:
 
         if free_windows:
             lines.append("🧠 Today's study plan:")
+            topics_config = _load_topics()
             available_topics = [t for t in due_topics if t["name"] not in prebooked]
             for i, win in enumerate(free_windows):
                 topic = available_topics[i] if i < len(available_topics) else None
                 if topic is None:
                     break  # no more topics to assign
-                topic_cfg = _get_topic_config(topic["name"], config)
+                topic_cfg = _get_topic_config(topic["name"], topics_config)
                 default_duration = topic_cfg.get("default_duration_minutes", 60)
                 duration = min(default_duration, win["duration_min"])
                 t_start = _fmt_time(win["start"])

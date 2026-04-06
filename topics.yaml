@@ -1,0 +1,190 @@
+topics:
+  # Tier 1 — DSA Patterns
+  - name: "DSA - Two Pointers"
+    tier: 1
+    active: true
+    default_duration_minutes: 30
+  - name: "DSA - Sliding Window"
+    tier: 1
+    active: true
+    default_duration_minutes: 30
+  - name: "DSA - Binary Search"
+    tier: 1
+    active: true
+    default_duration_minutes: 30
+  - name: "DSA - Hash Tables"
+    tier: 1
+    active: false
+    default_duration_minutes: 30
+  - name: "DSA - Breadth First Search"
+    tier: 1
+    active: false
+    default_duration_minutes: 30
+  - name: "DSA - Depth First Search"
+    tier: 1
+    active: false
+    default_duration_minutes: 30
+  - name: "DSA - Backtracking"
+    tier: 1
+    active: false
+    default_duration_minutes: 30
+  - name: "DSA - Heap"
+    tier: 1
+    active: false
+    default_duration_minutes: 30
+  - name: "DSA - Dynamic Programming"
+    tier: 1
+    active: false
+    default_duration_minutes: 30
+
+  # Tier 1 — Gen AI System Design
+  - name: "Gen AI System Design"
+    tier: 1
+    active: true
+    default_duration_minutes: 120
+
+  # Tier 1 — Behavioral & Experience
+  - name: "Behavioral - STAR Method"
+    tier: 1
+    active: true
+    default_duration_minutes: 45
+  - name: "Experience - CodeDealers"
+    tier: 1
+    active: true
+    default_duration_minutes: 45
+  - name: "Experience - Factored Finance App"
+    tier: 1
+    active: true
+    default_duration_minutes: 45
+
+  # Tier 2 — RAG
+  - name: "RAG - Chunking Strategies"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "RAG - Embedding Models"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "RAG - Vector Databases"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "RAG - Retrieval Methods"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "RAG - Reranking"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "RAG - Evaluation"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "RAG - Hybrid Search"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "RAG - Query Transformation"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+
+  # Tier 2 — Agentic Patterns
+  - name: "Agentic Patterns - Tool Use"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "Agentic Patterns - ReAct"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "Agentic Patterns - Memory"
+    tier: 2
+    active: false
+    default_duration_minutes: 60
+  - name: "Agentic Patterns - Planning"
+    tier: 2
+    active: false
+    default_duration_minutes: 60
+  - name: "Agentic Patterns - Multi-agent"
+    tier: 2
+    active: false
+    default_duration_minutes: 60
+
+  # Tier 2 — LangGraph
+  - name: "LangGraph"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+
+  # Tier 2 — FastAPI
+  - name: "FastAPI"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+
+  # Tier 3 — LLM Internals
+  - name: "LLM Internals - Attention"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "LLM Internals - Tokenization"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "LLM Internals - Fine-tuning"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "LLM Internals - RLHF"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "LLM Internals - Inference Optimization"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "LLM Internals - Prompt Engineering"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+
+  # Tier 3 — Reinforcement Learning
+  - name: "RL - Foundations"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "RL - Policy Optimization"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "RL - Value Functions"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "RL - Reward Design"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "RL - Exploration Strategy"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "RL - Training Strategy"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "RL - Environments"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+
+  # Tier 3 — AWS (post-placement)
+  - name: "AWS Solutions Architect"
+    tier: 3
+    active: false
+    default_duration_minutes: 60
+
+
