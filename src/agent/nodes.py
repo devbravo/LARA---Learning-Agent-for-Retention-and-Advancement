@@ -51,7 +51,7 @@ class AgentState(TypedDict, total=False):
     messages: list[str]        # outbound Telegram messages
     # Internal routing flag set by done_parser
     _parse_ok: bool
-
+    _awaiting_rating: bool
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -119,6 +119,7 @@ def route_from_router(state: AgentState) -> str:
         "on_demand": "on_demand",
         "done": "done_parser",
         "confirm": "output",
+        "rate": "log_session"
     }
     return mapping.get(trigger, "output")
 
@@ -341,7 +342,7 @@ def on_demand(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 _SUMMARY_PATTERN = re.compile(
-    r"📋 Session summary\s*\n"
+    r"Session summary\s*\n"
     r"Topic:\s*(.+)\n"
     r"Duration:\s*(\d+)\s*min\s*\n"
     r"Weak areas:\s*(.+)\n"
@@ -351,10 +352,10 @@ _SUMMARY_PATTERN = re.compile(
 
 _EXPECTED_FORMAT = (
     "📋 Session summary\n"
-    "Topic: <topic name>\n"
-    "Duration: <N> min\n"
-    "Weak areas: <comma-separated>\n"
-    "Suggestions: <free text>"
+    "Topic: &lt;topic name&gt;\n"
+    "Duration: &lt;N&gt; min\n"
+    "Weak areas: &lt;comma-separated&gt;\n"
+    "Suggestions: &lt;free text&gt;"
 )
 
 
@@ -400,6 +401,23 @@ def done_parser(state: AgentState) -> AgentState:
             ],
         }
 
+    # Guard: already logged today
+    with get_connection() as conn:
+        already_logged = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE topic_id = ? AND DATE(studied_at) = DATE('now')",
+            (row["id"],)
+        ).fetchone()[0]
+
+    print("LoGGED ALREADY:", already_logged)
+    if already_logged:
+        return {
+            "_parse_ok": False,
+            "messages": [
+                f" You already logged {topic_name} today. "
+                "If this was a separate session, rename the summary topic slightly to distinguish it."
+            ]
+        }
+
     return {
         "_parse_ok": True,
         "session_summary": {
@@ -416,8 +434,25 @@ def done_parser(state: AgentState) -> AgentState:
 def route_from_done_parser(state: AgentState) -> str:
     """Conditional edge: if parse succeeded → log_session, else → output (error message)."""
     if state.get("_parse_ok"):
-        return "log_session"
+        return "confirm_rating"
     return "output"
+
+
+def confirm_rating(state: AgentState) -> AgentState:
+    """Sends rating buttons after a successful done_parser parse."""
+    try:
+        summary = state.get("session_summary") or {}
+        topic_name = summary.get("topic_name", "your session")
+        _telegram.send_buttons(
+            f"How did {topic_name} go?",
+            ["😕 Hard", "😐 OK", "😊 Easy"],
+        )
+    except Exception as e:
+        try:
+            _telegram.send_message(f"⚠️ Could not send rating buttons: {e}")
+        except Exception as e:
+            pass
+    return {"_awaiting_rating": True}
 
 
 # ---------------------------------------------------------------------------

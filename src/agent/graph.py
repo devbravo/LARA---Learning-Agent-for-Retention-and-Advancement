@@ -28,6 +28,7 @@ from src.agent.nodes import (
     generate_brief,
     calendar_reader,
     confirm,
+    confirm_rating,
     daily_planning,
     done_parser,
     gap_finder,
@@ -64,6 +65,7 @@ def build_graph(checkpointer=None):
     builder.add_node("gap_finder", gap_finder)
     builder.add_node("generate_brief", generate_brief)
     builder.add_node("confirm", confirm)
+    builder.add_node("confirm_rating", confirm_rating)
     builder.add_node("log_session", log_session)
     builder.add_node("output", output)
 
@@ -79,6 +81,7 @@ def build_graph(checkpointer=None):
             "on_demand": "on_demand",
             "done_parser": "done_parser",
             "output": "output",
+            "log_session": "log_session",
         },
     )
 
@@ -97,10 +100,11 @@ def build_graph(checkpointer=None):
         "done_parser",
         route_from_done_parser,
         {
-            "log_session": "log_session",
+            "confirm_rating": "confirm_rating",
             "output": "output",
         },
     )
+    builder.add_edge("confirm_rating", END)
     builder.add_edge("log_session", "output")
     builder.add_edge("output", END)
 
@@ -133,8 +137,8 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
     }
     # Only include kwargs that are explicitly provided — don't overwrite
     # checkpointed state with None values
-    for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot", "session_summary", "quality_score",
-                "messages"):
+    for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot",
+                "session_summary", "quality_score", "messages"):
         if kwargs.get(key) is not None:
             initial_state[key] = kwargs[key]
 
