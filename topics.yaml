@@ -1,0 +1,37 @@
+topics:
+  - name: "Gen AI System Design"
+    tier: 1
+    active: true
+    default_duration_minutes: 120
+  - name: "Data Structures and Algorithms"
+    tier: 1
+    active: true
+    default_duration_minutes: 60
+  - name: "Sales Engineering"
+    tier: 1
+    active: true
+    default_duration_minutes: 60
+  - name: "LangGraph"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "RAG"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "Agentic patterns"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "FastAPI"
+    tier: 2
+    active: true
+    default_duration_minutes: 60
+  - name: "AWS Solutions Architect"
+    tier: 3
+    active: true
+    default_duration_minutes: 60
+  - name: "LLM internals"
+    tier: 3
+    active: true
+    default_duration_minutes: 60

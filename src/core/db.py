@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 
 DB_PATH = Path(__file__).parents[2] / "db" / "learning.db"
-CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
+TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
 
 
 def get_connection() -> sqlite3.Connection:
@@ -48,7 +48,7 @@ def init_db() -> None:
 
 
 def seed_topics() -> None:
-    with open(CONFIG_PATH) as f:
+    with open(TOPICS_PATH) as f:
         config = yaml.safe_load(f)
 
     with get_connection() as conn:
