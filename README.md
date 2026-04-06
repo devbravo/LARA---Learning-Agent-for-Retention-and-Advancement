@@ -8,7 +8,7 @@ Personal Learning Assistant for Diego Sabajo. Tracks study topics using SM-2 spa
 
 - **SM-2 spaced repetition** — topics are ranked by tier and easiness factor; intervals grow automatically based on session quality
 - **Morning briefing** — sent at 08:00 daily via Telegram with your calendar, free windows, and top review picks
-- **"I have X minutes"** flow — tap 30 / 60 / 90 min and get an AI-generated study brief for the highest-priority due topic
+- **"I have X minutes"** flow — tap 30 / 45 / 60 min and get an AI-generated study brief for the highest-priority due topic
 - **Session logging** — paste a structured summary into Telegram; the agent parses it, updates SM-2 state, and logs it to SQLite
 - **Calendar safety** — reads all events to plan around them, but only writes events it created (`[Study]` prefix, `creator.self == True`)
 - **Protected block** — never sends messages or fires jobs during 15:00–19:30
@@ -25,7 +25,7 @@ Telegram ──► FastAPI /webhook ──► LangGraph graph ──► Telegram
                Google Calendar      SQLite            Claude API
                (read + write)    (SM-2 state,       (study briefs
                                   sessions log)       only)
-APScheduler ──► daily_briefing (08:00 Mon–Sat, 09:00 Sun)
+APScheduler ──► daily_planning (08:00 Mon–Sat, 09:00 Sun)
 ```
 
 ### LangGraph nodes
@@ -33,13 +33,13 @@ APScheduler ──► daily_briefing (08:00 Mon–Sat, 09:00 Sun)
 | Node | Responsibility |
 |---|---|
 | `router` | Entry point — routes by trigger type |
-| `daily_briefing` | Assembles morning plan from calendar + SM-2 + gap finder |
-| `study_picker` | Handles "I have X min" flow, validates slot availability |
+| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder |
+| `on_demand` | Handles "I have X min" flow, validates slot availability |
 | `done_parser` | Parses and validates pasted session summaries |
 | `calendar_reader` | Read-only GCal fetch |
 | `sm2_engine` | Returns due topics ranked by tier + easiness factor |
 | `gap_finder` | Computes free windows respecting protected blocks |
-| `brief_generator` | Calls Claude API — the only LLM call in the graph |
+| `generate_brief` | Calls Claude API — the only LLM call in the graph |
 | `confirm` | Sends plan to Telegram with inline keyboard; waits for tap |
 | `log_session` | Writes session log, updates SM-2 state |
 | `output` | Final Telegram send + GCal write after confirmation |
@@ -202,9 +202,9 @@ python -m src.agent.graph
 Confirm these study blocks? [Yes, book them] [Edit] [Skip]
 ```
 
-### Duration picker (any unrecognised message)
+### Duration Picker (any unrecognised message)
 
-Tap any message → bot responds with `[30 min] [60 min] [90 min]`
+Tap any message → bot responds with `[30 min] [45 min] [60 min]`
 
 ### Session summary format
 

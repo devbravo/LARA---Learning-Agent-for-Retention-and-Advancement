@@ -1,5 +1,5 @@
 schedule:
-  daily_briefing:
+  daily_planning:
     hour: 7
     minute: 0
     misfire_grace_time: 3600

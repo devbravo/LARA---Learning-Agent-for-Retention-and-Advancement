@@ -5,7 +5,6 @@ A tool touches something outside the graph's own state (calendar, DB, etc.).
 All 5 tools are decorated with @tool for LangGraph/LangChain compatibility.
 """
 
-import os
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -18,7 +17,6 @@ load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
-from src.core.db import get_connection
 from src.integrations import gcal as _gcal
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"

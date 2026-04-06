@@ -102,15 +102,15 @@ async def webhook(
 
     if callback_data is not None:
         cb = callback_data.lower()
-        if cb in ("30 min", "60 min", "90 min"):
+        if cb in ("30 min", "45 min", "60 min"):
             if message_id is not None:
                 with _confirm_lock:
                     if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
                         logger.info("message_id=%s already in-flight or processed — ignoring repeat tap", message_id)
                         return JSONResponse({"ok": True})
                     _in_flight_message_ids.add(message_id)
-            trigger = "study_picker"
-            extra["duration_min"] = int(callback_data.replace(" min", ""))
+            trigger = "on_demand"
+            extra["duration_min"] = int(cb.replace(" min", ""))
             if message_id is not None:
                 extra["message_id"] = message_id
         elif cb in ("yes, book them", "confirm"):
@@ -167,7 +167,7 @@ async def webhook(
         loop = asyncio.get_event_loop()
         loop.run_in_executor(
             None,
-            lambda: send_buttons("How long do you have?", ["30 min", "60 min", "90 min"]),
+            lambda: send_buttons("How long do you have?", ["30 min", "45 min", "60 min"]),
         )
         return JSONResponse({"ok": True})
 
@@ -193,7 +193,7 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
         import os
         logger.info("state.db size: %s bytes", os.path.getsize("db/state.db"))
         logger.info("Graph invocation complete: trigger=%s", trigger)
-        if trigger in ("confirm", "study_picker") and message_id is not None:
+        if trigger in ("confirm", "on_demand") and message_id is not None:
             with _confirm_lock:
                 _in_flight_message_ids.discard(message_id)
                 _confirmed_message_ids.add(message_id)
@@ -204,6 +204,6 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
             "Graph invocation failed [trigger=%s chat_id=%s]: %s",
             trigger, chat_id, e, exc_info=True,
         )
-        if trigger in ("confirm", "study_picker") and message_id is not None:
+        if trigger in ("confirm", "on_demand") and message_id is not None:
             with _confirm_lock:
                 _in_flight_message_ids.discard(message_id)
