@@ -27,6 +27,11 @@ def init_db() -> None:
         except Exception:
             pass  # column already exists
 
+        try:
+            conn.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
+        except Exception:
+            pass
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS topics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

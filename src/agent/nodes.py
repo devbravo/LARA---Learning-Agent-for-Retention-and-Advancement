@@ -408,12 +408,11 @@ def done_parser(state: AgentState) -> AgentState:
             (row["id"],)
         ).fetchone()[0]
 
-    print("LoGGED ALREADY:", already_logged)
     if already_logged:
         return {
             "_parse_ok": False,
             "messages": [
-                f" You already logged {topic_name} today. "
+                f"⚠️ You already logged {topic_name} today. "
                 "If this was a separate session, rename the summary topic slightly to distinguish it."
             ]
         }
@@ -452,7 +451,7 @@ def confirm_rating(state: AgentState) -> AgentState:
             _telegram.send_message(f"⚠️ Could not send rating buttons: {e}")
         except Exception as e:
             pass
-    return {"_awaiting_rating": True}
+    return {}
 
 
 # ---------------------------------------------------------------------------

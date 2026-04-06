@@ -4,9 +4,10 @@ LangGraph graph definition for the Learning Manager agent.
 Flow:
   START → router → (conditional) → daily_planning | on_demand | done_parser | output
   daily_planning  → confirm → END
-  on_demand    → generate_brief → confirm → END
-  done_parser     → (conditional) → log_session | output
-  log_session     → output → END
+  on_demand       → generate_brief → confirm → END
+  done_parser     → (conditional) → confirm_rating | output
+  confirm_rating  → END  (waits for rating tap via webhook)
+  rate trigger    → log_session → output → END
   output          → END
 
 Checkpointer: SqliteSaver backed by db/state.db.
