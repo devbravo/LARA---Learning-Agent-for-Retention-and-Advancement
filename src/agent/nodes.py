@@ -351,7 +351,7 @@ _SUMMARY_PATTERN = re.compile(
 )
 
 _EXPECTED_FORMAT = (
-    "📋 Session summary\n"
+    "Session summary\n"
     "Topic: &lt;topic name&gt;\n"
     "Duration: &lt;N&gt; min\n"
     "Weak areas: &lt;comma-separated&gt;\n"
