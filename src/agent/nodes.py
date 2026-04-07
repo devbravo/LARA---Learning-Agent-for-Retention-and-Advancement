@@ -13,7 +13,6 @@ from typing import TypedDict
 
 import logging
 import sqlite3
-from pathlib import Path as _Path
 from src.core import sm2 as _sm2_mod
 
 import yaml
@@ -23,6 +22,7 @@ from src.core import sm2 as _sm2
 from src.integrations import claude_api as _claude
 from src.integrations import gcal as _gcal
 from src.integrations import telegram_client as _telegram
+from src.core.db import get_connection
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
 _TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
@@ -390,9 +390,6 @@ def done_parser(state: AgentState) -> AgentState:
     suggestions = match.group(4).strip()
 
     # Validate topic exists
-    due_topics = _sm2.get_due_topics()
-    # Also query all topics, not just due ones, to match the name
-    from src.core.db import get_connection
     with get_connection() as conn:
         row = conn.execute(
             "SELECT id, name FROM topics WHERE name = ? COLLATE NOCASE",
@@ -400,13 +397,12 @@ def done_parser(state: AgentState) -> AgentState:
         ).fetchone()
 
     if row is None:
-        from src.core.db import get_connection
+        # from src.core.db import get_connection
         with get_connection() as conn:
             all_topics = conn.execute(
                 "SELECT name FROM topics WHERE status = 'active' ORDER BY name"
             ).fetchall()
 
-        import re
         words = [w for w in re.split(r'\W+', topic_name.lower()) if len(w) > 2]
 
         matches = [
@@ -465,7 +461,7 @@ def done_parser(state: AgentState) -> AgentState:
 
 
 def route_from_done_parser(state: AgentState) -> str:
-    """Conditional edge: if parse succeeded → log_session, else → output (error message)."""
+    """Conditional edge: parse success → confirm_rating, parse failure → output."""
     logger.info("route_from_done_parser: parse_ok=%s", state.get("parse_ok"))
     if state.get("parse_ok"):
         return "confirm_rating"
@@ -489,7 +485,7 @@ def confirm_rating(state: AgentState) -> AgentState:
         logger.info("confirm_rating: sending buttons for %s", topic_name)
         _telegram.send_buttons(text, ["😕 Hard", "😐 OK", "😊 Easy"])
     except Exception as e:
-        logger.error("confirm_rating failed: %s", e)
+        logger.error("confirm_rating failed: %s", e, exc_info=True)
         try:
             _telegram.send_message(f"⚠️ Could not send rating buttons: {e}")
         except Exception:
@@ -508,7 +504,6 @@ def generate_brief(state: AgentState) -> AgentState:
         duration_min = state.get("duration_min") or 30
 
         # Build context from weak_areas if available
-        from src.core.db import get_connection
         context = "General review"
         with get_connection() as conn:
             row = conn.execute(
@@ -581,7 +576,7 @@ def log_session(state: AgentState) -> AgentState:
         if not topic_id:
             return {"messages": ["⚠️ Cannot log session: missing topic_id."]}
 
-        db_path = str(_Path(__file__).parents[2] / "db" / "learning.db")
+        db_path = str(Path(__file__).parents[2] / "db" / "learning.db")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         try:
