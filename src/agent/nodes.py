@@ -53,6 +53,7 @@ class AgentState(TypedDict, total=False):
     has_study_plan: bool                # False → skip confirm, go straight to output
     session_summary: dict | None
     quality_score: int | None
+    last_logged_topic_id: int | None
     messages: list[str]        # outbound Telegram messages
     # Internal routing flag set by done_parser
     parse_ok: bool
@@ -630,36 +631,75 @@ def log_session(state: AgentState) -> AgentState:
 # Node: output
 # ---------------------------------------------------------------------------
 
+def _get_unlogged_slots(proposed_slots: list[dict]) -> list[dict]:
+    """Return slots from proposed_slots that have no session row logged today."""
+    if not proposed_slots:
+        return []
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT t.name
+            FROM sessions s
+            JOIN topics t ON t.id = s.topic_id
+            WHERE date(s.studied_at) = date('now')
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    logged_names = {row["name"] for row in rows}
+    return [s for s in proposed_slots if s["topic"] not in logged_names]
+
+
 def output(state: AgentState) -> AgentState:
     """
     Sends final message via Telegram.
     If a confirmed slot exists, books it on Google Calendar.
+    After a rate trigger, checks for unlogged sessions and prompts for next.
     """
     trigger = state.get("trigger", "")
+
+    # --- After rating: check for remaining unlogged sessions ---
+    if trigger == "rate":
+        proposed_slots = state.get("proposed_slots")
+        unlogged = _get_unlogged_slots(proposed_slots or [])
+        if unlogged:
+            next_topic = unlogged[0]["topic"]
+            try:
+                _telegram.send_message(
+                    f"✅ Session logged.\n\n"
+                    f"You still have a planned {next_topic} study block for today that hasn't been logged yet. "
+                )
+            except Exception as e:
+                print(f"[output] Telegram send failed: {e}")
+        else:
+            try:
+                _telegram.send_message("✅ All sessions logged for today. Great work! 💪")
+            except Exception as e:
+                print(f"[output] Telegram send failed: {e}")
+        return {}
+
+    # --- Send final message ---
     if trigger != "confirm":
         try:
             messages = state.get("messages") or []
             text = messages[-1] if messages else "Done."
             _telegram.send_message(text)
-
         except Exception as e:
             print(f"[output] Telegram send failed: {e}")
 
-    # Book calendar events on confirmation
-    trigger = state.get("trigger", "")
-
+    # --- Book calendar events on confirmation ---
     if trigger == "confirm":
         today = date.today()
         config = _load_config()
         tz = pytz.timezone(config["timezone"])
-        offset = datetime.now(tz).strftime("%z")          # e.g. "-0300"
-        offset_str = f"{offset[:3]}:{offset[3:]}"         # e.g. "-03:00"
+        offset = datetime.now(tz).strftime("%z")
+        offset_str = f"{offset[:3]}:{offset[3:]}"
 
         booked: list[str] = []
         slots = state.get("proposed_slots")
 
         if slots:
-            # Daily briefing flow — book every proposed slot
             for slot in slots:
                 try:
                     t_start = _fmt_time(slot["start"])
@@ -673,12 +713,21 @@ def output(state: AgentState) -> AgentState:
                 except Exception as e:
                     print(f"[output] Calendar write failed for {slot.get('topic')}: {e}")
         else:
-            # on_demand flow — no GCal write, session is happening now
-            topic = state.get("proposed_topic")
-            if topic:
-                booked.append(topic)
+            try:
+                topic = state.get("proposed_topic")
+                slot = state.get("proposed_slot")
+                if topic and slot:
+                    t_start = _fmt_time(slot["start"])
+                    t_end = _fmt_time(slot["end"])
+                    _gcal.write_event(
+                        topic=topic,
+                        start=f"{today.isoformat()}T{t_start}:00{offset_str}",
+                        end=f"{today.isoformat()}T{t_end}:00{offset_str}",
+                    )
+                    booked.append(topic)
+            except Exception as e:
+                print(f"[output] Calendar write failed: {e}")
 
-        # Remove inline keyboard from original confirm message
         chat_id = state.get("chat_id")
         message_id = state.get("message_id")
         if chat_id and message_id:
@@ -687,21 +736,10 @@ def output(state: AgentState) -> AgentState:
             except Exception as e:
                 print(f"[output] remove_buttons failed: {e}")
 
-        # Send booking confirmation
         if booked:
+            summary = "\n".join(f"  • {t}" for t in booked)
             try:
-                if slots:
-                    # Daily briefing flow — summarise all booked topics
-                    topic_list = ", ".join(booked)
-                    _telegram.send_message(
-                        f"✅ Booked {len(booked)} study block(s): {topic_list}. "
-                        "Paste a session summary when you're done."
-                    )
-                else:
-                    # On-demand flow — single topic, happening now
-                    _telegram.send_message(
-                        f"💪 Go study {booked[0]}! Paste a session summary when you're done."
-                    )
+                _telegram.send_message(f"✅ Booked {len(booked)} study session(s):\n{summary}")
             except Exception as e:
                 print(f"[output] Confirmation send failed: {e}")
 
