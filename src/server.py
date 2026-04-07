@@ -157,12 +157,14 @@ async def webhook(
             return JSONResponse({"ok": True})
 
     elif message_text:
-        if message_text.startswith("Session summary"):
+        if "session summary" in message_text.lower().splitlines()[0]:
             trigger = "done"
             extra["messages"] = [message_text]
+        elif message_text.strip().lower() == "/study":
+            trigger = "on_demand"
         else:
-            # Unrecognised text — show duration menu
-            trigger = "menu"
+            # Unrecognized — ignore silently
+            return JSONResponse({"ok": True})
 
     if trigger is None:
         return JSONResponse({"ok": True})

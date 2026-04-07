@@ -11,6 +11,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import TypedDict
 
+import logging
+import sqlite3
+from src.core import sm2 as _sm2_mod
+
 import yaml
 
 from src.core import gap_finder as _gap_finder
@@ -18,10 +22,11 @@ from src.core import sm2 as _sm2
 from src.integrations import claude_api as _claude
 from src.integrations import gcal as _gcal
 from src.integrations import telegram_client as _telegram
+from src.core.db import get_connection
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
 _TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
-
+logger = logging.getLogger(__name__)
 
 def _load_config() -> dict:
     with open(_CONFIG_PATH) as f:
@@ -50,7 +55,7 @@ class AgentState(TypedDict, total=False):
     quality_score: int | None
     messages: list[str]        # outbound Telegram messages
     # Internal routing flag set by done_parser
-    _parse_ok: bool
+    parse_ok: bool
     _awaiting_rating: bool
 
 # ---------------------------------------------------------------------------
@@ -108,6 +113,8 @@ def router(state: AgentState) -> AgentState:
     trigger = state.get("trigger", "")
     if not trigger:
         return {"messages": ["⚠️ No trigger set — cannot route."]}
+    if trigger == "done":
+        return {"parse_ok": False}  # reset before done_parser runs
     return {}
 
 
@@ -364,12 +371,13 @@ def done_parser(state: AgentState) -> AgentState:
     Parses pasted session summary from messages[0].
     Sets session_summary. Fails loudly if malformed.
     """
+    logger.info("done_parser: entered")
     raw = (state.get("messages") or [""])[0]
     match = _SUMMARY_PATTERN.search(raw)
 
     if not match:
         return {
-            "_parse_ok": False,
+            "parse_ok": False,
             "messages": [
                 "❌ Could not parse session summary. Please use this exact format:\n\n"
                 f"<pre>{_EXPECTED_FORMAT}</pre>"
@@ -382,9 +390,6 @@ def done_parser(state: AgentState) -> AgentState:
     suggestions = match.group(4).strip()
 
     # Validate topic exists
-    due_topics = _sm2.get_due_topics()
-    # Also query all topics, not just due ones, to match the name
-    from src.core.db import get_connection
     with get_connection() as conn:
         row = conn.execute(
             "SELECT id, name FROM topics WHERE name = ? COLLATE NOCASE",
@@ -392,13 +397,31 @@ def done_parser(state: AgentState) -> AgentState:
         ).fetchone()
 
     if row is None:
-        known = [t["name"] for t in due_topics]
+        # from src.core.db import get_connection
+        with get_connection() as conn:
+            all_topics = conn.execute(
+                "SELECT name FROM topics WHERE status = 'active' ORDER BY name"
+            ).fetchall()
+
+        words = [w for w in re.split(r'\W+', topic_name.lower()) if len(w) > 2]
+
+        matches = [
+            r["name"] for r in all_topics
+            if any(word in r["name"].lower() for word in words)
+        ][:5]
+
+        if matches:
+            suggestion_text = (
+                    "Did you mean one of these?\n" +
+                    "\n".join(f"  • {n}" for n in matches) +
+                    "\n\nPaste your summary again with the correct topic name."
+            )
+        else:
+            suggestion_text = "No similar topics found. Check your topic name and try again."
+
         return {
-            "_parse_ok": False,
-            "messages": [
-                f"❌ Topic '{topic_name}' not found in the database.\n"
-                f"Known topics: {', '.join(known) if known else 'none'}"
-            ],
+            "parse_ok": False,
+            "messages": [f"❌ Topic '{topic_name}' not found.\n{suggestion_text}"],
         }
 
     # Guard: already logged today
@@ -409,16 +432,23 @@ def done_parser(state: AgentState) -> AgentState:
         ).fetchone()[0]
 
     if already_logged:
+        logger.info("done_parser: already_logged=True, returning parse_ok=True with warning")
         return {
-            "_parse_ok": False,
+            "parse_ok": True,
+            "session_summary": {
+                "topic_id": row["id"],
+                "topic_name": row["name"],
+                "duration_min": duration_min,
+                "weak_areas": weak_areas,
+                "suggestions": suggestions,
+            },
             "messages": [
-                f"⚠️ You already logged {topic_name} today. "
-                "If this was a separate session, rename the summary topic slightly to distinguish it."
-            ]
+                f"⚠️ Already logged {topic_name} today. Tap your rating below to log again."
+            ],
         }
 
     return {
-        "_parse_ok": True,
+        "parse_ok": True,
         "session_summary": {
             "topic_id": row["id"],
             "topic_name": row["name"],
@@ -431,8 +461,9 @@ def done_parser(state: AgentState) -> AgentState:
 
 
 def route_from_done_parser(state: AgentState) -> str:
-    """Conditional edge: if parse succeeded → log_session, else → output (error message)."""
-    if state.get("_parse_ok"):
+    """Conditional edge: parse success → confirm_rating, parse failure → output."""
+    logger.info("route_from_done_parser: parse_ok=%s", state.get("parse_ok"))
+    if state.get("parse_ok"):
         return "confirm_rating"
     return "output"
 
@@ -442,14 +473,22 @@ def confirm_rating(state: AgentState) -> AgentState:
     try:
         summary = state.get("session_summary") or {}
         topic_name = summary.get("topic_name", "your session")
-        _telegram.send_buttons(
-            f"How did {topic_name} go?",
-            ["😕 Hard", "😐 OK", "😊 Easy"],
-        )
+        messages = state.get("messages") or []
+
+        # Check if there's a warning from already_logged guard
+        last_message = messages[-1] if messages else ""
+        if last_message.startswith("⚠️"):
+            text = last_message
+        else:
+            text = f"How did {topic_name} go?"
+
+        logger.info("confirm_rating: sending buttons for %s", topic_name)
+        _telegram.send_buttons(text, ["😕 Hard", "😐 OK", "😊 Easy"])
     except Exception as e:
+        logger.error("confirm_rating failed: %s", e, exc_info=True)
         try:
             _telegram.send_message(f"⚠️ Could not send rating buttons: {e}")
-        except Exception as e:
+        except Exception:
             pass
     return {}
 
@@ -465,7 +504,6 @@ def generate_brief(state: AgentState) -> AgentState:
         duration_min = state.get("duration_min") or 30
 
         # Build context from weak_areas if available
-        from src.core.db import get_connection
         context = "General review"
         with get_connection() as conn:
             row = conn.execute(
@@ -538,21 +576,34 @@ def log_session(state: AgentState) -> AgentState:
         if not topic_id:
             return {"messages": ["⚠️ Cannot log session: missing topic_id."]}
 
-        # Import log_study_session tool's underlying logic directly
-        import sqlite3
-        from pathlib import Path as _Path
-        from src.core import sm2 as _sm2_mod
-
-        db_path = str(_Path(__file__).parents[2] / "db" / "learning.db")
+        db_path = str(Path(__file__).parents[2] / "db" / "learning.db")
         conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
         try:
-            conn.execute(
-                """
-                INSERT INTO sessions (topic_id, duration_min, quality_score, weak_areas, suggestions)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (topic_id, duration_min, quality, weak_areas or None, suggestions or None),
-            )
+            # Upsert: update existing session today or insert new one
+            existing = conn.execute(
+                "SELECT id FROM sessions WHERE topic_id = ? AND DATE(studied_at) = DATE('now')",
+                (topic_id,)
+            ).fetchone()
+
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET quality_score = ?, duration_min = ?, weak_areas = ?, suggestions = ?
+                    WHERE id = ?
+                    """,
+                    (quality, duration_min, weak_areas or None, suggestions or None, existing["id"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO sessions (topic_id, duration_min, quality_score, weak_areas, suggestions)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (topic_id, duration_min, quality, weak_areas or None, suggestions or None),
+                )
+
             if weak_areas:
                 conn.execute(
                     "UPDATE topics SET weak_areas = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
