@@ -130,12 +130,17 @@ async def webhook(
             if message_id is not None:
                 extra["message_id"] = message_id
         elif cb == "skip":
-            if message_id is not None:
-                with _confirm_lock:
-                    if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
-                        return JSONResponse({"ok": True})
-                    _confirmed_message_ids.add(message_id)
-            trigger = "skip"
+            state = _graph.get_state(chat_id)
+            if state.get("awaiting_weak_areas"):
+                trigger = "weak_areas"
+                extra["messages"] = []
+            else:
+                if message_id is not None:
+                    with _confirm_lock:
+                        if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
+                            return JSONResponse({"ok": True})
+                        _confirmed_message_ids.add(message_id)
+                trigger = "skip"
         elif cb in ("😕 hard", "😐 ok", "😊 easy"):
             if message_id is not None:
                 with _confirm_lock:
@@ -157,14 +162,21 @@ async def webhook(
             return JSONResponse({"ok": True})
 
     elif message_text:
-        if "session summary" in message_text.lower().splitlines()[0]:
+        logger.info("Incoming message_text: %r", message_text)
+        if message_text.strip().lower() in ("/done", "done"):
             trigger = "done"
-            extra["messages"] = [message_text]
         elif message_text.strip().lower() == "/study":
             trigger = "on_demand"
+        elif message_text.strip().lower() == '/briefing':
+            trigger = "daily"
         else:
-            # Unrecognized — ignore silently
-            return JSONResponse({"ok": True})
+            state = _graph.get_state(chat_id)
+            if state.get("awaiting_weak_areas"):
+                trigger = "weak_areas"
+                extra["messages"] = [message_text]
+            else:
+                # Unrecognized — ignore silently
+                return JSONResponse({"ok": True})
 
     if trigger is None:
         return JSONResponse({"ok": True})

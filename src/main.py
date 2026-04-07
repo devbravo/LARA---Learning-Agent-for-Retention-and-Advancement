@@ -1,5 +1,5 @@
 """
-Entry point for the Kairos agent.
+Entry point for the LARA agent.
 
 Starts FastAPI (via uvicorn) and APScheduler in the same async process.
 """
@@ -46,7 +46,7 @@ async def main() -> None:
     )
     server = uvicorn.Server(config)
 
-    logger.info("Starting Kairos on %s:%s", _HOST, _PORT)
+    logger.info("Starting LARA on %s:%s", _HOST, _PORT)
 
     try:
         await server.serve()

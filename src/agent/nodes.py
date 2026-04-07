@@ -43,7 +43,7 @@ def _load_topics() -> dict:
 # ---------------------------------------------------------------------------
 
 class AgentState(TypedDict, total=False):
-    trigger: str               # "daily" | "on_demand" | "done" | "confirm"
+    trigger: str               # "daily" | "on_demand" | "done" | "confirm" | "rate" | "weak_areas"
     chat_id: int
     message_id: int | None              # Telegram message_id of the confirm keyboard
     duration_min: int | None
@@ -55,9 +55,9 @@ class AgentState(TypedDict, total=False):
     quality_score: int | None
     last_logged_topic_id: int | None
     messages: list[str]        # outbound Telegram messages
-    # Internal routing flag set by done_parser
-    parse_ok: bool
-    _awaiting_rating: bool
+    awaiting_weak_areas: bool
+    current_topic_id: int | None
+    current_topic_name: str | None
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -114,8 +114,6 @@ def router(state: AgentState) -> AgentState:
     trigger = state.get("trigger", "")
     if not trigger:
         return {"messages": ["⚠️ No trigger set — cannot route."]}
-    if trigger == "done":
-        return {"parse_ok": False}  # reset before done_parser runs
     return {}
 
 
@@ -127,7 +125,8 @@ def route_from_router(state: AgentState) -> str:
         "on_demand": "on_demand",
         "done": "done_parser",
         "confirm": "output",
-        "rate": "log_session"
+        "rate": "log_session",
+        "weak_areas": "log_weak_areas",
     }
     return mapping.get(trigger, "output")
 
@@ -349,149 +348,58 @@ def on_demand(state: AgentState) -> AgentState:
 # Node: done_parser
 # ---------------------------------------------------------------------------
 
-_SUMMARY_PATTERN = re.compile(
-    r"Session summary\s*\n"
-    r"Topic:\s*(.+)\n"
-    r"Duration:\s*(\d+)\s*min\s*\n"
-    r"Weak areas:\s*(.+)\n"
-    r"Suggestions:\s*(.+)",
-    re.IGNORECASE | re.DOTALL,
-)
-
-_EXPECTED_FORMAT = (
-    "Session summary\n"
-    "Topic: &lt;topic name&gt;\n"
-    "Duration: &lt;N&gt; min\n"
-    "Weak areas: &lt;comma-separated&gt;\n"
-    "Suggestions: &lt;free text&gt;"
-)
-
-
 def done_parser(state: AgentState) -> AgentState:
     """
-    Parses pasted session summary from messages[0].
-    Sets session_summary. Fails loudly if malformed.
+    Find the first unlogged slot from proposed_slots and send rating buttons.
+    Sets current_topic_id and current_topic_name in state.
     """
     logger.info("done_parser: entered")
-    raw = (state.get("messages") or [""])[0]
-    match = _SUMMARY_PATTERN.search(raw)
 
-    if not match:
-        return {
-            "parse_ok": False,
-            "messages": [
-                "❌ Could not parse session summary. Please use this exact format:\n\n"
-                f"<pre>{_EXPECTED_FORMAT}</pre>"
-            ],
-        }
-
-    topic_name = match.group(1).strip()
-    duration_min = int(match.group(2).strip())
-    weak_areas = match.group(3).strip()
-    suggestions = match.group(4).strip()
-
-    # Validate topic exists
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT id, name FROM topics WHERE name = ? COLLATE NOCASE",
-            (topic_name,)
-        ).fetchone()
-
-    if row is None:
-        # from src.core.db import get_connection
-        with get_connection() as conn:
-            all_topics = conn.execute(
-                "SELECT name FROM topics WHERE status = 'active' ORDER BY name"
-            ).fetchall()
-
-        words = [w for w in re.split(r'\W+', topic_name.lower()) if len(w) > 2]
-
-        matches = [
-            r["name"] for r in all_topics
-            if any(word in r["name"].lower() for word in words)
-        ][:5]
-
-        if matches:
-            suggestion_text = (
-                    "Did you mean one of these?\n" +
-                    "\n".join(f"  • {n}" for n in matches) +
-                    "\n\nPaste your summary again with the correct topic name."
-            )
-        else:
-            suggestion_text = "No similar topics found. Check your topic name and try again."
-
-        return {
-            "parse_ok": False,
-            "messages": [f"❌ Topic '{topic_name}' not found.\n{suggestion_text}"],
-        }
-
-    # Guard: already logged today
-    with get_connection() as conn:
-        already_logged = conn.execute(
-            "SELECT COUNT(*) FROM sessions WHERE topic_id = ? AND DATE(studied_at) = DATE('now')",
-            (row["id"],)
-        ).fetchone()[0]
-
-    if already_logged:
-        logger.info("done_parser: already_logged=True, returning parse_ok=True with warning")
-        return {
-            "parse_ok": True,
-            "session_summary": {
-                "topic_id": row["id"],
-                "topic_name": row["name"],
-                "duration_min": duration_min,
-                "weak_areas": weak_areas,
-                "suggestions": suggestions,
-            },
-            "messages": [
-                f"⚠️ Already logged {topic_name} today. Tap your rating below to log again."
-            ],
-        }
-
-    return {
-        "parse_ok": True,
-        "session_summary": {
-            "topic_id": row["id"],
-            "topic_name": row["name"],
-            "duration_min": duration_min,
-            "weak_areas": weak_areas,
-            "suggestions": suggestions,
-        },
-        "messages": state.get("messages", []),
-    }
-
-
-def route_from_done_parser(state: AgentState) -> str:
-    """Conditional edge: parse success → confirm_rating, parse failure → output."""
-    logger.info("route_from_done_parser: parse_ok=%s", state.get("parse_ok"))
-    if state.get("parse_ok"):
-        return "confirm_rating"
-    return "output"
-
-
-def confirm_rating(state: AgentState) -> AgentState:
-    """Sends rating buttons after a successful done_parser parse."""
     try:
-        summary = state.get("session_summary") or {}
-        topic_name = summary.get("topic_name", "your session")
-        messages = state.get("messages") or []
+        proposed_slots = state.get("proposed_slots") or []
+        if not proposed_slots:
+            _telegram.send_message("No study sessions were planned today.")
+            return {}
 
-        # Check if there's a warning from already_logged guard
-        last_message = messages[-1] if messages else ""
-        if last_message.startswith("⚠️"):
-            text = last_message
-        else:
-            text = f"How did {topic_name} go?"
+        # Find topics already logged today
+        with get_connection() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT t.name FROM sessions s
+                   JOIN topics t ON t.id = s.topic_id
+                   WHERE date(s.studied_at) = date('now')"""
+            ).fetchall()
+        logged_names = {row["name"] for row in rows}
 
-        logger.info("confirm_rating: sending buttons for %s", topic_name)
-        _telegram.send_buttons(text, ["😕 Hard", "😐 OK", "😊 Easy"])
+        unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+        if not unlogged:
+            _telegram.send_message("All sessions already logged for today.")
+            return {}
+
+        slot = unlogged[0]
+        topic_name = slot["topic"]
+
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM topics WHERE name = ? COLLATE NOCASE", (topic_name,)
+            ).fetchone()
+
+        if row is None:
+            _telegram.send_message(f"⚠️ Topic '{topic_name}' not found in database.")
+            return {}
+
+        logger.info("done_parser: sending rating buttons for %s", topic_name)
+        _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+        return {
+            "current_topic_id": row["id"],
+            "current_topic_name": topic_name,
+        }
     except Exception as e:
-        logger.error("confirm_rating failed: %s", e, exc_info=True)
+        logger.error("done_parser failed: %s", e, exc_info=True)
         try:
-            _telegram.send_message(f"⚠️ Could not send rating buttons: {e}")
+            _telegram.send_message(f"⚠️ Done flow failed: {e}")
         except Exception:
             pass
-    return {}
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -564,24 +472,28 @@ def confirm(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def log_session(state: AgentState) -> AgentState:
-    """Logs session to DB and updates SM-2 state."""
+    """Logs session row with quality_score and prompts for weak areas."""
     try:
-        summary = state.get("session_summary") or {}
+        topic_id = state.get("current_topic_id")
+        topic_name = state.get("current_topic_name") or "topic"
         quality = state.get("quality_score") or 3
 
-        topic_id = summary.get("topic_id")
-        duration_min = summary.get("duration_min", 0)
-        weak_areas = summary.get("weak_areas", "")
-        suggestions = summary.get("suggestions", "")
-
         if not topic_id:
-            return {"messages": ["⚠️ Cannot log session: missing topic_id."]}
+            _telegram.send_message("⚠️ Cannot log session: missing topic.")
+            return {}
+
+        # Find duration from proposed_slots for this topic
+        proposed_slots = state.get("proposed_slots") or []
+        duration_min = 0
+        for slot in proposed_slots:
+            if slot["topic"] == topic_name:
+                duration_min = slot["duration_min"]
+                break
 
         db_path = str(Path(__file__).parents[2] / "db" / "learning.db")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         try:
-            # Upsert: update existing session today or insert new one
             existing = conn.execute(
                 "SELECT id FROM sessions WHERE topic_id = ? AND DATE(studied_at) = DATE('now')",
                 (topic_id,)
@@ -589,26 +501,13 @@ def log_session(state: AgentState) -> AgentState:
 
             if existing:
                 conn.execute(
-                    """
-                    UPDATE sessions
-                    SET quality_score = ?, duration_min = ?, weak_areas = ?, suggestions = ?
-                    WHERE id = ?
-                    """,
-                    (quality, duration_min, weak_areas or None, suggestions or None, existing["id"]),
+                    "UPDATE sessions SET quality_score = ?, duration_min = ? WHERE id = ?",
+                    (quality, duration_min, existing["id"]),
                 )
             else:
                 conn.execute(
-                    """
-                    INSERT INTO sessions (topic_id, duration_min, quality_score, weak_areas, suggestions)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (topic_id, duration_min, quality, weak_areas or None, suggestions or None),
-                )
-
-            if weak_areas:
-                conn.execute(
-                    "UPDATE topics SET weak_areas = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (weak_areas, topic_id),
+                    "INSERT INTO sessions (topic_id, duration_min, quality_score) VALUES (?, ?, ?)",
+                    (topic_id, duration_min, quality),
                 )
             conn.commit()
         finally:
@@ -616,77 +515,118 @@ def log_session(state: AgentState) -> AgentState:
 
         _sm2_mod.update_topic_after_session(db_path=db_path, topic_id=topic_id, quality=quality)
 
-        return {
-            "messages": [
-                f"✅ Session logged for {summary.get('topic_name', 'topic')} "
-                f"({duration_min} min). SM-2 updated."
-            ]
-        }
+        _telegram.send_buttons(
+            "Any weak areas to note? Reply with text or tap Skip.",
+            ["Skip"]
+        )
+        return {"awaiting_weak_areas": True}
 
     except Exception as e:
         return {"messages": [f"⚠️ Failed to log session: {e}"]}
 
 
 # ---------------------------------------------------------------------------
-# Node: output
+# Node: log_weak_areas
 # ---------------------------------------------------------------------------
 
-def _get_unlogged_slots(proposed_slots: list[dict]) -> list[dict]:
-    """Return slots from proposed_slots that have no session row logged today."""
-    if not proposed_slots:
-        return []
-    conn = get_connection()
+def log_weak_areas(state: AgentState) -> AgentState:
+    """Saves weak areas (or marks resolved on Skip), then prompts for next unlogged slot."""
     try:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT t.name
-            FROM sessions s
-            JOIN topics t ON t.id = s.topic_id
-            WHERE date(s.studied_at) = date('now')
-            """
-        ).fetchall()
-    finally:
-        conn.close()
-    logged_names = {row["name"] for row in rows}
-    return [s for s in proposed_slots if s["topic"] not in logged_names]
+        messages = state.get("messages") or []
+        text = messages[0].strip() if messages else ""
+        topic_id = state.get("current_topic_id")
+        topic_name = state.get("current_topic_name") or "topic"
 
+        if not topic_id:
+            _telegram.send_message("⚠️ Cannot log weak areas: missing topic.")
+            return {"awaiting_weak_areas": False}
+
+        with get_connection() as conn:
+            session_row = conn.execute(
+                "SELECT id FROM sessions WHERE topic_id = ? AND DATE(studied_at) = DATE('now')",
+                (topic_id,)
+            ).fetchone()
+
+        if text:
+            with get_connection() as conn:
+                if session_row:
+                    conn.execute(
+                        "UPDATE sessions SET weak_areas = ? WHERE id = ?",
+                        (text, session_row["id"]),
+                    )
+                conn.execute(
+                    "UPDATE topics SET weak_areas = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (text, topic_id),
+
+                )
+        else:
+            # Skip — mark existing weak areas as resolved
+            with get_connection() as conn:
+                conn.execute(
+                    "UPDATE topics SET weak_areas = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (topic_id,),
+                )
+
+        # Check for next unlogged slot
+        proposed_slots = state.get("proposed_slots") or []
+        with get_connection() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT t.name FROM sessions s
+                   JOIN topics t ON t.id = s.topic_id
+                   WHERE date(s.studied_at) = date('now')"""
+            ).fetchall()
+        logged_names = {row["name"] for row in rows}
+
+        unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+
+        if unlogged:
+            next_topic_name = unlogged[0]["topic"]
+            with get_connection() as conn:
+                row = conn.execute(
+                    "SELECT id FROM topics WHERE name = ? COLLATE NOCASE", (next_topic_name,)
+                ).fetchone()
+
+            if row:
+                _telegram.send_buttons(
+                    f"How did {next_topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"]
+                )
+                return {
+                    "awaiting_weak_areas": False,
+                    "current_topic_id": row["id"],
+                    "current_topic_name": next_topic_name,
+                }
+
+        _telegram.send_message("All sessions logged for today. Great work! 💪")
+        return {"awaiting_weak_areas": False}
+
+    except Exception as e:
+        logger.error("log_weak_areas failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Failed to log weak areas: {e}"], "awaiting_weak_areas": False}
+
+
+# ---------------------------------------------------------------------------
+# Node: output
+# ---------------------------------------------------------------------------
 
 def output(state: AgentState) -> AgentState:
     """
     Sends final message via Telegram.
     If a confirmed slot exists, books it on Google Calendar.
-    After a rate trigger, checks for unlogged sessions and prompts for next.
     """
     trigger = state.get("trigger", "")
 
-    # --- After rating: check for remaining unlogged sessions ---
-    if trigger == "rate":
-        proposed_slots = state.get("proposed_slots")
-        unlogged = _get_unlogged_slots(proposed_slots or [])
-        if unlogged:
-            next_topic = unlogged[0]["topic"]
+    if trigger in ("rate", "weak_areas", "done"):
+        return {}
+
+    # --- Send final message for non-confirm triggers ---
+    if trigger != "confirm":
+        messages = state.get("messages") or []
+        if messages:
             try:
-                _telegram.send_message(
-                    f"✅ Session logged.\n\n"
-                    f"You still have a planned {next_topic} study block for today that hasn't been logged yet. "
-                )
-            except Exception as e:
-                print(f"[output] Telegram send failed: {e}")
-        else:
-            try:
-                _telegram.send_message("✅ All sessions logged for today. Great work! 💪")
+                _telegram.send_message(messages[-1])
             except Exception as e:
                 print(f"[output] Telegram send failed: {e}")
         return {}
-
-    # --- Send final message ---
-    if trigger != "confirm":
-        try:
-            messages = state.get("messages") or []
-            text = messages[-1] if messages else "Done."
-            _telegram.send_message(text)
-        except Exception as e:
-            print(f"[output] Telegram send failed: {e}")
 
     # --- Book calendar events on confirmation ---
     if trigger == "confirm":
