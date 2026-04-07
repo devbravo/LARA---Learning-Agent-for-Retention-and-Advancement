@@ -565,8 +565,6 @@ def confirm(state: AgentState) -> AgentState:
 
 def log_session(state: AgentState) -> AgentState:
     """Logs session to DB and updates SM-2 state."""
-    print("[DEBUG] proposed_slots from state:", state.get("proposed_slots"))
-    print("[DEBUG] proposed_topic from state:", state.get("proposed_topic"))
     try:
         summary = state.get("session_summary") or {}
         quality = state.get("quality_score") or 3
@@ -627,7 +625,6 @@ def log_session(state: AgentState) -> AgentState:
         }
 
     except Exception as e:
-        print(f"[DEBUG] log_session exception: {e}", exc_info=True)
         return {"messages": [f"⚠️ Failed to log session: {e}"]}
 
 
@@ -656,8 +653,6 @@ def _get_unlogged_slots(proposed_slots: list[dict]) -> list[dict]:
     finally:
         conn.close()
     logged_names = {row["name"] for row in rows}
-    print("[DEBUG] logged_names:", logged_names)
-    print("[DEBUG] proposed slot names:", [s["topic"] for s in proposed_slots])
     return [s for s in proposed_slots if s["topic"] not in logged_names]
 
 
