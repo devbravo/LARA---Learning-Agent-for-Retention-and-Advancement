@@ -9,7 +9,7 @@ schedule:
     misfire_grace_time: 300
 
 protected_blocks:
-  - start: "16:00"
+  - start: "15:00"
     end: "19:30"
 
 focus_windows:
