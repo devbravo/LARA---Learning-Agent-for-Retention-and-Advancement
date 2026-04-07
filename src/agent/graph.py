@@ -82,7 +82,6 @@ def build_graph(checkpointer=None):
             "on_demand": "on_demand",
             "done_parser": "done_parser",
             "output": "output",
-            "rate": "log_session",
             "log_session": "log_session",
         },
     )

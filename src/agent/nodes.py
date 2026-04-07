@@ -617,7 +617,6 @@ def log_session(state: AgentState) -> AgentState:
         _sm2_mod.update_topic_after_session(db_path=db_path, topic_id=topic_id, quality=quality)
 
         return {
-            "last_logged_topic_id": topic_id,
             "messages": [
                 f"✅ Session logged for {summary.get('topic_name', 'topic')} "
                 f"({duration_min} min). SM-2 updated."
@@ -636,11 +635,7 @@ def _get_unlogged_slots(proposed_slots: list[dict]) -> list[dict]:
     """Return slots from proposed_slots that have no session row logged today."""
     if not proposed_slots:
         return []
-    import sqlite3
-    from pathlib import Path as _Path
-    db_path = str(_Path(__file__).parents[2] / "db" / "learning.db")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = get_connection()
     try:
         rows = conn.execute(
             """
@@ -673,8 +668,7 @@ def output(state: AgentState) -> AgentState:
             try:
                 _telegram.send_message(
                     f"✅ Session logged.\n\n"
-                    f"You also had a {next_topic} session today. "
-                    f"Paste the summary when you're ready."
+                    f"You still have a planned {next_topic} study block for today that hasn't been logged yet. "
                 )
             except Exception as e:
                 print(f"[output] Telegram send failed: {e}")
@@ -686,12 +680,13 @@ def output(state: AgentState) -> AgentState:
         return {}
 
     # --- Send final message ---
-    try:
-        messages = state.get("messages") or []
-        text = messages[-1] if messages else "Done."
-        _telegram.send_message(text)
-    except Exception as e:
-        print(f"[output] Telegram send failed: {e}")
+    if trigger != "confirm":
+        try:
+            messages = state.get("messages") or []
+            text = messages[-1] if messages else "Done."
+            _telegram.send_message(text)
+        except Exception as e:
+            print(f"[output] Telegram send failed: {e}")
 
     # --- Book calendar events on confirmation ---
     if trigger == "confirm":
