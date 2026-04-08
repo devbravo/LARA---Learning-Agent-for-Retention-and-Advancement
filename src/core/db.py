@@ -26,7 +26,6 @@ def init_db() -> None:
             conn.execute("ALTER TABLE topics ADD COLUMN status TEXT DEFAULT 'active'")
         except Exception:
             pass  # column already exists
-
         try:
             conn.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
         except Exception:

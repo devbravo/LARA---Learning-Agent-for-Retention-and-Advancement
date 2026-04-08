@@ -5,9 +5,9 @@ Flow:
   START → router → (conditional) → daily_planning | on_demand | done_parser | output
   daily_planning  → confirm → END
   on_demand       → generate_brief → confirm → END
-  done_parser     → (conditional) → confirm_rating | output
-  confirm_rating  → END  (waits for rating tap via webhook)
-  rate trigger    → log_session → output → END
+  done_parser     → END  (sends rating buttons directly, waits for tap via webhook)
+  rate trigger    → log_session → output → END  (log_session sends weak-areas prompt)
+  weak_areas      → log_weak_areas → output → END
   output          → END
 
 Checkpointer: SqliteSaver backed by db/state.db.
@@ -29,14 +29,13 @@ from src.agent.nodes import (
     generate_brief,
     calendar_reader,
     confirm,
-    confirm_rating,
     daily_planning,
     done_parser,
     gap_finder,
     log_session,
+    log_weak_areas,
     output,
     route_from_daily_planning,
-    route_from_done_parser,
     route_from_router,
     router,
     sm2_engine,
@@ -66,8 +65,8 @@ def build_graph(checkpointer=None):
     builder.add_node("gap_finder", gap_finder)
     builder.add_node("generate_brief", generate_brief)
     builder.add_node("confirm", confirm)
-    builder.add_node("confirm_rating", confirm_rating)
     builder.add_node("log_session", log_session)
+    builder.add_node("log_weak_areas", log_weak_areas)
     builder.add_node("output", output)
 
     # Entry point
@@ -83,6 +82,7 @@ def build_graph(checkpointer=None):
             "done_parser": "done_parser",
             "output": "output",
             "log_session": "log_session",
+            "log_weak_areas": "log_weak_areas",
         },
     )
 
@@ -97,16 +97,9 @@ def build_graph(checkpointer=None):
     builder.add_edge("confirm", END)
 
     # done flow
-    builder.add_conditional_edges(
-        "done_parser",
-        route_from_done_parser,
-        {
-            "confirm_rating": "confirm_rating",
-            "output": "output",
-        },
-    )
-    builder.add_edge("confirm_rating", END)
+    builder.add_edge("done_parser", END)
     builder.add_edge("log_session", "output")
+    builder.add_edge("log_weak_areas", "output")
     builder.add_edge("output", END)
 
     if checkpointer is None:
@@ -119,6 +112,18 @@ def build_graph(checkpointer=None):
 
 # Singleton graph for import by server / scheduler
 graph = build_graph()
+
+
+def get_state(chat_id: int) -> dict:
+    """Read the latest checkpointed state for a given chat_id. Returns {} if none."""
+    try:
+        config = {"configurable": {"thread_id": str(chat_id)}}
+        snapshot = graph.get_state(config)
+        if snapshot and snapshot.values:
+            return snapshot.values
+        return {}
+    except Exception:
+        return {}
 
 
 def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
@@ -139,7 +144,7 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
     # Only include kwargs that are explicitly provided — don't overwrite
     # checkpointed state with None values
     for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot",
-                "session_summary", "quality_score", "messages"):
+                "quality_score", "messages", "current_topic_id", "current_topic_name"):
         if kwargs.get(key) is not None:
             initial_state[key] = kwargs[key]
 

@@ -1,4 +1,4 @@
-# Kairos — CLAUDE.md
+# LARA — CLAUDE.md
 
 Personal Learning Assistant for Diego Sabajo. Tracks study topics via SM-2
 spaced repetition, sends proactive daily plans via Telegram, reads Google
@@ -13,42 +13,72 @@ and books [Study] events on Google Calendar after user confirmation.
 
 | Node | Responsibility |
 |---|---|
-| `router` | Entry point. Reads checkpointed state. Routes by intent. |
-| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder |
-| `on_demand` | Handles "I have X min" flow. Validates slot availability. |
-| `done_parser` | Parses pasted session summary from Telegram |
-| `calendar_reader` | Read-only GCal fetch. Shared by briefing and picker. |
+| `router` | Entry point. Reads checkpointed state. Routes by trigger. |
+| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder. Sets proposed_slots. |
+| `on_demand` | Handles `/study` flow. Picks highest-priority due topic. |
+| `done_parser` | Finds first unlogged slot from proposed_slots. Sends rating buttons. |
+| `log_session` | Logs session row with quality score. Prompts for weak areas. |
+| `log_weak_areas` | Saves weak areas (or clears on Skip). Prompts for next unlogged slot or ends. |
+| `calendar_reader` | Read-only GCal fetch. |
 | `sm2_engine` | Returns due topics ranked by tier + easiness factor. Pure Python. |
 | `gap_finder` | Computes free windows respecting protected blocks. Pure Python. |
-| `generate_brief` | Calls Claude API directly. Only node that uses an LLM. |
+| `generate_brief` | Calls Claude API. Only node that uses an LLM. |
 | `confirm` | Sends plan to Telegram. Awaits button tap. |
-| `log_session` | Writes session log. Updates SM-2 state. Clears conversation state. |
 | `output` | Final Telegram send + GCal write after confirmation. |
-
-## Tools
-
-5 tools total. A tool touches something outside the graph's own state.
-
-| Tool | Used by |
-|---|---|
-| `get_calendar_events` | `calendar_reader` |
-| `find_free_windows` | `gap_finder` |
-| `get_due_topics` | `sm2_engine` |
-| `write_calendar_event` | `output` |
-| `log_study_session` | `log_session` |
-
-**Not tools:** `generate_brief` is called directly inside `generate_brief` node.
-Conversation state is handled by LangGraph's `SqliteSaver` checkpointer — never manually.
 
 ## Triggers
 
 | Trigger | What it starts |
 |---|---|
-| APScheduler 8am daily | `daily_planning` → `confirm` → `output` |
-| APScheduler Sunday 9am | Weekly planning variant of `daily_planning` |
-| Telegram button tap (duration) | `on_demand` → `generate_brief` → `confirm` → `output` |
-| Telegram "done" message | `done_parser` → `log_session` → `output` |
-| Telegram confirmed booking | `output` → `write_calendar_event` |
+| APScheduler daily | `daily_planning` → `confirm` → `output` |
+| APScheduler Sunday | Weekly planning variant of `daily_planning` |
+| `/study` + duration tap | `on_demand` → `generate_brief` → `confirm` |
+| `confirm` tap | `output` → writes GCal events |
+| `/done` | `done_parser` → END (waits for rating tap) |
+| Rating tap (😕 😐 😊) | `log_session` → `output` → END (waits for weak areas reply) |
+| Weak areas reply or Skip | `log_weak_areas` → `output` → END |
+| `/briefing` | `daily_planning` (manual trigger for testing) |
+
+## Graph flow
+
+```
+START → router → daily_planning → confirm → END
+                               └→ output → END (no plan)
+
+               → on_demand → generate_brief → confirm → END
+
+               → done_parser → END (sends rating buttons, waits)
+
+               → log_session → output → END (sends weak areas prompt, waits)
+
+               → log_weak_areas → output → END
+```
+
+---
+
+## Done flow — session logging
+
+Triggered by `/done`. No structured paste required.
+
+1. `/done` → `done_parser` finds first unlogged slot from `proposed_slots`
+2. Sends rating buttons: "How did {topic} go?" `[😕 Hard] [😐 OK] [😊 Easy]`
+3. Rating tap → `log_session` logs session row, updates SM-2, sends weak areas prompt
+4. Text reply → saved to `sessions.weak_areas` + overwrites `topics.weak_areas`
+5. Skip tap → clears `topics.weak_areas` to NULL (historical record in sessions preserved)
+6. If more unlogged slots → repeat from step 2 for next topic
+7. All logged → "All sessions logged for today. Great work! 💪"
+
+| Button | Score | SM-2 effect |
+|---|---|---|
+| 😕 Hard | 2 | Below threshold — interval resets |
+| 😐 OK | 3 | Passes — modest growth |
+| 😊 Easy | 5 | Confident recall — fast growth |
+
+**Weak areas design:**
+- `topics.weak_areas` = operational field, drives brief generation context
+- `sessions.weak_areas` = immutable historical record per session (future dashboard)
+- Cleared on Skip = "no unresolved weak areas for next brief"
+- Overwritten on new text = fresh unresolved issues
 
 ---
 
@@ -66,32 +96,7 @@ if not event.get("creator", {}).get("self", False):
 
 ---
 
-## Session summary format
-
-Diego pastes this into Telegram after an external study session.
-Parse it exactly — validate structure before logging, fail loudly if malformed.
-
-```
-📋 Session summary
-Topic: <topic name matching topics table>
-Duration: <N> min
-Weak areas: <comma-separated>
-Suggestions: <free text>
-```
-
-After parsing, send rating buttons. Only log_session fires after a rating tap.
-
-| Button | Score | SM-2 effect |
-|---|---|---|
-| 😕 Hard | 2 | Below threshold — interval resets |
-| 😐 OK | 3 | Passes — modest growth |
-| 😊 Easy | 5 | Confident recall — fast growth |
-
----
-
 ## Telegram UX
-
-**Duration picker:** inline keyboard `[30 min] [45 min] [60 min]`
 
 **Morning briefing:**
 ```
@@ -100,13 +105,38 @@ After parsing, send rating buttons. Only log_session fires after a rating tap.
 📅 Your day:
   <time> Event name (duration)
 
-🧠 Study windows:
-  <time>–<time> → <topic> (<duration>)
+🧠 Today's study plan:
+  <time>–<time> → <topic> (<duration>min)
 
-Confirm these study blocks? [Yes, book them] [Skip]
+Confirm these study blocks?
+[Yes, book them] [Skip]
 ```
 
-**Never message during:** 15:00–19:30 (hard protected block)
+**On-demand study:** `/study` → `[30 min] [45 min] [60 min]`
+
+**Done flow:** `/done` → rating buttons → weak areas prompt → next topic or done
+
+**Never message during:** protected block defined in config.yaml (default 22:00–23:00)
+
+---
+
+## State fields (AgentState)
+
+| Field | Type | Purpose |
+|---|---|---|
+| `trigger` | str | Routing signal |
+| `chat_id` | int | Telegram chat ID / LangGraph thread_id |
+| `message_id` | int | Telegram message_id for button removal |
+| `duration_min` | int | Requested session duration |
+| `proposed_topic` | str | Single-slot flow (on_demand) |
+| `proposed_slot` | dict | Single-slot flow (on_demand) |
+| `proposed_slots` | list[dict] | Multi-slot flow (daily_planning) |
+| `has_study_plan` | bool | False → skip confirm, go to output |
+| `current_topic_id` | int | Topic currently being rated/logged |
+| `current_topic_name` | str | Topic name for display |
+| `awaiting_weak_areas` | bool | True = next plain text is a weak areas reply |
+| `quality_score` | int | SM-2 rating: 2, 3, or 5 |
+| `messages` | list[str] | Outbound Telegram messages |
 
 ---
 
@@ -116,8 +146,6 @@ Confirm these study blocks? [Yes, book them] [Skip]
 |---|---|---|
 | POST | `/webhook` | Telegram webhook receiver |
 | GET | `/health` | VPS uptime check |
-
-The scheduler fires internally — no HTTP trigger for scheduled jobs.
 
 ---
 
@@ -131,7 +159,18 @@ GOOGLE_CALENDAR_ID=
 GOOGLE_CREDENTIALS_PATH=credentials/gcal_credentials.json
 DATABASE_PATH=db/learning.db
 STATE_DATABASE_PATH=db/state.db
+WEBHOOK_SECRET=
 ```
+
+---
+
+## Database schema
+
+**topics:** id, name, tier, status, easiness_factor, interval_days, repetitions,
+next_review, weak_areas, updated_at
+
+**sessions:** id, topic_id, studied_at, duration_min, quality_score, weak_areas,
+suggestions
 
 ---
 
@@ -141,8 +180,9 @@ STATE_DATABASE_PATH=db/state.db
 - No LLM where a formula works — SM-2 and gap_finder are pure Python
 - Claude API only inside `generate_brief` — no other node calls the LLM
 - Calendar safety rule is non-negotiable — enforce it at the tool level
-- Test tools in isolation before wiring into LangGraph
-- Error handling is required in all integrations and in `done_parser`
+- `get_connection()` from `src.core.db` for all SQLite access — never open raw connections
+- Error handling required in all nodes — catch exceptions, return user-friendly messages
+- Never overwrite checkpointed state with None — only pass kwargs that are explicitly provided
 
 ## Security
 
