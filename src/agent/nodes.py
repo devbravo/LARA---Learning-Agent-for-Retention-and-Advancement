@@ -5,9 +5,8 @@ Each node receives an AgentState and returns a partial state update dict.
 All exceptions are caught and surfaced as user-friendly messages in state.
 """
 
-import re
 import pytz
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TypedDict
 
@@ -238,22 +237,24 @@ def daily_planning(state: AgentState) -> AgentState:
                 booked_marker = " ✓ already booked" if any(
                     _is_topic_in_summary(tn, summary) for tn in prebooked
                 ) else ""
-                lines.append(f"  {t} {summary}{' (' + dur_str + ')' if dur_str else ''}{booked_marker}")
+                lines.append(f" • {t} {summary}{' (' + dur_str + ')' if dur_str else ''}{booked_marker}")
         else:
             lines.append("📅 Your day: No meetings today")
         lines.append("")
 
         # Study windows → assign topics, build proposed_slots list
-        from datetime import timedelta
+
 
         proposed_topic = None
         proposed_slot = None
         proposed_slots: list[dict] = []
 
+        available_topics = [t for t in due_topics if t["name"] not in prebooked]
+
         if free_windows:
             lines.append("🧠 Today's study plan:")
             topics_config = _load_topics()
-            available_topics = [t for t in due_topics if t["name"] not in prebooked]
+
             for i, win in enumerate(free_windows):
                 topic = available_topics[i] if i < len(available_topics) else None
                 if topic is None:
@@ -265,7 +266,9 @@ def daily_planning(state: AgentState) -> AgentState:
                 start_dt = datetime.combine(today, win["start"])
                 end_dt = start_dt + timedelta(minutes=duration)
                 t_end = _fmt_time(end_dt.time())
-                lines.append(f"  {t_start}–{t_end} → {topic['name']} ({duration}min)")
+                lines.append(f" • {t_start}–{t_end} → {topic['name']} ({duration}min)")
+                if topic.get("weak_areas"):
+                    lines.append(f"    ⚠️ Focus on: {topic['weak_areas']}")
 
                 slot = {
                     "topic": topic["name"],
@@ -284,8 +287,18 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("🧠 Study windows: None found today")
         lines.append("")
 
+        assigned_count = len(proposed_slots)
+        backlog_topics = available_topics[assigned_count:]
+
+        if backlog_topics:
+            lines.append("📌 Also due but no window today:")
+            for topic in backlog_topics[:3]: # cap at  3 to avoid wall of text
+                lines.append(f" • {topic['name']}")
+            if len(backlog_topics) > 5:
+                lines.append(f" • +{len(backlog_topics) - 3} more")
+            lines.append("")
+
         # In-progress topics (informational only — not assigned to windows)
-        from src.core.db import get_connection
         with get_connection() as conn:
             in_progress_rows = conn.execute(
                 "SELECT name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
@@ -614,11 +627,12 @@ def output(state: AgentState) -> AgentState:
 
     if trigger in ("rate", "weak_areas", "done"):
         messages = state.get("messages") or []
-        if messages:
+        if messages and messages[-1].startswith("⚠"):
             try:
                 _telegram.send_message(messages[-1])
             except Exception as e:
                 print(f"[output] Telegram send failed: {e}")
+        return {}
 
     # --- Send final message for non-confirm triggers ---
     if trigger != "confirm":
