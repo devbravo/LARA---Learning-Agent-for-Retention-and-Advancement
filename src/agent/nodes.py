@@ -51,9 +51,7 @@ class AgentState(TypedDict, total=False):
     proposed_slot: dict | None          # single-slot flow (on_demand)
     proposed_slots: list[dict] | None   # multi-slot flow (daily_planning)
     has_study_plan: bool                # False → skip confirm, go straight to output
-    session_summary: dict | None
     quality_score: int | None
-    last_logged_topic_id: int | None
     messages: list[str]        # outbound Telegram messages
     awaiting_weak_areas: bool
     current_topic_id: int | None
@@ -535,7 +533,6 @@ def log_weak_areas(state: AgentState) -> AgentState:
         messages = state.get("messages") or []
         text = messages[0].strip() if messages else ""
         topic_id = state.get("current_topic_id")
-        topic_name = state.get("current_topic_name") or "topic"
 
         if not topic_id:
             _telegram.send_message("⚠️ Cannot log weak areas: missing topic.")
@@ -616,7 +613,12 @@ def output(state: AgentState) -> AgentState:
     trigger = state.get("trigger", "")
 
     if trigger in ("rate", "weak_areas", "done"):
-        return {}
+        messages = state.get("messages") or []
+        if messages:
+            try:
+                _telegram.send_message(messages[-1])
+            except Exception as e:
+                print(f"[output] Telegram send failed: {e}")
 
     # --- Send final message for non-confirm triggers ---
     if trigger != "confirm":

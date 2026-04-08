@@ -132,8 +132,18 @@ async def webhook(
         elif cb == "skip":
             state = _graph.get_state(chat_id)
             if state.get("awaiting_weak_areas"):
+                if message_text is not None:
+                    with _confirm_lock:
+                        if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
+                            logger.info("message_id=%s already processed for weak_areas skip — ignoring repeat tap",
+                                        message_id)
+                            return JSONResponse({"ok": True})
+                        _in_flight_message_ids.add(message_id)
+
                 trigger = "weak_areas"
                 extra["messages"] = []
+                if message_id is not None:
+                    extra["message_id"] = message_id
             else:
                 if message_id is not None:
                     with _confirm_lock:
@@ -162,7 +172,7 @@ async def webhook(
             return JSONResponse({"ok": True})
 
     elif message_text:
-        logger.info("Incoming message_text: %r", message_text)
+        logger.debug("Incoming message_text received (length=%d)", len(message_text))
         if message_text.strip().lower() in ("/done", "done"):
             trigger = "done"
         elif message_text.strip().lower() == "/study":

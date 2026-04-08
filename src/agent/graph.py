@@ -144,7 +144,7 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
     # Only include kwargs that are explicitly provided — don't overwrite
     # checkpointed state with None values
     for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot",
-                "session_summary", "quality_score", "messages", "current_topic_id", "current_topic_name"):
+                "quality_score", "messages", "current_topic_id", "current_topic_name"):
         if kwargs.get(key) is not None:
             initial_state[key] = kwargs[key]
 
