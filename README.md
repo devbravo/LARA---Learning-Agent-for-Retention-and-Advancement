@@ -173,6 +173,14 @@ python -m src.agent.graph
 
 ---
 
+## SQL queries for manual DB inspection:
+```sql
+sqlite3 db/learning.db "SELECT id, topic_id, studied_at FROM sessions WHERE topic_id = (SELECT id FROM topics WHERE name = '(TOPIC_NAME)') ORDER BY studied_at DESC LIMIT 5"
+sqlite3 db/learning.db "DELETE FROM sessions WHERE id = (ID)"
+sqlite3 db/learning.db "UPDATE topics SET easiness_factor = 2.5, interval_days = 1, repetitions = 0, next_review = date('now'), updated_at = CURRENT_TIMESTAMP WHERE id = (TOPIC_ID)"
+sqlite3 db/state.db "DELETE FROM checkpoints; DELETE FROM writes;"
+```
+
 ## Telegram UX
 
 ### Morning briefing
@@ -272,3 +280,4 @@ Pure Python — no API calls needed.
 - Every webhook request validated against `WEBHOOK_SECRET` (HTTP 403 on mismatch)
 - Agent never modifies GCal events it didn't create (`creator.self` check at tool level)
 - SQLite files are local only — never exposed via HTTP
+
