@@ -123,6 +123,7 @@ def log_study_session(
         topic_id:     ID from the topics table.
         duration_min: Session length in minutes.
         quality_score: SM-2 quality rating — 2 (Hard), 3 (OK), or 5 (Easy).
+        weak_areas: Optional notes about weak concepts, mistakes, or areas to review
     """
     if quality_score not in (2, 3, 5):
         raise ValueError(f"quality_score must be 2, 3, or 5 — got {quality_score}")

@@ -295,7 +295,7 @@ def daily_planning(state: AgentState) -> AgentState:
             for topic in backlog_topics[:3]: # cap at  3 to avoid wall of text
                 lines.append(f" • {topic['name']}")
             if len(backlog_topics) > 5:
-                lines.append(f" • +{len(backlog_topics) - 5} more")
+                lines.append(f" • +{len(backlog_topics) - 3} more")
             lines.append("")
 
         # In-progress topics (informational only — not assigned to windows)
