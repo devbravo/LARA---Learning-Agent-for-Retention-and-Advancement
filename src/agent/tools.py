@@ -5,7 +5,6 @@ A tool touches something outside the graph's own state (calendar, DB, etc.).
 All 5 tools are decorated with @tool for LangGraph/LangChain compatibility.
 """
 
-import os
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -18,7 +17,6 @@ load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
-from src.core.db import get_connection
 from src.integrations import gcal as _gcal
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
@@ -117,7 +115,6 @@ def log_study_session(
     duration_min: int,
     quality_score: int,
     weak_areas: str = "",
-    suggestions: str = "",
 ) -> None:
     """
     Log a completed study session and update SM-2 state for the topic.
@@ -126,8 +123,7 @@ def log_study_session(
         topic_id:     ID from the topics table.
         duration_min: Session length in minutes.
         quality_score: SM-2 quality rating — 2 (Hard), 3 (OK), or 5 (Easy).
-        weak_areas:   Comma-separated weak areas identified in the session.
-        suggestions:  Free-text suggestions for next session.
+        weak_areas: Optional notes about weak concepts, mistakes, or areas to review
     """
     if quality_score not in (2, 3, 5):
         raise ValueError(f"quality_score must be 2, 3, or 5 — got {quality_score}")
@@ -137,10 +133,10 @@ def log_study_session(
     try:
         conn.execute(
             """
-            INSERT INTO sessions (topic_id, duration_min, quality_score, weak_areas, suggestions)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO sessions (topic_id, duration_min, quality_score, weak_areas)
+            VALUES (?, ?, ?, ?)
             """,
-            (topic_id, duration_min, quality_score, weak_areas or None, suggestions or None),
+            (topic_id, duration_min, quality_score, weak_areas or None),
         )
         # Update weak_areas on topic for display in briefs
         if weak_areas:

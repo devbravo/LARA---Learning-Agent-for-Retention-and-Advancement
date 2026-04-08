@@ -44,7 +44,7 @@ def _is_protected_block() -> bool:
             return True
     return False
 
-def _run_daily_briefing() -> None:
+def _run_daily_planning() -> None:
     chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
     if _is_protected_block():
         logger.warning("Daily briefing skipped — inside protected block (15:00–19:30).")
@@ -60,14 +60,14 @@ def build_scheduler() -> AsyncIOScheduler:
     config = _load_config()
     scheduler = AsyncIOScheduler(timezone=_TZ)
 
-    daily = config["schedule"]["daily_briefing"]
+    daily = config["schedule"]["daily_planning"]
     sunday = config["schedule"]["sunday_planning"]
 
     # Mon–Sat at 08:00
     scheduler.add_job(
-        _run_daily_briefing,
+        _run_daily_planning,
         trigger=CronTrigger(day_of_week="mon-sat", hour=daily["hour"], minute=daily["minute"], timezone=_TZ),
-        id="daily_briefing_weekday",
+        id="daily_planning_weekday",
         name=f"Daily Briefing (Mon–Sat {daily['hour']:02d}:{daily['minute']:02d})",
         replace_existing=True,
         misfire_grace_time=daily["misfire_grace_time"],
@@ -75,9 +75,9 @@ def build_scheduler() -> AsyncIOScheduler:
 
     # Sunday at 09:00 (weekly planning variant)
     scheduler.add_job(
-        _run_daily_briefing,
+        _run_daily_planning,
         trigger=CronTrigger(day_of_week="sun", hour=sunday["hour"], minute=sunday["minute"], timezone=_TZ),
-        id="daily_briefing_sunday",
+        id="daily_planning_sunday",
         name=f"Weekly Planning (Sun {sunday['hour']:02d}:{sunday['minute']:02d})",
         replace_existing=True,
         misfire_grace_time=sunday["misfire_grace_time"],

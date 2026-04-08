@@ -1,17 +1,17 @@
-# Learning Manager Agent
+# LARA
 
-A personal AI study coach for Diego Sabajo. Tracks study topics using SM-2 spaced repetition, sends proactive daily plans via Telegram, reads Google Calendar to plan around your real schedule, generates focused study briefs via Claude, and books `[Study]` events on Google Calendar after confirmation.
+Personal Learning Assistant for Diego Sabajo. Tracks study topics using SM-2 spaced repetition, sends proactive daily plans via Telegram, reads Google Calendar to plan around your real schedule, generates focused study briefs via Claude, and books `[Study]` events on Google Calendar after confirmation.
 
 ---
 
 ## Features
 
-- **SM-2 spaced repetition** — topics are ranked by tier and easiness factor; intervals grow automatically based on session quality
-- **Morning briefing** — sent at 08:00 daily via Telegram with your calendar, free windows, and top review picks
-- **"I have X minutes"** flow — tap 30 / 60 / 90 min and get an AI-generated study brief for the highest-priority due topic
-- **Session logging** — paste a structured summary into Telegram; the agent parses it, updates SM-2 state, and logs it to SQLite
-- **Calendar safety** — reads all events to plan around them, but only writes events it created (`[Study]` prefix, `creator.self == True`)
-- **Protected block** — never sends messages or fires jobs during 15:00–19:30
+- **SM-2 spaced repetition** — topics ranked by tier and easiness factor; intervals grow automatically based on session quality
+- **Morning briefing** — sent daily via Telegram with your calendar, free windows, and assigned study blocks
+- **On-demand study** — send `/study`, tap a duration, get an AI-generated brief for the highest-priority due topic
+- **Done flow** — send `/done` after studying; LARA asks how each session went, prompts for weak areas, logs everything, and updates SM-2
+- **Calendar safety** — reads all events to plan around them, only writes events it created (`[Study]` prefix, `creator.self == True`)
+- **Protected block** — never sends messages or fires jobs during configured protected hours
 
 ---
 
@@ -25,7 +25,7 @@ Telegram ──► FastAPI /webhook ──► LangGraph graph ──► Telegram
                Google Calendar      SQLite            Claude API
                (read + write)    (SM-2 state,       (study briefs
                                   sessions log)       only)
-APScheduler ──► daily_briefing (08:00 Mon–Sat, 09:00 Sun)
+APScheduler ──► daily_planning (daily + Sunday variant)
 ```
 
 ### LangGraph nodes
@@ -33,15 +33,16 @@ APScheduler ──► daily_briefing (08:00 Mon–Sat, 09:00 Sun)
 | Node | Responsibility |
 |---|---|
 | `router` | Entry point — routes by trigger type |
-| `daily_briefing` | Assembles morning plan from calendar + SM-2 + gap finder |
-| `study_picker` | Handles "I have X min" flow, validates slot availability |
-| `done_parser` | Parses and validates pasted session summaries |
+| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder |
+| `on_demand` | Handles `/study` flow, picks highest-priority due topic |
+| `done_parser` | Finds first unlogged slot, sends rating buttons |
+| `log_session` | Logs session with quality score, prompts for weak areas |
+| `log_weak_areas` | Saves weak areas or clears on Skip, prompts for next topic |
 | `calendar_reader` | Read-only GCal fetch |
 | `sm2_engine` | Returns due topics ranked by tier + easiness factor |
 | `gap_finder` | Computes free windows respecting protected blocks |
-| `brief_generator` | Calls Claude API — the only LLM call in the graph |
+| `generate_brief` | Calls Claude API — the only LLM call in the graph |
 | `confirm` | Sends plan to Telegram with inline keyboard; waits for tap |
-| `log_session` | Writes session log, updates SM-2 state |
 | `output` | Final Telegram send + GCal write after confirmation |
 
 ---
@@ -50,11 +51,11 @@ APScheduler ──► daily_briefing (08:00 Mon–Sat, 09:00 Sun)
 
 | Layer | Technology |
 |---|---|
-| Agent framework | LangGraph 1.1 |
+| Agent framework | LangGraph |
 | Web server | FastAPI + uvicorn |
-| Scheduler | APScheduler 3 (AsyncIO) |
+| Scheduler | APScheduler (AsyncIO) |
 | LLM | Anthropic Claude (via `anthropic` SDK) |
-| Messaging | python-telegram-bot 22 |
+| Messaging | python-telegram-bot |
 | Calendar | Google Calendar API v3 (OAuth2) |
 | Database | SQLite (via `langgraph-checkpoint-sqlite`) |
 | Config | YAML + python-dotenv |
@@ -64,7 +65,7 @@ APScheduler ──► daily_briefing (08:00 Mon–Sat, 09:00 Sun)
 ## Project Structure
 
 ```
-learning-manager/
+lara/
 ├── config.yaml              # Topics, focus windows, protected blocks
 ├── requirements.txt
 ├── .env.example
@@ -77,19 +78,19 @@ learning-manager/
 │   ├── scheduler.py         # APScheduler jobs
 │   ├── agent/
 │   │   ├── graph.py         # LangGraph graph + SqliteSaver checkpointer
-│   │   ├── nodes.py         # All 11 node implementations + AgentState
-│   │   └── tools.py         # 5 LangGraph tools
+│   │   ├── nodes.py         # Node implementations + AgentState
+│   │   └── tools.py         # LangGraph tools
 │   ├── core/
 │   │   ├── db.py            # Schema init, seed, connection helper
 │   │   ├── sm2.py           # SM-2 algorithm (pure Python)
 │   │   └── gap_finder.py    # Free window computation (pure Python)
 │   └── integrations/
 │       ├── gcal.py          # Google Calendar read + write
-│       ├── telegram.py      # send_message / send_buttons
+│       ├── telegram_client.py  # send_message / send_buttons / remove_buttons
 │       └── claude_api.py    # generate_brief()
 └── tests/
-    ├── test_sm2.py          # 8 SM-2 unit tests
-    ├── test_gap_finder.py   # 11 gap finder unit tests
+    ├── test_sm2.py
+    ├── test_gap_finder.py
     └── test_tools.py
 ```
 
@@ -101,7 +102,7 @@ learning-manager/
 
 ```bash
 git clone <repo-url>
-cd learning-manager
+cd lara
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -113,7 +114,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` with your real values:
+Edit `.env`:
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
@@ -130,8 +131,8 @@ WEBHOOK_SECRET=   # generate: python -c "import secrets; print(secrets.token_hex
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/) → APIs & Services → Credentials
 2. Create an OAuth 2.0 Client ID (Desktop app)
-3. Download the JSON and save it to `credentials/gcal_credentials.json`
-4. On first run, a browser window will open for the OAuth consent flow — the token is saved automatically to `credentials/token.json`
+3. Download the JSON and save to `credentials/gcal_credentials.json`
+4. On first run, a browser window opens for OAuth consent — token saved to `credentials/token.json`
 
 ### 4. Initialise the database
 
@@ -139,11 +140,9 @@ WEBHOOK_SECRET=   # generate: python -c "import secrets; print(secrets.token_hex
 python -m src.core.db
 ```
 
-This creates `db/learning.db`, seeds all topics from `config.yaml`, and prints them to confirm.
+Creates `db/learning.db`, seeds topics from `config.yaml`, and prints them to confirm.
 
 ### 5. Register the Telegram webhook
-
-Point Telegram to your server (requires a public HTTPS URL, e.g. via ngrok or a VPS):
 
 ```bash
 curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-domain>/webhook&secret_token=<WEBHOOK_SECRET>"
@@ -157,13 +156,7 @@ curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-domain>/w
 python -m src.main
 ```
 
-This starts both the FastAPI server (port 8000) and the APScheduler in a single async process.
-
-```
-INFO: Scheduled: Daily Briefing (Mon–Sat 08:00)  next_run=...
-INFO: Scheduled: Weekly Planning (Sun 09:00)      next_run=...
-INFO: Starting Learning Manager on 0.0.0.0:8000
-```
+Starts FastAPI (port 8000) and APScheduler in a single async process.
 
 ### Health check
 
@@ -172,7 +165,7 @@ curl http://localhost:8000/health
 # {"status": "ok"}
 ```
 
-### Dry-run morning briefing (no Telegram send)
+### Dry-run morning briefing
 
 ```bash
 python -m src.agent.graph
@@ -180,45 +173,62 @@ python -m src.agent.graph
 
 ---
 
+## SQL queries for manual DB inspection:
+```sql
+sqlite3 db/learning.db "SELECT id, topic_id, studied_at FROM sessions WHERE topic_id = (SELECT id FROM topics WHERE name = '(TOPIC_NAME)') ORDER BY studied_at DESC LIMIT 5"
+sqlite3 db/learning.db "DELETE FROM sessions WHERE id = (ID)"
+sqlite3 db/learning.db "UPDATE topics SET easiness_factor = 2.5, interval_days = 1, repetitions = 0, next_review = date('now'), updated_at = CURRENT_TIMESTAMP WHERE id = (TOPIC_ID)"
+sqlite3 db/state.db "DELETE FROM checkpoints; DELETE FROM writes;"
+```
+
 ## Telegram UX
 
-### Morning briefing (08:00 daily)
+### Morning briefing
 
 ```
-☀️ Good morning Diego — Saturday April 4
+☀️ Good morning Diego — Tuesday April 7
 
 📅 Your day:
   09:00 Team standup (30min)
 
-🧠 Study windows:
-  08:00–09:00 → Gen AI System Design (60min)
-  11:00–13:00 → Data Structures and Algorithms (120min)
+🧠 Today's study plan:
+  10:00–11:00 → Gen AI System Design (60min)
+  11:00–12:00 → Data Structures and Algorithms (60min)
 
-📌 SM-2 picks today:
-  1. Gen AI System Design — due (EF: 2.5)
-  2. Data Structures and Algorithms — due (EF: 2.5)
-  3. Sales Engineering — due (EF: 2.5)
-
-Confirm these study blocks? [Yes, book them] [Edit] [Skip]
+Confirm these study blocks?
+[Yes, book them] [Skip]
 ```
 
-### Duration picker (any unrecognised message)
+### On-demand study
 
-Tap any message → bot responds with `[30 min] [60 min] [90 min]`
-
-### Session summary format
-
-After an external study session, paste this into the chat:
+Send `/study` → tap duration → receive AI-generated study brief
 
 ```
-📋 Session summary
-Topic: LangGraph
-Duration: 45 min
-Weak areas: state management, conditional edges
-Suggestions: re-read checkpointer docs
+[30 min] [45 min] [60 min]
 ```
 
-The bot replies with rating buttons:
+### Done flow
+
+Send `/done` after studying:
+
+```
+LARA: How did Gen AI System Design go?
+      [😕 Hard] [😐 OK] [😊 Easy]
+
+[tap 😐 OK]
+
+LARA: Any weak areas to note? Reply with text or tap Skip.
+      [Skip]
+
+You: Trade-offs in vector DB selection
+
+LARA: How did Data Structures and Algorithms go?
+      [😕 Hard] [😐 OK] [😊 Easy]
+
+...
+
+LARA: All sessions logged for today. Great work! 💪
+```
 
 | Button | Score | SM-2 effect |
 |---|---|---|
@@ -236,19 +246,20 @@ Edit `config.yaml` and re-run `python -m src.core.db` to seed new topics. Existi
 topics:
   - name: "Your Topic"
     tier: 1        # 1 = high priority, 2 = medium, 3 = background
-    active: true
 ```
 
-Focus windows and protected blocks are also configured in `config.yaml`:
+Focus windows and protected blocks:
 
 ```yaml
 focus_windows:
   - start: "08:00"
-    end: "11:00"
+    end: "09:00"
+  - start: "10:00"
+    end: "22:00"
 
 protected_blocks:
-  - start: "15:00"
-    end: "19:30"
+  - start: "22:00"
+    end: "23:00"
 ```
 
 ---
@@ -259,13 +270,14 @@ protected_blocks:
 python -m pytest tests/ -v
 ```
 
-19 tests covering SM-2 algorithm edge cases and gap finder logic. All pure Python — no API calls needed.
+Pure Python — no API calls needed.
 
 ---
 
-## Security notes
+## Security
 
 - `.env` and `credentials/` are gitignored and never committed
-- Every webhook request is validated against `WEBHOOK_SECRET` (HTTP 403 on mismatch)
-- The agent never modifies Google Calendar events it didn't create (`creator.self` check enforced at tool level)
+- Every webhook request validated against `WEBHOOK_SECRET` (HTTP 403 on mismatch)
+- Agent never modifies GCal events it didn't create (`creator.self` check at tool level)
 - SQLite files are local only — never exposed via HTTP
+
