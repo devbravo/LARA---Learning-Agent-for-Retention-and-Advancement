@@ -179,6 +179,28 @@ sqlite3 db/learning.db "SELECT id, topic_id, studied_at FROM sessions WHERE topi
 sqlite3 db/learning.db "DELETE FROM sessions WHERE id = (ID)"
 sqlite3 db/learning.db "UPDATE topics SET easiness_factor = 2.5, interval_days = 1, repetitions = 0, next_review = date('now'), updated_at = CURRENT_TIMESTAMP WHERE id = (TOPIC_ID)"
 sqlite3 db/state.db "DELETE FROM checkpoints; DELETE FROM writes;"
+``` 
+
+## Resetting the learning database
+```commandline
+rm db/learning.db
+python -m src.core.db
+```
+## Reseed after config changes (topics, focus windows, protected blocks):
+```commandline
+python -m src.core.db
+``` 
+
+## Change a topic's status: 
+```sql
+# Activate (move to SM-2) 
+sqlite3 db/learning.db "UPDATE topics SET status = 'active', next_review = date('now'), updated_at = CURRENT_TIMESTAMP WHERE name = 'TOPIC_NAME'"
+
+# Mark in_progress
+sqlite3 db/learning.db "UPDATE topics SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE name = 'TOPIC_NAME'" 
+
+# Deactivate (remove from SM-2)
+sqlite3 db/learning.db "UPDATE topics SET status = 'inactive', updated_at = CURRENT_TIMESTAMP WHERE name = 'TOPIC_NAME'"
 ```
 
 ## Telegram UX
