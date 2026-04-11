@@ -60,35 +60,35 @@ topics:
   # Tier 2 — RAG
   - name: "RAG - Chunking Strategies"
     tier: 2
-    status: active
+    status: inactive
     default_duration_minutes: 60
   - name: "RAG - Embedding Models"
     tier: 2
-    status: active
+    status: inactive
     default_duration_minutes: 60
   - name: "RAG - Vector Databases"
     tier: 2
-    status: active
+    status: inactive
     default_duration_minutes: 60
   - name: "RAG - Retrieval Methods"
     tier: 2
-    status: active
+    status: inactive
     default_duration_minutes: 60
   - name: "RAG - Reranking"
     tier: 2
-    status: active
+    status: inactive
     default_duration_minutes: 60
   - name: "RAG - Evaluation"
     tier: 2
-    status: active
+    status: inactive
     default_duration_minutes: 60
   - name: "RAG - Hybrid Search"
     tier: 2
-    status: active
+    status: inactive
     default_duration_minutes: 60
   - name: "RAG - Query Transformation"
     tier: 2
-    status: active
+    status: inactive
     default_duration_minutes: 60
 
   # Tier 2 — Agentic Patterns
