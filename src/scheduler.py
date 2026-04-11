@@ -56,10 +56,10 @@ def _run_daily_planning() -> None:
     except Exception as e:
         logger.error("Daily briefing graph error: %s", e)
 
-    try:
-        send_message(f"⚠️ Daily briefing failed: {e}")
-    except Exception:
-        pass
+        try:
+            send_message(f"⚠️ Daily briefing failed: {e}")
+        except Exception:
+            pass
 
 
 def build_scheduler() -> AsyncIOScheduler:

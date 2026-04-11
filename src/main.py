@@ -4,16 +4,21 @@ Entry point for the LARA agent.
 Starts FastAPI (via uvicorn) and APScheduler in the same async process.
 """
 
+import os
 import asyncio
 import logging
-import os
-from pathlib import Path
 
 import uvicorn
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parents[1] / ".env", override=True)
 from src.server import app
+
+
+load_dotenv(Path(__file__).parents[1] / ".env", override=True)
+
+_LOG_DIR = Path(__file__).parents[1] / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,7 +27,8 @@ logging.basicConfig(
     handlers=[
             logging.StreamHandler(),
             logging.FileHandler("logs/lara.log"),  # add this
-        ]
+        ],
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
@@ -31,7 +37,6 @@ _PORT = int(os.environ.get("PORT", "8000"))
 
 
 async def main() -> None:
-    # --- uvicorn (async, non-blocking) ---
     config = uvicorn.Config(
         app=app,
         host=_HOST,

@@ -26,7 +26,6 @@ from src.integrations.telegram_client import send_buttons, send_message
 from contextlib import asynccontextmanager
 
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
