@@ -11,6 +11,7 @@ dist/
 build/
 .DS_Store
 .idea/
+logs/
 
 # SQLite runtime files
 *.db-wal
