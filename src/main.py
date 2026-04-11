@@ -13,14 +13,16 @@ import uvicorn
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parents[1] / ".env", override=True)
-
-from src.scheduler import build_scheduler
 from src.server import app
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
+    handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler("logs/lara.log"),  # add this
+        ]
 )
 logger = logging.getLogger(__name__)
 
@@ -29,13 +31,6 @@ _PORT = int(os.environ.get("PORT", "8000"))
 
 
 async def main() -> None:
-    # --- Scheduler ---
-    scheduler = build_scheduler()
-    scheduler.start()
-
-    for job in scheduler.get_jobs():
-        logger.info("Scheduled: %s  next_run=%s", job.name, job.next_run_time)
-
     # --- uvicorn (async, non-blocking) ---
     config = uvicorn.Config(
         app=app,
@@ -45,14 +40,9 @@ async def main() -> None:
         loop="asyncio",
     )
     server = uvicorn.Server(config)
-
     logger.info("Starting LARA on %s:%s", _HOST, _PORT)
+    await server.serve()
 
-    try:
-        await server.serve()
-    finally:
-        scheduler.shutdown(wait=False)
-        logger.info("Scheduler shut down.")
 
 
 if __name__ == "__main__":

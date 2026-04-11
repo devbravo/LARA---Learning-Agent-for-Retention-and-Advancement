@@ -21,12 +21,24 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
+from src.scheduler import build_scheduler
 from src.integrations.telegram_client import send_buttons, send_message
+from contextlib import asynccontextmanager
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Learning Manager", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(fastapi_app: FastAPI):
+    app_scheduler = build_scheduler()
+    app_scheduler.start()
+    fastapi_app.state.scheduler = app_scheduler
+    yield
+    app_scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="LARA", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 # Deduplication guard — keeps last 1000 processed update_ids in memory
 _processed_updates: set[int] = set()
@@ -243,3 +255,21 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
         if trigger in ("confirm", "on_demand", "rate") and message_id is not None:
             with _confirm_lock:
                 _in_flight_message_ids.discard(message_id)
+
+
+
+@app.get("/scheduler-status")
+async def scheduler_status(request: Request) -> dict:
+    s = request.app.state.scheduler
+    jobs = s.get_jobs()
+    return {
+        "running": s.running,
+        "jobs": [
+            {
+                "id": j.id,
+                "name": j.name,
+                "next_run": str(j.next_run_time) if j.next_run_time else None,
+            }
+            for j in jobs
+        ]
+    }

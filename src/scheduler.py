@@ -18,6 +18,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 from src.agent import graph as _graph
+from src.integrations.telegram_client import send_message
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -55,6 +56,11 @@ def _run_daily_planning() -> None:
     except Exception as e:
         logger.error("Daily briefing graph error: %s", e)
 
+    try:
+        send_message(f"⚠️ Daily briefing failed: {e}")
+    except Exception:
+        pass
+
 
 def build_scheduler() -> AsyncIOScheduler:
     config = _load_config()
@@ -84,3 +90,5 @@ def build_scheduler() -> AsyncIOScheduler:
     )
 
     return scheduler
+
+scheduler = build_scheduler()
