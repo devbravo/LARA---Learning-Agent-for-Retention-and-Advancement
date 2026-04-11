@@ -40,7 +40,7 @@ def init_db() -> None:
                 easiness_factor REAL DEFAULT 2.5,
                 interval_days INTEGER DEFAULT 1,
                 repetitions INTEGER DEFAULT 0,
-                next_review DATE NOT NULL DEFAULT (date('now')),
+                next_review DATE DEFAULT NULL,
                 weak_areas TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -73,11 +73,16 @@ def seed_topics() -> None:
 
     with get_connection() as conn:
         conn.executemany(
-            """INSERT INTO topics (name, tier, status)
-               VALUES (:name, :tier, :status)
+            """INSERT INTO topics (name, tier, status, next_review)
+               VALUES (:name, :tier, :status, CASE WHEN :status = 'active' THEN date('now') ELSE NULL END)
                ON CONFLICT(name) DO UPDATE SET
                    tier = excluded.tier,
-                   status = excluded.status""",
+                   status = excluded.status,
+                   next_review = CASE 
+                       WHEN excluded.status = 'active' AND topics.next_review IS NULL THEN date('now')
+                       WHEN excluded.status != 'active' THEN NULL
+                       ELSE topics.next_review
+                   END""",
             rows,
         )
 
