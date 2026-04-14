@@ -6,13 +6,21 @@ topics:
     default_duration_minutes: 30
   - name: "DSA - Two Pointers"
     tier: 1
-    status: in_progress
+    status: active
     default_duration_minutes: 30
   - name: "DSA - Sliding Window"
     tier: 1
-    status: in_progress
+    status: active
     default_duration_minutes: 30
-  - name: "DSA - Hash Tables"
+  - name: "DSA - Prefix Sum"
+    tier: 1
+    status: active
+    default_duration_minutes: 30
+  - name: "DSA - Depth First Search"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "DSA - Backtracking"
     tier: 1
     status: inactive
     default_duration_minutes: 30
@@ -20,11 +28,11 @@ topics:
     tier: 1
     status: inactive
     default_duration_minutes: 30
-  - name: "DSA - Depth First Search"
+  - name: "DSA - Graph"
     tier: 1
     status: inactive
     default_duration_minutes: 30
-  - name: "DSA - Backtracking"
+  - name: "DSA - Priority Queue"
     tier: 1
     status: inactive
     default_duration_minutes: 30
@@ -36,60 +44,243 @@ topics:
     tier: 1
     status: inactive
     default_duration_minutes: 30
+  - name: "DSA - Hash Tables"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+
+
+  # LLMOps - Monitoring (scored 2/4 — TOP GAP)
+  - name: "LLMOps - Alerting & Thresholds"
+    tier: 1
+    status: active
+    default_duration_minutes: 45
+  - name: "LLMOps - Feedback Loops & User Signals"
+    tier: 1
+    status: active
+    default_duration_minutes: 45
+  - name: "LLMOps - Data & Concept Drift"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 60
+  - name: "LLMOps - LLM Output Quality Tracking"
+    tier: 1
+    status: inactivate
+    default_duration_minutes: 60
+  - name: "LLMOps - Retrieval Quality Monitoring"
+    tier: 1
+    status: in_progress
+    default_duration_minutes: 60
+  - name: "LLMOps - Cost & Token Tracking"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 45
+
+  # LLMOps - Observability & Evaluation
+  - name: "LLMOps - Evaluation & LLM-as-Judge"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+  - name: "LLMOps - RAG-Specific Metrics (Ragas)"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+  - name: "LLMOps - Tracing & Instrumentation"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+  - name: "LLMOps - Experiment Tracking"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 45
+  - name: "LLMOps - Logging & Audit Trails"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 45
+
+# LLMOps - Deployment & Operations
+  - name: "LLMOps - Deployment Patterns (canary, blue/green, shadow)"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+  - name: "LLMOps - Rollback & Incident Handling"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 45
+  - name: "LLMOps - A/B Testing Model Versions"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 45
+  - name: "LLMOps - Prompt Versioning & Management"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 45
+  - name: "LLMOps - Guardrails & Safety Layers"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 45
+  - name: "LLMOps - CI/CD for LLM Pipelines"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+  - name: "LLMOps - Scalability & Load Management"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 45
+
+
+  # Coding Best Practices (scored 2/4 — TOP GAP)
+  - name: "Coding - Type Hints & Docstrings"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "Coding - Error Handling & Edge Cases"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "Coding - Unit Testing & TDD"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 45
+  - name: "Coding - Clean Code & Refactoring"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 45
+  - name: "Coding - Code Review Practices"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+
+
+  # ML Fundamentals Breadth (flagged weak in profiling)
+  - name: "ML Fundamentals - Bias, Variance & Learning Curves"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "ML Fundamentals - Data Leakage"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "ML Fundamentals - Evaluation Metrics (beyond accuracy)"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "ML Fundamentals - Overfitting Diagnostics"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "ML Fundamentals - Vision Transformers (conceptual)"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+
+
 
   # Tier 1 — Gen AI System Design
-  - name: "Gen AI System Design"
-    tier: 1
+  # Gen AI System Design (broken into subtopics)
+  - name: "System Design - ML System Design Framework"
+    tier: 2
     status: inactive
-    default_duration_minutes: 120
+    default_duration_minutes: 60
+  - name: "System Design - Agentic RAG Architecture"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 90
+  - name: "System Design - Scalability & Load Balancing"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+  - name: "System Design - Cost-aware Architecture"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 45
 
-  # Tier 1 — Behavioral & Experience
+
+  # Behavioral & Experience (quantified impact — Factored gap)
   - name: "Behavioral - STAR Method"
     tier: 1
-    status: inactive
+    status: in_progress
     default_duration_minutes: 45
-  - name: "Experience - CodeDealers"
+  - name: "Behavioral - CodeDealers Story (quantified)"
     tier: 1
     status: inactive
     default_duration_minutes: 45
-  - name: "Experience - Factored Finance App"
+  - name: "Behavioral - Factored Finance App Story (quantified)"
     tier: 1
     status: inactive
     default_duration_minutes: 45
+  - name: "Behavioral - Handling Technical Disagreements"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "Behavioral - Monologue Control & Engagement"
+    tier: 1
+    status: in_progress
+    default_duration_minutes: 30
 
-  # Tier 2 — RAG
+  # RAG - Indexing & Retrieval
+  - name: "RAG - Document Parsing & Indexing"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 30
   - name: "RAG - Chunking Strategies"
     tier: 2
     status: inactive
-    default_duration_minutes: 60
+    default_duration_minutes: 30
   - name: "RAG - Embedding Models"
     tier: 2
     status: inactive
-    default_duration_minutes: 60
+    default_duration_minutes: 30
   - name: "RAG - Vector Databases"
     tier: 2
     status: inactive
-    default_duration_minutes: 60
+    default_duration_minutes: 30
   - name: "RAG - Retrieval Methods"
     tier: 2
     status: inactive
-    default_duration_minutes: 60
-  - name: "RAG - Reranking"
-    tier: 2
-    status: inactive
-    default_duration_minutes: 60
-  - name: "RAG - Evaluation"
-    tier: 2
-    status: inactive
-    default_duration_minutes: 60
+    default_duration_minutes: 30
   - name: "RAG - Hybrid Search"
     tier: 2
     status: inactive
-    default_duration_minutes: 60
+    default_duration_minutes: 30
+  - name: "RAG - Reranking"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 30
   - name: "RAG - Query Transformation"
     tier: 2
     status: inactive
-    default_duration_minutes: 60
+    default_duration_minutes: 30
+
+  # RAG - Generation Side (missing from original)
+  - name: "RAG - Generation & Prompting"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 30
+  - name: "RAG - Grounding & Citation"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 30
+  - name: "RAG - Context Window Management"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 30
+
+  # RAG - Evaluation
+  - name: "RAG - Evaluation (Ragas & DeepEval)"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 30
+
+  # RAG - Production
+  - name: "RAG - Production & Latency Optimization"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 30
+  - name: "RAG - Index Freshness & Updates"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 45
 
   # Tier 2 — Agentic Patterns
   - name: "Agentic Patterns - Tool Use"
@@ -113,17 +304,75 @@ topics:
     status: inactive
     default_duration_minutes: 60
 
-  # Tier 2 — LangGraph
-  - name: "LangGraph"
+# Agentic RAG - RAG-specific agent patterns (missing from original)
+  - name: "Agentic RAG - Routing Strategies"
     tier: 2
     status: inactive
     default_duration_minutes: 60
 
-  # Tier 2 — FastAPI
-  - name: "FastAPI"
+  - name: "Agentic RAG - Multi-hop Retrieval"
     tier: 2
     status: inactive
     default_duration_minutes: 60
+
+  - name: "Agentic RAG - Self-RAG"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+
+  - name: "Agentic RAG - Corrective RAG (CRAG)"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+
+  - name: "Agentic RAG - Agent as Orchestrator"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 90
+
+
+  # Tier 2 — LangGraph
+  # LangGraph (expanded)
+  - name: "LangGraph - Graphs, Nodes & Edges"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+
+  - name: "LangGraph - State Management"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+
+  - name: "LangGraph - Conditional Routing"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+
+  - name: "LangGraph - Human-in-the-Loop"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+
+  # Gen AI System Design (broken into subtopics)
+  - name: "System Design - ML System Design Framework"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+
+  - name: "System Design - Agentic RAG Architecture"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 90
+
+  - name: "System Design - Scalability & Load Balancing"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
+
+  - name: "System Design - Cost-aware Architecture"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 45
 
   # Tier 3 — LLM Internals
   - name: "LLM Internals - Attention"
@@ -147,6 +396,28 @@ topics:
     status: inactive
     default_duration_minutes: 60
   - name: "LLM Internals - Prompt Engineering"
+    tier: 3
+    status: inactive
+    default_duration_minutes: 60
+
+
+  # LLMOps - MLOps Foundations
+  - name: "LLMOps - Data Versioning & Lineage"
+    tier: 3
+    status: inactive
+    default_duration_minutes: 45
+
+  - name: "LLMOps - Feature Stores"
+    tier: 3
+    status: inactive
+    default_duration_minutes: 45
+
+  - name: "LLMOps - Model Registries"
+    tier: 3
+    status: inactive
+    default_duration_minutes: 45
+
+  - name: "LLMOps - Infrastructure as Code (IaC)"
     tier: 3
     status: inactive
     default_duration_minutes: 60
