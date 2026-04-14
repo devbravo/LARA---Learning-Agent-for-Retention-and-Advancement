@@ -85,6 +85,7 @@ def build_scheduler() -> AsyncIOScheduler:
 
     daily = config["schedule"]["daily_planning"]
     sunday = config["schedule"]["sunday_planning"]
+    evening = config["schedule"]["evening_briefing"]
 
     # Mon–Sat at 08:00
     scheduler.add_job(
@@ -109,13 +110,12 @@ def build_scheduler() -> AsyncIOScheduler:
     # TODO: change to 20:00 before production deploy
     scheduler.add_job(
         _run_evening_briefing,
-        trigger=CronTrigger(day_of_week="mon-sat", hour=23, minute=10, timezone=_TZ),
+        trigger=CronTrigger(day_of_week="mon-sat", hour=evening["hour"], minute=evening["minute"], timezone=_TZ),
         id="evening_briefing",
-        name="Evening Briefing — Tomorrow's Preview (Mon–Sat 23:10)",
+        name=f"Evening Briefing — Tomorrow's Preview (Mon–Sat {evening['hour']:02d}:{evening['minute']:02d})",
         replace_existing=True,
-        misfire_grace_time=daily["misfire_grace_time"],
+        misfire_grace_time=evening["misfire_grace_time"],
     )
 
     return scheduler
 
-scheduler = build_scheduler()

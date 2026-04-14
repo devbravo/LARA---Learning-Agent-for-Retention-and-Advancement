@@ -18,7 +18,7 @@ topics:
     default_duration_minutes: 30
   - name: "DSA - Depth First Search"
     tier: 1
-    status: inactive
+    status: in_progress
     default_duration_minutes: 30
   - name: "DSA - Backtracking"
     tier: 1
@@ -54,18 +54,18 @@ topics:
   - name: "LLMOps - Alerting & Thresholds"
     tier: 1
     status: active
-    default_duration_minutes: 45
+    default_duration_minutes: 30
   - name: "LLMOps - Feedback Loops & User Signals"
     tier: 1
     status: active
-    default_duration_minutes: 45
+    default_duration_minutes: 30
   - name: "LLMOps - Data & Concept Drift"
     tier: 1
     status: inactive
     default_duration_minutes: 60
   - name: "LLMOps - LLM Output Quality Tracking"
     tier: 1
-    status: inactivate
+    status: inactive
     default_duration_minutes: 60
   - name: "LLMOps - Retrieval Quality Monitoring"
     tier: 1
@@ -352,27 +352,6 @@ topics:
     tier: 2
     status: inactive
     default_duration_minutes: 60
-
-  # Gen AI System Design (broken into subtopics)
-  - name: "System Design - ML System Design Framework"
-    tier: 2
-    status: inactive
-    default_duration_minutes: 60
-
-  - name: "System Design - Agentic RAG Architecture"
-    tier: 2
-    status: inactive
-    default_duration_minutes: 90
-
-  - name: "System Design - Scalability & Load Balancing"
-    tier: 2
-    status: inactive
-    default_duration_minutes: 60
-
-  - name: "System Design - Cost-aware Architecture"
-    tier: 2
-    status: inactive
-    default_duration_minutes: 45
 
   # Tier 3 — LLM Internals
   - name: "LLM Internals - Attention"

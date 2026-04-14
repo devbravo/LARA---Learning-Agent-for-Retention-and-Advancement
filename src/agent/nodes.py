@@ -342,8 +342,8 @@ def daily_planning(state: AgentState) -> AgentState:
 
                 slot = {
                     "topic": topic["name"],
-                    "start": win["start"],
-                    "end": end_dt.time(),
+                    "start": _fmt_time(win["start"]),
+                    "end": _fmt_time(end_dt.time()),
                     "duration_min": duration,
                 }
                 proposed_slots.append(slot)

@@ -1,12 +1,16 @@
 schedule:
   daily_planning:
     hour: 7
-    minute: 0
+    minute: 15
     misfire_grace_time: 3600
   sunday_planning:
     hour: 10
     minute: 5
     misfire_grace_time: 300
+  evening_briefing:
+    hour: 23
+    minute: 50
+    misfire_grace_time: 600
 
 protected_blocks:
   - start: "15:00"
