@@ -7,15 +7,15 @@ topics:
   - name: "DSA - Two Pointers"
     tier: 1
     status: active
-    default_duration_minutes: 30
+    default_duration_minutes: 15
   - name: "DSA - Sliding Window"
     tier: 1
     status: active
-    default_duration_minutes: 30
+    default_duration_minutes: 15
   - name: "DSA - Prefix Sum"
     tier: 1
     status: active
-    default_duration_minutes: 30
+    default_duration_minutes: 15
   - name: "DSA - Depth First Search"
     tier: 1
     status: in_progress
