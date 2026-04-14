@@ -40,9 +40,19 @@ def calculate_next_review(
     return new_ef, new_interval, repetitions + 1
 
 
-def get_due_topics(db_path: str | None = None) -> list[dict]:
-    """Return topics where next_review <= today and status = 'active', ordered by tier ASC, easiness_factor ASC."""
+def get_due_topics(db_path: str | None = None, target_date: date | None = None) -> list[dict]:
+    """Return topics where next_review <= target_date and status = 'active', ordered by tier ASC, easiness_factor ASC.
+
+    Args:
+        db_path: Optional path to the SQLite database. Defaults to DB_PATH.
+        target_date: The date to check due topics against. Defaults to today.
+                     Pass date.today() + timedelta(days=1) for tomorrow's due topics
+                     (used by the evening briefing).
+    """
     path = db_path or str(DB_PATH)
+    if target_date is None:
+        target_date = date.today()
+    date_str = target_date.isoformat()
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     try:
@@ -50,10 +60,11 @@ def get_due_topics(db_path: str | None = None) -> list[dict]:
             """
             SELECT id, name, tier, easiness_factor, interval_days, repetitions, next_review, weak_areas
             FROM topics
-            WHERE next_review <= date('now')
+            WHERE next_review <= ?
               AND status = 'active'
             ORDER BY tier ASC, easiness_factor ASC
-            """
+            """,
+            (date_str,),
         ).fetchall()
     finally:
         conn.close()
