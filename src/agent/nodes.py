@@ -42,7 +42,7 @@ def _load_topics() -> dict:
 # ---------------------------------------------------------------------------
 
 class AgentState(TypedDict, total=False):
-    trigger: str               # "daily" | "on_demand" | "done" | "confirm" | "rate" | "weak_areas"
+    trigger: str               # "daily" | "evening" | "on_demand" | "done" | "confirm" | "rate" | "weak_areas"
     chat_id: int
     message_id: int | None              # Telegram message_id of the confirm keyboard
     duration_min: int | None
@@ -50,6 +50,7 @@ class AgentState(TypedDict, total=False):
     proposed_slot: dict | None          # single-slot flow (on_demand)
     proposed_slots: list[dict] | None   # multi-slot flow (daily_planning)
     has_study_plan: bool                # False → skip confirm, go straight to output
+    preview_only: bool                  # True → evening briefing, route to output not confirm
     quality_score: int | None
     messages: list[str]        # outbound Telegram messages
     awaiting_weak_areas: bool
@@ -118,18 +119,21 @@ def route_from_router(state: AgentState) -> str:
     """Conditional edge: maps trigger → next node name."""
     trigger = state.get("trigger", "")
     mapping = {
-        "daily": "daily_planning",
-        "on_demand": "on_demand",
-        "done": "done_parser",
-        "confirm": "output",
-        "rate": "log_session",
-        "weak_areas": "log_weak_areas",
+        "daily":       "daily_planning",
+        "evening":     "daily_planning",
+        "on_demand":   "on_demand",
+        "done":        "done_parser",
+        "confirm":     "output",
+        "rate":        "log_session",
+        "weak_areas":  "log_weak_areas",
     }
     return mapping.get(trigger, "output")
 
 
 def route_from_daily_planning(state: AgentState) -> str:
-    """Conditional edge: skip confirm entirely when there's nothing to book."""
+    """Conditional edge: skip confirm for evening briefings or when there's nothing to book."""
+    if state.get("preview_only"):
+        return "output"
     return "confirm" if state.get("has_study_plan") else "output"
 
 
@@ -206,24 +210,91 @@ def _get_prebooked_topics(events: list, due_topics: list) -> set:
 
 def daily_planning(state: AgentState) -> AgentState:
     """
-    Assembles the morning plan from calendar + SM-2 + gap finder.
-    Sets proposed_topic and proposed_slot.
+    Assembles the morning plan (trigger="daily") or evening preview (trigger="evening")
+    from calendar + SM-2 + gap finder.
+
+    Evening flow: reads tomorrow's calendar and SM-2 due topics, sets preview_only=True,
+    and routes straight to output without confirmation buttons or calendar writes.
     """
     try:
+        trigger = state.get("trigger", "daily")
+        is_evening = trigger == "evening"
+
         today = date.today()
+        target_date = today + timedelta(days=1) if is_evening else today
         config = _load_config()
 
-        events = _gcal.get_events(today)
-        due_topics = _sm2.get_due_topics()
-        _TZ = pytz.timezone(_load_config()["timezone"])
-        after_time = datetime.now(_TZ).time()
-        free_windows = _gap_finder.find_free_windows(events, today, config, after_time)
+        events = _gcal.get_events(target_date)
+        due_topics = _sm2.get_due_topics(target_date=target_date)
         timed_events = [e for e in events if "dateTime" in e.get("start", {})]
+
+        # --- Evening briefing: read-only preview for tomorrow ---
+        if is_evening:
+            day_str = target_date.strftime("%A %B %-d")
+            lines = [f"🌙 Tomorrow's plan — {day_str}", ""]
+
+            # Tomorrow's calendar events (skip all-day)
+            if timed_events:
+                lines.append("📅 Your day:")
+                for ev in timed_events:
+                    t = _fmt_event_time(ev["start"])
+                    dur = _event_duration_min(ev)
+                    dur_str = f"{dur}min" if dur else ""
+                    summary = ev.get("summary", "(No title)")
+                    lines.append(f"  {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
+            else:
+                lines.append("📅 Your day: No meetings tomorrow")
+            lines.append("")
+
+            # Study windows for tomorrow (no after_time filter — all windows are in the future)
+            free_windows = _gap_finder.find_free_windows(events, target_date, config)
+            prebooked = _get_prebooked_topics(timed_events, due_topics)
+            available_topics = [t for t in due_topics if t["name"] not in prebooked]
+            topics_config = _load_topics()
+
+            if free_windows:
+                lines.append("🧠 Study windows:")
+                for i, win in enumerate(free_windows):
+                    topic = available_topics[i] if i < len(available_topics) else None
+                    if topic is None:
+                        break
+                    topic_cfg = _get_topic_config(topic["name"], topics_config)
+                    default_duration = topic_cfg.get("default_duration_minutes", 60)
+                    duration = min(default_duration, win["duration_min"])
+                    t_start = _fmt_time(win["start"])
+                    start_dt = datetime.combine(target_date, win["start"])
+                    end_dt = start_dt + timedelta(minutes=duration)
+                    t_end = _fmt_time(end_dt.time())
+                    lines.append(f"  {t_start}–{t_end} → {topic['name']} ({duration}min)")
+            else:
+                lines.append("🧠 Study windows: None found for tomorrow")
+            lines.append("")
+
+            # SM-2 picks for tomorrow — all due topics with EF values
+            if due_topics:
+                lines.append("📌 SM-2 picks tomorrow:")
+                for i, topic in enumerate(due_topics, 1):
+                    label = _topic_due_label(topic)
+                    ef = topic["easiness_factor"]
+                    lines.append(f"  {i}. {topic['name']} — {label} (EF: {ef})")
+                lines.append("")
+
+            lines.append("No confirmation needed — this is your preview for tomorrow.")
+
+            return {
+                "preview_only": True,
+                "has_study_plan": False,
+                "messages": ["\n".join(lines)],
+            }
+
+        # --- Morning briefing: full interactive plan for today ---
+        _TZ = pytz.timezone(config["timezone"])
+        after_time = datetime.now(_TZ).time()
+        free_windows = _gap_finder.find_free_windows(events, target_date, config, after_time)
         prebooked = _get_prebooked_topics(timed_events, due_topics)
 
-
         # --- Build message ---
-        day_str = today.strftime("%A %B %-d")
+        day_str = target_date.strftime("%A %B %-d")
         lines = [f"☀️ Good morning Diego — {day_str}", ""]
 
         # Today's calendar events (skip all-day)
@@ -244,16 +315,15 @@ def daily_planning(state: AgentState) -> AgentState:
 
         # Study windows → assign topics, build proposed_slots list
 
-
         proposed_topic = None
         proposed_slot = None
         proposed_slots: list[dict] = []
 
         available_topics = [t for t in due_topics if t["name"] not in prebooked]
+        topics_config = _load_topics()
 
         if free_windows:
             lines.append("🧠 Today's study plan:")
-            topics_config = _load_topics()
 
             for i, win in enumerate(free_windows):
                 topic = available_topics[i] if i < len(available_topics) else None
@@ -263,7 +333,7 @@ def daily_planning(state: AgentState) -> AgentState:
                 default_duration = topic_cfg.get("default_duration_minutes", 60)
                 duration = min(default_duration, win["duration_min"])
                 t_start = _fmt_time(win["start"])
-                start_dt = datetime.combine(today, win["start"])
+                start_dt = datetime.combine(target_date, win["start"])
                 end_dt = start_dt + timedelta(minutes=duration)
                 t_end = _fmt_time(end_dt.time())
                 lines.append(f" • {t_start}–{t_end} → {topic['name']} ({duration}min)")
@@ -278,7 +348,6 @@ def daily_planning(state: AgentState) -> AgentState:
                 }
                 proposed_slots.append(slot)
 
-
                 # Keep single-slot fields pointing at the first block (backwards compatible)
                 if i == 0:
                     proposed_topic = topic["name"]
@@ -292,7 +361,7 @@ def daily_planning(state: AgentState) -> AgentState:
 
         if backlog_topics:
             lines.append("📌 Also due but no window today:")
-            for topic in backlog_topics[:3]: # cap at  3 to avoid wall of text
+            for topic in backlog_topics[:3]:  # cap at 3 to avoid wall of text
                 lines.append(f" • {topic['name']}")
             if len(backlog_topics) > 5:
                 lines.append(f" • +{len(backlog_topics) - 3} more")

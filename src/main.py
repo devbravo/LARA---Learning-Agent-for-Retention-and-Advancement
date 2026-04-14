@@ -5,6 +5,8 @@ Starts FastAPI (via uvicorn) and APScheduler in the same async process.
 """
 
 import os
+import sys
+import signal
 import asyncio
 import logging
 
@@ -45,9 +47,19 @@ async def main() -> None:
         loop="asyncio",
     )
     server = uvicorn.Server(config)
+
+    loop = asyncio.get_running_loop()
+
+    def _handle_exit() -> None:
+        logger.info("Shutting down Learning Manager…")
+        server.should_exit = True
+
+    loop.add_signal_handler(signal.SIGTERM, _handle_exit)
+    loop.add_signal_handler(signal.SIGINT, _handle_exit)
+
     logger.info("Starting LARA on %s:%s", _HOST, _PORT)
     await server.serve()
-
+    sys.exit(0)
 
 
 if __name__ == "__main__":

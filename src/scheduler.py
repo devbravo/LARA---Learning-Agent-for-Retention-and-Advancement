@@ -2,8 +2,9 @@
 APScheduler setup for the Learning Manager agent.
 
 Jobs:
-  - Daily 08:00 (Mon–Sat) → trigger="daily"
-  - Sunday 09:00          → trigger="daily"  (weekly planning variant)
+  - Daily 08:00 (Mon–Sat)  → trigger="daily"   (morning briefing)
+  - Sunday 09:00           → trigger="daily"   (weekly planning variant)
+  - Daily 23:10 (Mon–Sat)  → trigger="evening" (tomorrow's preview — TODO: change to 20:00)
 
 Timezone: America/Paramaribo
 Guard:    never invoke during the 15:00–19:30 protected block.
@@ -62,6 +63,22 @@ def _run_daily_planning() -> None:
             pass
 
 
+def _run_evening_briefing() -> None:
+    chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
+    if _is_protected_block():
+        logger.warning("Evening briefing skipped — inside protected block (15:00–19:30).")
+        return
+    logger.info("Scheduler: firing evening briefing for chat_id=%s", chat_id)
+    try:
+        _graph.invoke(trigger="evening", chat_id=chat_id)
+    except Exception as e:
+        logger.error("Evening briefing graph error: %s", e)
+        try:
+            send_message(f"⚠️ Evening briefing failed: {e}")
+        except Exception:
+            pass
+
+
 def build_scheduler() -> AsyncIOScheduler:
     config = _load_config()
     scheduler = AsyncIOScheduler(timezone=_TZ)
@@ -87,6 +104,16 @@ def build_scheduler() -> AsyncIOScheduler:
         name=f"Weekly Planning (Sun {sunday['hour']:02d}:{sunday['minute']:02d})",
         replace_existing=True,
         misfire_grace_time=sunday["misfire_grace_time"],
+    )
+
+    # TODO: change to 20:00 before production deploy
+    scheduler.add_job(
+        _run_evening_briefing,
+        trigger=CronTrigger(day_of_week="mon-sat", hour=23, minute=10, timezone=_TZ),
+        id="evening_briefing",
+        name="Evening Briefing — Tomorrow's Preview (Mon–Sat 23:10)",
+        replace_existing=True,
+        misfire_grace_time=daily["misfire_grace_time"],
     )
 
     return scheduler
