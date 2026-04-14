@@ -199,7 +199,7 @@ topics:
   # Behavioral & Experience (quantified impact — Factored gap)
   - name: "Behavioral - STAR Method"
     tier: 1
-    status: in_progress
+    status: inactive
     default_duration_minutes: 45
   - name: "Behavioral - CodeDealers Story (quantified)"
     tier: 1
@@ -215,7 +215,7 @@ topics:
     default_duration_minutes: 30
   - name: "Behavioral - Monologue Control & Engagement"
     tier: 1
-    status: in_progress
+    status: inactive
     default_duration_minutes: 30
 
   # RAG - Indexing & Retrieval

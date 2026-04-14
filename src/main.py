@@ -54,12 +54,17 @@ async def main() -> None:
         logger.info("Shutting down Learning Manager…")
         server.should_exit = True
 
-    loop.add_signal_handler(signal.SIGTERM, _handle_exit)
-    loop.add_signal_handler(signal.SIGINT, _handle_exit)
+    try:
+        loop.add_signal_handler(signal.SIGTERM, _handle_exit)
+        loop.add_signal_handler(signal.SIGINT, _handle_exit)
+    except NotImplementedError:
+        logger.warning(
+            "Signal handlers are not supported by the current event loop/platform; "
+            "continuing without custom SIGTERM/SIGINT handlers."
+        )
 
     logger.info("Starting LARA on %s:%s", _HOST, _PORT)
     await server.serve()
-    sys.exit(0)
 
 
 if __name__ == "__main__":

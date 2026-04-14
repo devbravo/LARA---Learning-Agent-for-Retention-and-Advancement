@@ -373,7 +373,7 @@ def daily_planning(state: AgentState) -> AgentState:
                 "SELECT name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
             ).fetchall()
         if in_progress_rows:
-            lines.append("📌 In progress (via AlgoMonster):")
+            lines.append("📌 In progress:")
             for row in in_progress_rows:
                 lines.append(f"  • {row['name']}")
             lines.append("")
@@ -390,6 +390,7 @@ def daily_planning(state: AgentState) -> AgentState:
             "proposed_slot": proposed_slot,
             "proposed_slots": proposed_slots if proposed_slots else None,
             "has_study_plan": has_study_plan,
+            "preview_only": False,
             "messages": [message],
         }
 

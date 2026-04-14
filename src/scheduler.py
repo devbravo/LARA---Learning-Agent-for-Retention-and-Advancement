@@ -4,7 +4,7 @@ APScheduler setup for the Learning Manager agent.
 Jobs:
   - Daily 08:00 (Mon–Sat)  → trigger="daily"   (morning briefing)
   - Sunday 09:00           → trigger="daily"   (weekly planning variant)
-  - Daily 23:10 (Mon–Sat)  → trigger="evening" (tomorrow's preview — TODO: change to 20:00)
+  - Daily 20:00 (Mon–Sat)  → trigger="evening" (tomorrow's preview)
 
 Timezone: America/Paramaribo
 Guard:    never invoke during the 15:00–19:30 protected block.
@@ -107,7 +107,6 @@ def build_scheduler() -> AsyncIOScheduler:
         misfire_grace_time=sunday["misfire_grace_time"],
     )
 
-    # TODO: change to 20:00 before production deploy
     scheduler.add_job(
         _run_evening_briefing,
         trigger=CronTrigger(day_of_week="mon-sat", hour=evening["hour"], minute=evening["minute"], timezone=_TZ),
