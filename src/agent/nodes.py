@@ -377,9 +377,9 @@ def daily_planning(state: AgentState) -> AgentState:
                     t_s = _fmt_event_time(ev["start"])
                     t_e = _fmt_event_time(ev["end"])
                     dur = _event_duration_min(ev)
-                    dur_str = f"{dur}min" if dur else ""
+                    duration_suffix = f" ({dur})" if dur else ""
                     topic_nm = (ev.get("summary") or "").removeprefix("[Study] ")
-                    lines.append(f"  {t_s}–{t_e} → {topic_nm} ({dur_str}) · in progress")
+                    lines.append(f"  {t_s}–{t_e} → {topic_nm}{duration_suffix} · in progress")
                     lines.append("")  # blank line after each slot
         else:
             lines.append("🧠 Study windows: None found today")
@@ -392,7 +392,7 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("📌 Also due but no window today:")
             for topic in backlog_topics[:3]:
                 lines.append(f"  {topic['name']}")
-            if len(backlog_topics) > 5:
+            if len(backlog_topics) > 3:
                 lines.append(f"  +{len(backlog_topics) - 3} more")
             lines.append("")
 
