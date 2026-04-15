@@ -398,9 +398,9 @@ def daily_planning(state: AgentState) -> AgentState:
 
         has_study_plan = bool(proposed_slots)
         if has_study_plan:
-            lines.append("Confirm these study blocks?")
+            lines.append("Confirm these mock interview blocks?")
         else:
-            lines.append("No study windows available today — calendar fully booked.")
+            lines.append("No mock interview windows available today — calendar fully booked.")
 
         message = "\n".join(lines)
         return {
@@ -783,7 +783,7 @@ def output(state: AgentState) -> AgentState:
         if booked:
             summary = "\n".join(f"  • {t}" for t in booked)
             try:
-                _telegram.send_message(f"✅ Booked {len(booked)} study session(s):\n{summary}")
+                _telegram.send_message(f"✅ Booked {len(booked)} mock session(s):\n{summary}")
             except Exception as e:
                 print(f"[output] Confirmation send failed: {e}")
 

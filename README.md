@@ -217,7 +217,7 @@ sqlite3 db/learning.db "UPDATE topics SET status = 'inactive', updated_at = CURR
   10:00–11:00 → Gen AI System Design (60min)
   11:00–12:00 → Data Structures and Algorithms (60min)
 
-Confirm these study blocks?
+Confirm these mock interview blocks?
 [Yes, book them] [Skip]
 ```
 

@@ -262,7 +262,7 @@ async def webhook(
         elif message_text.strip().lower() == '/studied':
             with _db_get_connection() as conn:
                 rows = conn.execute(
-                    "SELECT name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
+                    "SELECT id, name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
                 ).fetchall()
             if not rows:
                 loop = asyncio.get_event_loop()
