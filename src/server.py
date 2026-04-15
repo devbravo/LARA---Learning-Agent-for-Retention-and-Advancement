@@ -22,7 +22,8 @@ from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
 from src.scheduler import build_scheduler
-from src.integrations.telegram_client import send_buttons, send_message
+from src.integrations.telegram_client import send_buttons, send_inline_buttons, send_message, remove_buttons
+from src.core.db import get_connection as _db_get_connection
 from contextlib import asynccontextmanager
 
 
@@ -178,6 +179,74 @@ async def webhook(
                 if message_id is not None:
                     extra["message_id"] = message_id
 
+        elif cb.startswith("studied:"):
+            topic_id = int(callback_data[len("studied:"):])  # preserve original case
+            if message_id is not None:
+                with _confirm_lock:
+                    if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
+                        logger.info("message_id=%s already processed for studied callback — ignoring", message_id)
+                        return JSONResponse({"ok": True})
+                    _in_flight_message_ids.add(message_id)
+            try:
+                with _db_get_connection() as conn:
+                    cursor = conn.execute(
+                        """UPDATE topics
+                           SET status = 'active',
+                               repetitions = 0,
+                               easiness_factor = 2.5,
+                               next_review = date('now', '+1 day'),
+                               updated_at = CURRENT_TIMESTAMP
+                           WHERE id = ?""",
+                        (topic_id,),
+                    )
+                    if cursor.rowcount == 0:
+                        raise ValueError(f"Topic id={topic_id} not found in DB")
+                    topic_name = conn.execute(
+                        "SELECT name FROM topics WHERE id = ?", (topic_id,)
+                    ).fetchone()["name"]
+
+                if message_id is not None:
+                    with _confirm_lock:
+                        _in_flight_message_ids.discard(message_id)
+                        _confirmed_message_ids.add(message_id)
+                        if len(_confirmed_message_ids) > _MAX_CONFIRMED:
+                            _confirmed_message_ids.discard(min(_confirmed_message_ids))
+
+                loop = asyncio.get_event_loop()
+                _tn = topic_name
+                loop.run_in_executor(
+                    None,
+                    lambda: send_message(
+                        f"✅ {_tn} graduated to active. First SM-2 review scheduled for tomorrow."
+                    ),
+                )
+                if chat_id is not None and message_id is not None:
+                    _cid, _mid = chat_id, message_id
+                    loop.run_in_executor(None, lambda: remove_buttons(_cid, _mid))
+
+            except Exception as e:
+                logger.error("studied: DB update failed for %s: %s", topic_id, e)
+                if message_id is not None:
+                    with _confirm_lock:
+                        _in_flight_message_ids.add(message_id)
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: send_message(f"⚠️ Failed to graduate topic: {e}"),
+                )
+                return JSONResponse({"ok": True})
+            _tn = topic_name
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(
+                None,
+                lambda: send_message(
+                    f"✅ {_tn} graduated to active. First SM-2 review scheduled for tomorrow."
+                ),
+            )
+            if chat_id is not None and message_id is not None:
+                _cid, _mid = chat_id, message_id
+                loop.run_in_executor(None, lambda: remove_buttons(_cid, _mid))
+            return JSONResponse({"ok": True})
+
         else:
             # Unknown callback — ignore
             return JSONResponse({"ok": True})
@@ -190,6 +259,25 @@ async def webhook(
             trigger = "on_demand"
         elif message_text.strip().lower() == '/briefing':
             trigger = "daily"
+        elif message_text.strip().lower() == '/studied':
+            with _db_get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
+                ).fetchall()
+            if not rows:
+                loop = asyncio.get_event_loop()
+                loop.run_in_executor(
+                    None,
+                    lambda: send_message("No topics are currently in progress."),
+                )
+            else:
+                buttons = [(row["name"], f"studied:{row['id']}") for row in rows]
+                loop = asyncio.get_event_loop()
+                loop.run_in_executor(
+                    None,
+                    lambda: send_inline_buttons("Which topic did you just study?", buttons),
+                )
+            return JSONResponse({"ok": True})
         else:
             state = _graph.get_state(chat_id)
             if state.get("awaiting_weak_areas"):

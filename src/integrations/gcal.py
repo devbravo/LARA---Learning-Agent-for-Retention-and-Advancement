@@ -86,10 +86,10 @@ def get_events(day: date) -> list[dict]:
 
 def write_event(topic: str, start: str, end: str) -> dict:
     """
-    Create a new [Study] event on GOOGLE_CALENDAR_ID.
+    Create a new [Mock] event on GOOGLE_CALENDAR_ID.
 
     Args:
-        topic: Topic name — prefixed with '[Study]' automatically.
+        topic: Topic name — prefixed with '[Mock]' automatically.
         start: ISO-8601 datetime string (e.g. '2026-04-03T09:00:00').
         end:   ISO-8601 datetime string.
 
@@ -97,7 +97,7 @@ def write_event(topic: str, start: str, end: str) -> dict:
     """
     calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
     body = {
-        "summary": f"[Study] {topic}",
+        "summary": f"[Mock] {topic}",
         "description": "Booked by LARA - Personal Learning Assistant",
         "start": {"dateTime": start, "timeZone": "UTC"},
         "end": {"dateTime": end, "timeZone": "UTC"},
