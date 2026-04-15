@@ -45,6 +45,25 @@ async def _send_buttons(text: str, buttons: list[str]) -> None:
         raise RuntimeError(f"Telegram send_buttons failed: {e}") from e
 
 
+async def _send_inline_buttons(text: str, buttons: list[tuple[str, str]]) -> None:
+    """Send a message with inline keyboard where label and callback_data can differ.
+    Each button is a (label, callback_data) tuple. One button per row."""
+    bot, chat_id = _get_bot()
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(label, callback_data=data)] for label, data in buttons]
+    )
+    try:
+        async with bot:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+    except TelegramError as e:
+        raise RuntimeError(f"Telegram send_inline_buttons failed: {e}") from e
+
+
 async def _remove_buttons(chat_id: int, message_id: int) -> None:
     bot, _ = _get_bot()
     try:
@@ -64,6 +83,10 @@ def send_message(text: str) -> None:
 
 def send_buttons(text: str, buttons: list[str]) -> None:
     asyncio.run(_send_buttons(text, buttons))
+
+
+def send_inline_buttons(text: str, buttons: list[tuple[str, str]]) -> None:
+    asyncio.run(_send_inline_buttons(text, buttons))
 
 
 def remove_buttons(chat_id: int, message_id: int) -> None:

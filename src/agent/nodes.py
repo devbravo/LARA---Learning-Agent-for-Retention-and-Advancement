@@ -305,10 +305,7 @@ def daily_planning(state: AgentState) -> AgentState:
                 dur = _event_duration_min(ev)
                 dur_str = f"{dur}min" if dur else ""
                 summary = ev.get("summary", "(No title)")
-                booked_marker = " ✓ already booked" if any(
-                    _is_topic_in_summary(tn, summary) for tn in prebooked
-                ) else ""
-                lines.append(f" • {t} {summary}{' (' + dur_str + ')' if dur_str else ''}{booked_marker}")
+                lines.append(f"  {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
         else:
             lines.append("📅 Your day: No meetings today")
         lines.append("")
@@ -325,69 +322,78 @@ def daily_planning(state: AgentState) -> AgentState:
         MAX_SLOTS = 6
         min_window_minutes = config.get("min_window_minutes", 25)
 
-        if free_windows:
+        # [Study] events = in_progress sessions manually scheduled by Diego
+        study_events = [
+            e for e in timed_events
+            if (e.get("summary") or "").startswith("[Study]")
+        ]
+
+        if free_windows or study_events:
             lines.append("🧠 Today's study plan:")
+            lines.append("")  # blank line after section header
 
-            remaining_topics = list(available_topics)
-            for win in free_windows:
-                if not remaining_topics or len(proposed_slots) >= MAX_SLOTS:
-                    break
-                cursor = datetime.combine(target_date, win["start"])
-                win_end = datetime.combine(target_date, win["end"])
-                while remaining_topics and len(proposed_slots) < MAX_SLOTS:
-                    remaining_min = int((win_end - cursor).total_seconds() // 60)
-                    if remaining_min < min_window_minutes:
-                        break  # not enough time left in this window for anything useful
-                    topic = remaining_topics[0]
-                    topic_cfg = _get_topic_config(topic["name"], topics_config)
-                    default_duration = topic_cfg.get("default_duration_minutes", 60)
-                    duration = min(default_duration, remaining_min)
-                    end_dt = cursor + timedelta(minutes=duration)
-                    t_start = _fmt_time(cursor.time())
-                    t_end = _fmt_time(end_dt.time())
-                    lines.append(f" • {t_start}–{t_end} → {topic['name']} ({duration}min)")
-                    if topic.get("weak_areas"):
-                        lines.append(f"    ⚠️ Focus on: {topic['weak_areas']}")
+            if free_windows:
+                remaining_topics = list(available_topics)
+                for win in free_windows:
+                    if not remaining_topics or len(proposed_slots) >= MAX_SLOTS:
+                        break
+                    cursor = datetime.combine(target_date, win["start"])
+                    win_end = datetime.combine(target_date, win["end"])
+                    while remaining_topics and len(proposed_slots) < MAX_SLOTS:
+                        remaining_min = int((win_end - cursor).total_seconds() // 60)
+                        if remaining_min < min_window_minutes:
+                            break  # not enough time left in this window for anything useful
+                        topic = remaining_topics[0]
+                        topic_cfg = _get_topic_config(topic["name"], topics_config)
+                        default_duration = topic_cfg.get("default_duration_minutes", 60)
+                        duration = min(default_duration, remaining_min)
+                        end_dt = cursor + timedelta(minutes=duration)
+                        t_start = _fmt_time(cursor.time())
+                        t_end = _fmt_time(end_dt.time())
+                        lines.append(f"  {t_start}–{t_end} → {topic['name']} ({duration}min)")
+                        if topic.get("weak_areas"):
+                            lines.append(f"  ⚠️ Focus on: {topic['weak_areas']}")
+                        lines.append("")  # blank line after each slot
 
-                    slot = {
-                        "topic": topic["name"],
-                        "start": t_start,
-                        "end": t_end,
-                        "duration_min": duration,
-                    }
-                    proposed_slots.append(slot)
+                        slot = {
+                            "topic": topic["name"],
+                            "start": t_start,
+                            "end": t_end,
+                            "duration_min": duration,
+                        }
+                        proposed_slots.append(slot)
 
-                    # Keep single-slot fields pointing at the first block (backwards compatible)
-                    if proposed_topic is None:
-                        proposed_topic = topic["name"]
-                        proposed_slot = slot
+                        # Keep single-slot fields pointing at the first block (backwards compatible)
+                        if proposed_topic is None:
+                            proposed_topic = topic["name"]
+                            proposed_slot = slot
 
-                    cursor = end_dt
-                    remaining_topics.pop(0)
+                        cursor = end_dt
+                        remaining_topics.pop(0)
+
+            # [Study] calendar events → show as in-progress sessions at the end of the plan
+            if study_events:
+                for ev in study_events:
+                    t_s = _fmt_event_time(ev["start"])
+                    t_e = _fmt_event_time(ev["end"])
+                    dur = _event_duration_min(ev)
+                    dur_str = f"{dur}min" if dur else ""
+                    topic_nm = (ev.get("summary") or "").removeprefix("[Study] ")
+                    lines.append(f"  {t_s}–{t_e} → {topic_nm} ({dur_str}) · in progress")
+                    lines.append("")  # blank line after each slot
         else:
             lines.append("🧠 Study windows: None found today")
-        lines.append("")
+            lines.append("")
 
         assigned_names = {slot["topic"] for slot in proposed_slots}
         backlog_topics = [t for t in available_topics if t["name"] not in assigned_names]
 
         if backlog_topics:
             lines.append("📌 Also due but no window today:")
-            for topic in backlog_topics[:3]:  # cap at 3 to avoid wall of text
-                lines.append(f" • {topic['name']}")
+            for topic in backlog_topics[:3]:
+                lines.append(f"  {topic['name']}")
             if len(backlog_topics) > 5:
-                lines.append(f" • +{len(backlog_topics) - 3} more")
-            lines.append("")
-
-        # In-progress topics (informational only — not assigned to windows)
-        with get_connection() as conn:
-            in_progress_rows = conn.execute(
-                "SELECT name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
-            ).fetchall()
-        if in_progress_rows:
-            lines.append("📌 In progress:")
-            for row in in_progress_rows:
-                lines.append(f"  • {row['name']}")
+                lines.append(f"  +{len(backlog_topics) - 3} more")
             lines.append("")
 
         has_study_plan = bool(proposed_slots)
