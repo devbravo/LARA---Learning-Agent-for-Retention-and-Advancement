@@ -32,7 +32,9 @@ and books [Study] events on Google Calendar after user confirmation.
 |---|---|
 | APScheduler daily | `daily_planning` → `confirm` → `output` |
 | APScheduler Sunday | Weekly planning variant of `daily_planning` |
-| `/study` + duration tap | `on_demand` → `generate_brief` → `confirm` |
+| APScheduler evening | `daily_planning` (tomorrow preview) → `output` |
+| `/study` | `on_demand` → `generate_brief` → `confirm` |
+| Duration tap (`30/45/60 min`) | `on_demand` → `generate_brief` → `confirm` |
 | `confirm` tap | `output` → writes GCal events |
 | `/done` | `done_parser` → END (waits for rating tap) |
 | Rating tap (😕 😐 😊) | `log_session` → `output` → END (waits for weak areas reply) |
@@ -44,6 +46,8 @@ and books [Study] events on Google Calendar after user confirmation.
 ```
 START → router → daily_planning → confirm → END
                                └→ output → END (no plan)
+
+               → daily_planning (evening trigger) → output → END (preview only)
 
                → on_demand → generate_brief → confirm → END
 
@@ -88,7 +92,7 @@ Never modify a Google Calendar event unless `creator.self == True`.
 The agent reads all events to plan around them but only writes events it created.
 All agent-created events are prefixed `[Study]`.
 
-Always enforce this in `write_calendar_event`:
+Enforce this in the calendar write path (tool/integration boundary):
 ```python
 if not event.get("creator", {}).get("self", False):
     raise PermissionError("Cannot modify event not created by this agent")
@@ -112,11 +116,11 @@ Confirm these study blocks?
 [Yes, book them] [Skip]
 ```
 
-**On-demand study:** `/study` → `[30 min] [45 min] [60 min]`
+**On-demand study:** `/study` triggers a default on-demand brief (currently 30min unless a duration is provided via callback).
 
 **Done flow:** `/done` → rating buttons → weak areas prompt → next topic or done
 
-**Never message during:** protected block defined in config.yaml (default 22:00–23:00)
+**Never message during:** protected block defined in `config.yaml` (current default in repo: `15:00-19:00`).
 
 ---
 
@@ -132,6 +136,7 @@ Confirm these study blocks?
 | `proposed_slot` | dict | Single-slot flow (on_demand) |
 | `proposed_slots` | list[dict] | Multi-slot flow (daily_planning) |
 | `has_study_plan` | bool | False → skip confirm, go to output |
+| `preview_only` | bool | True for evening preview (skip confirm, go to output) |
 | `current_topic_id` | int | Topic currently being rated/logged |
 | `current_topic_name` | str | Topic name for display |
 | `awaiting_weak_areas` | bool | True = next plain text is a weak areas reply |
@@ -146,6 +151,7 @@ Confirm these study blocks?
 |---|---|---|
 | POST | `/webhook` | Telegram webhook receiver |
 | GET | `/health` | VPS uptime check |
+| GET | `/scheduler-status` | Scheduler running state + job metadata |
 
 ---
 
@@ -179,8 +185,8 @@ suggestions
 - POC first — minimum features that solve the real problem
 - No LLM where a formula works — SM-2 and gap_finder are pure Python
 - Claude API only inside `generate_brief` — no other node calls the LLM
-- Calendar safety rule is non-negotiable — enforce it at the tool level
-- `get_connection()` from `src.core.db` for all SQLite access — never open raw connections
+- Calendar safety rule is non-negotiable — enforce it in calendar write boundaries
+- Prefer `get_connection()` from `src.core.db` for SQLite access (legacy direct connections may still exist)
 - Error handling required in all nodes — catch exceptions, return user-friendly messages
 - Never overwrite checkpointed state with None — only pass kwargs that are explicitly provided
 
