@@ -44,11 +44,11 @@ topics:
  # Tier 1 — Data Structures (flagged weak in profiling)
   - name: "DSA - Arrays"
     tier: 1
-    status: active
+    status: in_progress
     default_duration_minutes: 15
   - name: "DSA - Strings"
     tier: 1
-    status: in_progress
+    status: inactive
     default_duration_minutes: 15
   - name: "DSA - Linked Lists"
     tier: 1
