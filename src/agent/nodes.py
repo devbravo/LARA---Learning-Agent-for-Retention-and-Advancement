@@ -322,42 +322,54 @@ def daily_planning(state: AgentState) -> AgentState:
         available_topics = [t for t in due_topics if t["name"] not in prebooked]
         topics_config = _load_topics()
 
+        MAX_SLOTS = 6
+        min_window_minutes = config.get("min_window_minutes", 25)
+
         if free_windows:
             lines.append("🧠 Today's study plan:")
 
-            for i, win in enumerate(free_windows):
-                topic = available_topics[i] if i < len(available_topics) else None
-                if topic is None:
-                    break  # no more topics to assign
-                topic_cfg = _get_topic_config(topic["name"], topics_config)
-                default_duration = topic_cfg.get("default_duration_minutes", 60)
-                duration = min(default_duration, win["duration_min"])
-                t_start = _fmt_time(win["start"])
-                start_dt = datetime.combine(target_date, win["start"])
-                end_dt = start_dt + timedelta(minutes=duration)
-                t_end = _fmt_time(end_dt.time())
-                lines.append(f" • {t_start}–{t_end} → {topic['name']} ({duration}min)")
-                if topic.get("weak_areas"):
-                    lines.append(f"    ⚠️ Focus on: {topic['weak_areas']}")
+            remaining_topics = list(available_topics)
+            for win in free_windows:
+                if not remaining_topics or len(proposed_slots) >= MAX_SLOTS:
+                    break
+                cursor = datetime.combine(target_date, win["start"])
+                win_end = datetime.combine(target_date, win["end"])
+                while remaining_topics and len(proposed_slots) < MAX_SLOTS:
+                    remaining_min = int((win_end - cursor).total_seconds() // 60)
+                    if remaining_min < min_window_minutes:
+                        break  # not enough time left in this window for anything useful
+                    topic = remaining_topics[0]
+                    topic_cfg = _get_topic_config(topic["name"], topics_config)
+                    default_duration = topic_cfg.get("default_duration_minutes", 60)
+                    duration = min(default_duration, remaining_min)
+                    end_dt = cursor + timedelta(minutes=duration)
+                    t_start = _fmt_time(cursor.time())
+                    t_end = _fmt_time(end_dt.time())
+                    lines.append(f" • {t_start}–{t_end} → {topic['name']} ({duration}min)")
+                    if topic.get("weak_areas"):
+                        lines.append(f"    ⚠️ Focus on: {topic['weak_areas']}")
 
-                slot = {
-                    "topic": topic["name"],
-                    "start": _fmt_time(win["start"]),
-                    "end": _fmt_time(end_dt.time()),
-                    "duration_min": duration,
-                }
-                proposed_slots.append(slot)
+                    slot = {
+                        "topic": topic["name"],
+                        "start": t_start,
+                        "end": t_end,
+                        "duration_min": duration,
+                    }
+                    proposed_slots.append(slot)
 
-                # Keep single-slot fields pointing at the first block (backwards compatible)
-                if i == 0:
-                    proposed_topic = topic["name"]
-                    proposed_slot = slot
+                    # Keep single-slot fields pointing at the first block (backwards compatible)
+                    if proposed_topic is None:
+                        proposed_topic = topic["name"]
+                        proposed_slot = slot
+
+                    cursor = end_dt
+                    remaining_topics.pop(0)
         else:
             lines.append("🧠 Study windows: None found today")
         lines.append("")
 
-        assigned_count = len(proposed_slots)
-        backlog_topics = available_topics[assigned_count:]
+        assigned_names = {slot["topic"] for slot in proposed_slots}
+        backlog_topics = [t for t in available_topics if t["name"] not in assigned_names]
 
         if backlog_topics:
             lines.append("📌 Also due but no window today:")
