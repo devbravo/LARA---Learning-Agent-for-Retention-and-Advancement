@@ -18,7 +18,7 @@ topics:
     default_duration_minutes: 15
   - name: "DSA - Depth First Search"
     tier: 1
-    status: in_progress
+    status: inactive
     default_duration_minutes: 30
   - name: "DSA - Backtracking"
     tier: 1
@@ -33,32 +33,59 @@ topics:
     status: inactive
     default_duration_minutes: 30
   - name: "DSA - Priority Queue"
-    tier: 1
-    status: inactive
-    default_duration_minutes: 30
-  - name: "DSA - Heap"
-    tier: 1
+    tier: 2
     status: inactive
     default_duration_minutes: 30
   - name: "DSA - Dynamic Programming"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 30
+
+ # Tier 1 — Data Structures (flagged weak in profiling)
+  - name: "DSA - Arrays"
+    tier: 1
+    status: active
+    default_duration_minutes: 15
+  - name: "DSA - Strings"
+    tier: 1
+    status: in_progress
+    default_duration_minutes: 15
+  - name: "DSA - Linked Lists"
     tier: 1
     status: inactive
     default_duration_minutes: 30
-  - name: "DSA - Hash Tables"
+  - name: "DSA - Queue"
     tier: 1
     status: inactive
     default_duration_minutes: 30
+  - name: "DSA - Hash Tables & Sets"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "DSA - Stack"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "DSA - Trees"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+  - name: "DSA - Heaps"
+    tier: 1
+    status: inactive
+    default_duration_minutes: 30
+
 
 
   # LLMOps - Monitoring (scored 2/4 — TOP GAP)
   - name: "LLMOps - Alerting & Thresholds"
     tier: 1
     status: active
-    default_duration_minutes: 30
+    default_duration_minutes: 60
   - name: "LLMOps - Feedback Loops & User Signals"
     tier: 1
     status: active
-    default_duration_minutes: 30
+    default_duration_minutes: 60
   - name: "LLMOps - Data & Concept Drift"
     tier: 1
     status: inactive
@@ -74,7 +101,7 @@ topics:
   - name: "LLMOps - Cost & Token Tracking"
     tier: 1
     status: inactive
-    default_duration_minutes: 45
+    default_duration_minutes: 60
 
   # LLMOps - Observability & Evaluation
   - name: "LLMOps - Evaluation & LLM-as-Judge"
