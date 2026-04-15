@@ -323,6 +323,7 @@ def daily_planning(state: AgentState) -> AgentState:
         topics_config = _load_topics()
 
         MAX_SLOTS = 6
+        min_window_minutes = config.get("min_window_minutes", 25)
 
         if free_windows:
             lines.append("🧠 Today's study plan:")
@@ -334,15 +335,17 @@ def daily_planning(state: AgentState) -> AgentState:
                 cursor = datetime.combine(target_date, win["start"])
                 win_end = datetime.combine(target_date, win["end"])
                 while remaining_topics and len(proposed_slots) < MAX_SLOTS:
+                    remaining_min = int((win_end - cursor).total_seconds() // 60)
+                    if remaining_min < min_window_minutes:
+                        break  # not enough time left in this window for anything useful
                     topic = remaining_topics[0]
                     topic_cfg = _get_topic_config(topic["name"], topics_config)
                     default_duration = topic_cfg.get("default_duration_minutes", 60)
-                    if cursor + timedelta(minutes=default_duration) > win_end:
-                        break  # topic doesn't fit in remaining window time; skip to next window
-                    end_dt = cursor + timedelta(minutes=default_duration)
+                    duration = min(default_duration, remaining_min)
+                    end_dt = cursor + timedelta(minutes=duration)
                     t_start = _fmt_time(cursor.time())
                     t_end = _fmt_time(end_dt.time())
-                    lines.append(f" • {t_start}–{t_end} → {topic['name']} ({default_duration}min)")
+                    lines.append(f" • {t_start}–{t_end} → {topic['name']} ({duration}min)")
                     if topic.get("weak_areas"):
                         lines.append(f"    ⚠️ Focus on: {topic['weak_areas']}")
 
@@ -350,7 +353,7 @@ def daily_planning(state: AgentState) -> AgentState:
                         "topic": topic["name"],
                         "start": t_start,
                         "end": t_end,
-                        "duration_min": default_duration,
+                        "duration_min": duration,
                     }
                     proposed_slots.append(slot)
 
