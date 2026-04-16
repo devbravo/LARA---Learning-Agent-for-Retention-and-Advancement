@@ -74,6 +74,8 @@ async def _remove_buttons(chat_id: int, message_id: int) -> None:
                 reply_markup=None,
             )
     except TelegramError as e:
+        if "Message is not modified" in str(e):
+            return # already removed, ignore
         raise RuntimeError(f"Telegram remove_buttons failed: {e}") from e
 
 
