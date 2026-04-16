@@ -40,6 +40,9 @@ from src.agent.nodes import (
     router,
     sm2_engine,
     on_demand,
+    study_topic,
+    study_topic_category,
+    study_topic_confirm,
 )
 
 _DB_DIR = Path(__file__).parents[2] / "db"
@@ -68,6 +71,9 @@ def build_graph(checkpointer=None):
     builder.add_node("log_session", log_session)
     builder.add_node("log_weak_areas", log_weak_areas)
     builder.add_node("output", output)
+    builder.add_node("study_topic", study_topic)
+    builder.add_node("study_topic_category", study_topic_category)
+    builder.add_node("study_topic_confirm", study_topic_confirm)
 
     # Entry point
     builder.add_edge(START, "router")
@@ -77,12 +83,15 @@ def build_graph(checkpointer=None):
         "router",
         route_from_router,
         {
-            "daily_planning": "daily_planning",
-            "on_demand": "on_demand",
-            "done_parser": "done_parser",
-            "output": "output",
-            "log_session": "log_session",
-            "log_weak_areas": "log_weak_areas",
+            "daily_planning":       "daily_planning",
+            "on_demand":            "on_demand",
+            "done_parser":          "done_parser",
+            "output":               "output",
+            "log_session":          "log_session",
+            "log_weak_areas":       "log_weak_areas",
+            "study_topic":          "study_topic",
+            "study_topic_category": "study_topic_category",
+            "study_topic_confirm":  "study_topic_confirm",
         },
     )
 
@@ -101,6 +110,11 @@ def build_graph(checkpointer=None):
     builder.add_edge("log_session", "output")
     builder.add_edge("log_weak_areas", "output")
     builder.add_edge("output", END)
+
+    # study_topic flow
+    builder.add_edge("study_topic", END)
+    builder.add_edge("study_topic_category", END)
+    builder.add_edge("study_topic_confirm", END)
 
     if checkpointer is None:
         _DB_DIR.mkdir(parents=True, exist_ok=True)
@@ -144,7 +158,8 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
     # Only include kwargs that are explicitly provided — don't overwrite
     # checkpointed state with None values
     for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot",
-                "quality_score", "messages", "current_topic_id", "current_topic_name"):
+                "quality_score", "messages", "current_topic_id", "current_topic_name",
+                "study_topic_category"):
         if kwargs.get(key) is not None:
             initial_state[key] = kwargs[key]
 
