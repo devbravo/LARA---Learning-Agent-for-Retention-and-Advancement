@@ -305,7 +305,7 @@ def daily_planning(state: AgentState) -> AgentState:
                 dur = _event_duration_min(ev)
                 dur_str = f"{dur}min" if dur else ""
                 summary = ev.get("summary", "(No title)")
-                lines.append(f"  {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
+                lines.append(f"• {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
         else:
             lines.append("📅 Your day: No meetings today")
         lines.append("")
@@ -322,15 +322,8 @@ def daily_planning(state: AgentState) -> AgentState:
         MAX_SLOTS = 6
         min_window_minutes = config.get("min_window_minutes", 25)
 
-        # [Study] events = in_progress sessions manually scheduled by Diego
-        study_events = [
-            e for e in timed_events
-            if (e.get("summary") or "").startswith("[Study]")
-        ]
-
-        if free_windows or study_events:
-            lines.append("🧠 Today's study plan:")
-            lines.append("")  # blank line after section header
+        if free_windows:
+            lines.append("🧠 Today's mock interview:")
 
             if free_windows:
                 remaining_topics = list(available_topics)
@@ -350,9 +343,9 @@ def daily_planning(state: AgentState) -> AgentState:
                         end_dt = cursor + timedelta(minutes=duration)
                         t_start = _fmt_time(cursor.time())
                         t_end = _fmt_time(end_dt.time())
-                        lines.append(f"  {t_start}–{t_end} → {topic['name']} ({duration}min)")
+                        lines.append(f" • {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
                         if topic.get("weak_areas"):
-                            lines.append(f"  ⚠️ Focus on: {topic['weak_areas']}")
+                            lines.append(f" ⚠️ Focus on: {topic['weak_areas']}")
                         lines.append("")  # blank line after each slot
 
                         slot = {
@@ -371,18 +364,18 @@ def daily_planning(state: AgentState) -> AgentState:
                         cursor = end_dt
                         remaining_topics.pop(0)
 
-            # [Study] calendar events → show as in-progress sessions at the end of the plan
-            if study_events:
-                for ev in study_events:
-                    t_s = _fmt_event_time(ev["start"])
-                    t_e = _fmt_event_time(ev["end"])
-                    dur = _event_duration_min(ev)
-                    duration_suffix = f" ({dur})" if dur else ""
-                    topic_nm = (ev.get("summary") or "").removeprefix("[Study] ")
-                    lines.append(f"  {t_s}–{t_e} → {topic_nm}{duration_suffix} · in progress")
-                    lines.append("")  # blank line after each slot
         else:
             lines.append("🧠 Study windows: None found today")
+            lines.append("")
+
+        with get_connection() as conn:
+            in_progress_rows = conn.execute(
+                "SELECT name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
+            ).fetchall()
+        if in_progress_rows:
+            lines.append("⏳ In Progress:")
+            for row in in_progress_rows:
+                lines.append(f"  • {row['name']}")
             lines.append("")
 
         assigned_names = {slot["topic"] for slot in proposed_slots}
