@@ -77,8 +77,17 @@ lara/
 ├── credentials/             # GCal OAuth credentials (gitignored)
 ├── src/
 │   ├── main.py              # Entry point — starts FastAPI + scheduler
-│   ├── server.py            # FastAPI webhook receiver
+│   ├── server.py            # Backwards compat re-export: from src.api.app import app
+│   ├── webhook_handler.py   # Intent detection, dedup, _invoke_safe, handle_update()
 │   ├── scheduler.py         # APScheduler jobs
+│   ├── api/
+│   │   ├── app.py           # FastAPI app factory + lifespan
+│   │   ├── routes/
+│   │   │   ├── health.py          # GET /health
+│   │   │   ├── webhook.py         # POST /webhook (auth + parse)
+│   │   │   └── scheduler_status.py  # GET /scheduler-status
+│   │   └── schemas/
+│   │       └── telegram.py  # Pydantic models for Telegram payloads
 │   ├── agent/
 │   │   ├── graph.py         # LangGraph graph + SqliteSaver checkpointer
 │   │   ├── nodes.py         # Node implementations + AgentState
@@ -94,7 +103,9 @@ lara/
 └── tests/
     ├── test_sm2.py
     ├── test_gap_finder.py
-    └── test_tools.py
+    ├── test_tools.py
+    ├── test_study_topic.py
+    └── test_webhook_handler.py
 ```
 
 ---

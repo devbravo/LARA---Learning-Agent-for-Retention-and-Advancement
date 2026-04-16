@@ -1,44 +1,28 @@
 """
-FastAPI webhook server for the Learning Manager agent.
+Telegram webhook handler — intent detection, deduplication, and graph invocation.
 
-Endpoints:
-  GET  /health   — uptime check
-  POST /webhook  — Telegram update receiver
+Extracted from src/server.py as part of API structure refactor.
+All business logic lives here; src/api/routes/webhook.py handles only auth + parsing.
 """
 
-import logging
 import asyncio
+import logging
 import os
 import threading
 
-from pathlib import Path
-
-from dotenv import load_dotenv
-
-load_dotenv(Path(__file__).parents[1] / ".env", override=True)
-
-from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
-from src.scheduler import build_scheduler
-from src.integrations.telegram_client import send_buttons, send_inline_buttons, send_message, remove_buttons
-from src.core.db import get_connection as _db_get_connection
-from contextlib import asynccontextmanager
-
+from src.models.telegram import TelegramUpdate
+from src.core.db import get_connection
+from src.integrations.telegram_client import (
+    remove_buttons,
+    send_buttons,
+    send_inline_buttons,
+    send_message,
+)
 
 logger = logging.getLogger(__name__)
-
-@asynccontextmanager
-async def lifespan(fastapi_app: FastAPI):
-    app_scheduler = build_scheduler()
-    app_scheduler.start()
-    fastapi_app.state.scheduler = app_scheduler
-    yield
-    app_scheduler.shutdown(wait=False)
-
-
-app = FastAPI(title="LARA", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 # Deduplication guard — keeps last 1000 processed update_ids in memory
 _processed_updates: set[int] = set()
@@ -52,41 +36,47 @@ _MAX_CONFIRMED = 1000
 _confirm_lock = threading.Lock()
 
 
-# ---------------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------------
+def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
+    """Invoke the graph, catching all exceptions so executor threads never crash."""
+    message_id: int | None = kwargs.get("message_id")
+    try:
+        logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
+        _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
+        state_db_path = os.path.abspath("db/state.db")
+        try:
+            logger.debug("Graph invoke done, checking state.db size: %s", state_db_path)
+            logger.debug("state.db size: %s bytes", os.path.getsize(state_db_path))
+        except OSError as e:
+            logger.debug("Unable to read state.db size at %s: %s", state_db_path, e)
+        logger.info("Graph invocation complete: trigger=%s", trigger)
+        if trigger in ("confirm", "on_demand", "rate", "study_topic_confirm", "studied") and message_id is not None:
+            with _confirm_lock:
+                _in_flight_message_ids.discard(message_id)
+                _confirmed_message_ids.add(message_id)
+                if len(_confirmed_message_ids) > _MAX_CONFIRMED:
+                    _confirmed_message_ids.discard(min(_confirmed_message_ids))
+    except Exception as e:
+        logger.error(
+            "Graph invocation failed [trigger=%s chat_id=%s]: %s",
+            trigger, chat_id, e, exc_info=True,
+        )
+        if message_id is not None:
+            with _confirm_lock:
+                _in_flight_message_ids.discard(message_id)
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
 
-
-# ---------------------------------------------------------------------------
-# Webhook
-# ---------------------------------------------------------------------------
-
-@app.post("/webhook")
-async def webhook(
-    request: Request,
-    x_telegram_bot_api_secret_token: str | None = Header(default=None),
-):
-    # --- Auth ---
-    expected = os.environ.get("WEBHOOK_SECRET", "")
-    if expected and x_telegram_bot_api_secret_token != expected:
-        raise HTTPException(status_code=403, detail="Invalid secret token")
-
-    update = await request.json()
-    logger.debug("Webhook update: %s", update)
+async def handle_update(update: TelegramUpdate) -> JSONResponse:
+    """Process a Telegram update: dedup, extract intent, invoke graph."""
+    logger.debug("Webhook update: update_id=%s", update.update_id)
 
     # --- Deduplication ---
-    update_id: int | None = update.get("update_id")
-    if update_id is not None:
-        if update_id in _processed_updates:
-            logger.info("Duplicate update_id=%s — skipping", update_id)
-            return JSONResponse({"ok": True})
-        _processed_updates.add(update_id)
-        if len(_processed_updates) > _MAX_PROCESSED:
-            _processed_updates.discard(min(_processed_updates))
+    update_id = update.update_id
+    if update_id in _processed_updates:
+        logger.info("Duplicate update_id=%s — skipping", update_id)
+        return JSONResponse({"ok": True})
+    _processed_updates.add(update_id)
+    if len(_processed_updates) > _MAX_PROCESSED:
+        _processed_updates.discard(min(_processed_updates))
 
     # --- Extract chat_id, text, callback data, and message_id ---
     chat_id: int | None = None
@@ -94,17 +84,17 @@ async def webhook(
     callback_data: str | None = None
     message_id: int | None = None
 
-    if "callback_query" in update:
-        cq = update["callback_query"]
-        cq_msg = cq.get("message", {})
-        chat_id = cq_msg.get("chat", {}).get("id")
-        callback_data = cq.get("data", "").strip()
-        message_id = cq_msg.get("message_id")
+    if update.callback_query is not None:
+        cq = update.callback_query
+        cq_msg = cq.message
+        chat_id = cq_msg.chat.id if cq_msg is not None else None
+        callback_data = (cq.data or "").strip()
+        message_id = cq_msg.message_id if cq_msg is not None else None
 
-    elif "message" in update:
-        msg = update["message"]
-        chat_id = msg.get("chat", {}).get("id")
-        message_text = (msg.get("text") or "").strip()
+    elif update.message is not None:
+        msg = update.message
+        chat_id = msg.chat.id
+        message_text = (msg.text or "").strip()
 
     if chat_id is None:
         # Not a message or callback we handle
@@ -162,6 +152,8 @@ async def webhook(
                         if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
                             return JSONResponse({"ok": True})
                         _confirmed_message_ids.add(message_id)
+                        if len(_confirmed_message_ids) > _MAX_CONFIRMED:
+                            _confirmed_message_ids.pop()
                 trigger = "skip"
         elif cb in ("😕 hard", "😐 ok", "😊 easy"):
             if message_id is not None:
@@ -194,7 +186,7 @@ async def webhook(
                         logger.info("message_id=%s already processed for subtopic — ignoring", message_id)
                         return JSONResponse({"ok": True})
                     _in_flight_message_ids.add(message_id)
-            with _db_get_connection() as conn:
+            with get_connection() as conn:
                 row = conn.execute(
                     "SELECT name FROM topics WHERE id = ?",
                     (topic_id,)).fetchone()
@@ -208,7 +200,11 @@ async def webhook(
             extra["proposed_topic"] = row["name"]
             extra["message_id"] = message_id
         elif cb.startswith("studied:"):
-            topic_id = int(callback_data[len("studied:"):])  # preserve original case
+            try:
+                topic_id = int(callback_data[len("studied:"):])
+            except ValueError:
+                logger.warning("Invalid studied callback_data received: %s", callback_data)
+                return JSONResponse({"ok": True})
             if message_id is not None:
                 with _confirm_lock:
                     if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
@@ -216,7 +212,7 @@ async def webhook(
                         return JSONResponse({"ok": True})
                     _in_flight_message_ids.add(message_id)
             try:
-                with _db_get_connection() as conn:
+                with get_connection() as conn:
                     cursor = conn.execute(
                         """UPDATE topics
                            SET status = 'active',
@@ -277,7 +273,7 @@ async def webhook(
         elif message_text.strip().lower() == '/study_topic':
             trigger = "study_topic"
         elif message_text.strip().lower() == '/studied':
-            with _db_get_connection() as conn:
+            with get_connection() as conn:
                 rows = conn.execute(
                     "SELECT id, name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
                 ).fetchall()
@@ -326,7 +322,6 @@ async def webhook(
         return JSONResponse({"ok": True})
 
     # --- Invoke graph (fire-and-forget in background) ---
-
     loop = asyncio.get_event_loop()
     loop.run_in_executor(
         None,
@@ -334,46 +329,3 @@ async def webhook(
     )
 
     return JSONResponse({"ok": True})
-
-
-def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
-    """Invoke the graph, catching all exceptions so executor threads never crash."""
-    message_id: int | None = kwargs.get("message_id")
-    try:
-        logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
-        _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
-        logger.info("Graph invoke done, checking state.db size")
-        logger.info("state.db size: %s bytes", os.path.getsize("db/state.db"))
-        logger.info("Graph invocation complete: trigger=%s", trigger)
-        if trigger in ("confirm", "on_demand", "rate", "study_topic_confirm", "studied") and message_id is not None:
-            with _confirm_lock:
-                _in_flight_message_ids.discard(message_id)
-                _confirmed_message_ids.add(message_id)
-                if len(_confirmed_message_ids) > _MAX_CONFIRMED:
-                    _confirmed_message_ids.discard(min(_confirmed_message_ids))
-    except Exception as e:
-        logger.error(
-            "Graph invocation failed [trigger=%s chat_id=%s]: %s",
-            trigger, chat_id, e, exc_info=True,
-        )
-        if trigger in ("confirm", "on_demand", "rate") and message_id is not None:
-            with _confirm_lock:
-                _in_flight_message_ids.discard(message_id)
-
-
-
-@app.get("/scheduler-status")
-async def scheduler_status(request: Request) -> dict:
-    s = request.app.state.scheduler
-    jobs = s.get_jobs()
-    return {
-        "running": s.running,
-        "jobs": [
-            {
-                "id": j.id,
-                "name": j.name,
-                "next_run": str(j.next_run_time) if j.next_run_time else None,
-            }
-            for j in jobs
-        ]
-    }
