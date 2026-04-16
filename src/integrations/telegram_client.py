@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
+from telegram.error import BadRequest
 
 load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
@@ -74,7 +75,7 @@ async def _remove_buttons(chat_id: int, message_id: int) -> None:
                 reply_markup=None,
             )
     except TelegramError as e:
-        if "Message is not modified" in str(e):
+        if isinstance(e, BadRequest) and "not modified" in str(e).lower():
             return # already removed, ignore
         raise RuntimeError(f"Telegram remove_buttons failed: {e}") from e
 

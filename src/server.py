@@ -200,9 +200,13 @@ async def webhook(
                     (topic_id,)).fetchone()
             if row is None:
                 logger.warning("Unknown subtopic id in callback_data: %s", callback_data)
+                if message_id is not None:
+                    with _confirm_lock:
+                        _in_flight_message_ids.discard(message_id)
                 return JSONResponse({"ok": True})
             trigger = "study_topic_confirm"
             extra["proposed_topic"] = row["name"]
+            extra["message_id"] = message_id
         elif cb.startswith("studied:"):
             topic_id = int(callback_data[len("studied:"):])  # preserve original case
             if message_id is not None:
@@ -252,7 +256,7 @@ async def webhook(
                 logger.error("studied: DB update failed for %s: %s", topic_id, e)
                 if message_id is not None:
                     with _confirm_lock:
-                        _in_flight_message_ids.add(message_id)
+                        _in_flight_message_ids.discard(message_id)
                 asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: send_message(f"⚠️ Failed to graduate topic: {e}"),
