@@ -90,7 +90,7 @@ Triggered by `/done`. No structured paste required.
 
 Never modify a Google Calendar event unless `creator.self == True`.
 The agent reads all events to plan around them but only writes events it created.
-All agent-created events are prefixed `[Study]`.
+All agent-created events are prefixed `[Mock]`.
 
 Enforce this in the calendar write path (tool/integration boundary):
 ```python
@@ -109,10 +109,10 @@ if not event.get("creator", {}).get("self", False):
 📅 Your day:
   <time> Event name (duration)
 
-🧠 Today's study plan:
-  <time>–<time> → <topic> (<duration>min)
+🧠 Today's mock interview(s) plan:
+  <time>–<time> [Mock] <topic> (<duration>min)
 
-Confirm these study blocks?
+Confirm these mock interview blocks?
 [Yes, book them] [Skip]
 ```
 

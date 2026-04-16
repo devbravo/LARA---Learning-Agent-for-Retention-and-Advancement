@@ -48,6 +48,16 @@ def _get_service():
 
     return build("calendar", "v3", credentials=creds)
 
+def _should_skip_event(item: dict) -> bool:
+    """Return True if the authenticated user declined or is tentative on this event."""
+    attendees = item.get("attendees", [])
+    if not attendees:
+        return False
+    for attendee in attendees:
+        if attendee.get("self"):
+            return attendee.get("responseStatus") in ("declined", "tentative")
+    return False
+
 
 def get_events(day: date) -> list[dict]:
     """Fetch all events for a given day from GOOGLE_CALENDAR_ID."""
@@ -74,6 +84,8 @@ def get_events(day: date) -> list[dict]:
 
     events = []
     for item in result.get("items", []):
+        if _should_skip_event(item):
+            continue
         events.append({
             "id": item.get("id"),
             "summary": item.get("summary", "(No title)"),
