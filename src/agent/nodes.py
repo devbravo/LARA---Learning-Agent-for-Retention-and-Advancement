@@ -241,7 +241,7 @@ def daily_planning(state: AgentState) -> AgentState:
                     dur = _event_duration_min(ev)
                     dur_str = f"{dur}min" if dur else ""
                     summary = ev.get("summary", "(No title)")
-                    lines.append(f"  {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
+                    lines.append(f"• {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
             else:
                 lines.append("📅 Your day: No meetings tomorrow")
             lines.append("")
@@ -265,7 +265,7 @@ def daily_planning(state: AgentState) -> AgentState:
                     start_dt = datetime.combine(target_date, win["start"])
                     end_dt = start_dt + timedelta(minutes=duration)
                     t_end = _fmt_time(end_dt.time())
-                    lines.append(f"  {t_start}–{t_end} → {topic['name']} ({duration}min)")
+                    lines.append(f"• {t_start}–{t_end} → {topic['name']} ({duration}min)")
             else:
                 lines.append("🧠 Study windows: None found for tomorrow")
             lines.append("")
@@ -276,7 +276,7 @@ def daily_planning(state: AgentState) -> AgentState:
                 for i, topic in enumerate(due_topics, 1):
                     label = _topic_due_label(topic)
                     ef = topic["easiness_factor"]
-                    lines.append(f"  {i}. {topic['name']} — {label} (EF: {ef})")
+                    lines.append(f"• {i}. {topic['name']} — {label} (EF: {ef})")
                 lines.append("")
 
             lines.append("No confirmation needed — this is your preview for tomorrow.")
@@ -323,7 +323,7 @@ def daily_planning(state: AgentState) -> AgentState:
         min_window_minutes = config.get("min_window_minutes", 25)
 
         if free_windows:
-            lines.append("🧠 Today's mock interview:")
+            lines.append("🎯 Today's mock interview(s):")
 
             if free_windows:
                 remaining_topics = list(available_topics)
@@ -343,7 +343,7 @@ def daily_planning(state: AgentState) -> AgentState:
                         end_dt = cursor + timedelta(minutes=duration)
                         t_start = _fmt_time(cursor.time())
                         t_end = _fmt_time(end_dt.time())
-                        lines.append(f" • {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
+                        lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
                         if topic.get("weak_areas"):
                             lines.append(f" ⚠️ Focus on: {topic['weak_areas']}")
                         lines.append("")  # blank line after each slot
@@ -365,7 +365,7 @@ def daily_planning(state: AgentState) -> AgentState:
                         remaining_topics.pop(0)
 
         else:
-            lines.append("🧠 Study windows: None found today")
+            lines.append("🎯 Mock interview blocks: None found today")
             lines.append("")
 
         with get_connection() as conn:
@@ -375,7 +375,7 @@ def daily_planning(state: AgentState) -> AgentState:
         if in_progress_rows:
             lines.append("⏳ In Progress:")
             for row in in_progress_rows:
-                lines.append(f"  • {row['name']}")
+                lines.append(f" • {row['name']}")
             lines.append("")
 
         assigned_names = {slot["topic"] for slot in proposed_slots}
@@ -384,9 +384,9 @@ def daily_planning(state: AgentState) -> AgentState:
         if backlog_topics:
             lines.append("📌 Also due but no window today:")
             for topic in backlog_topics[:3]:
-                lines.append(f"  {topic['name']}")
+                lines.append(f" {topic['name']}")
             if len(backlog_topics) > 3:
-                lines.append(f"  +{len(backlog_topics) - 3} more")
+                lines.append(f" +{len(backlog_topics) - 3} more")
             lines.append("")
 
         has_study_plan = bool(proposed_slots)

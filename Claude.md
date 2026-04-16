@@ -109,8 +109,8 @@ if not event.get("creator", {}).get("self", False):
 📅 Your day:
   <time> Event name (duration)
 
-🧠 Today's mock interview plan:
-  <time>–<time> → <topic> (<duration>min)
+🧠 Today's mock interview(s) plan:
+  <time>–<time> [Mock] <topic> (<duration>min)
 
 Confirm these mock interview blocks?
 [Yes, book them] [Skip]
