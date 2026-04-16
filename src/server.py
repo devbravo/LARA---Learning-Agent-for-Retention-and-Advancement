@@ -258,19 +258,6 @@ async def webhook(
                     lambda: send_message(f"⚠️ Failed to graduate topic: {e}"),
                 )
                 return JSONResponse({"ok": True})
-            _tn = topic_name
-            loop = asyncio.get_event_loop()
-            loop.run_in_executor(
-                None,
-                lambda: send_message(
-                    f"✅ {_tn} graduated to active. First SM-2 review scheduled for tomorrow."
-                ),
-            )
-            if chat_id is not None and message_id is not None:
-                _cid, _mid = chat_id, message_id
-                loop.run_in_executor(None, lambda: remove_buttons(_cid, _mid))
-            return JSONResponse({"ok": True})
-
         else:
             # Unknown callback — ignore
             return JSONResponse({"ok": True})
@@ -354,7 +341,7 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
         logger.info("Graph invoke done, checking state.db size")
         logger.info("state.db size: %s bytes", os.path.getsize("db/state.db"))
         logger.info("Graph invocation complete: trigger=%s", trigger)
-        if trigger in ("confirm", "on_demand", "rate", "study_topic_confirm") and message_id is not None:
+        if trigger in ("confirm", "on_demand", "rate", "study_topic_confirm", "studied") and message_id is not None:
             with _confirm_lock:
                 _in_flight_message_ids.discard(message_id)
                 _confirmed_message_ids.add(message_id)
