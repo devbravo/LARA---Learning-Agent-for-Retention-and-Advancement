@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from src.api.schemas.telegram import (
+from src.models.telegram import (
     TelegramCallbackQuery,
     TelegramChat,
     TelegramMessage,
@@ -184,7 +184,7 @@ def test_briefing_message_triggers_daily():
 # ---------------------------------------------------------------------------
 
 def test_yes_book_them_callback_triggers_confirm():
-    """"yes, book them" callback triggers the 'confirm' trigger."""
+    """yes, book them" callback triggers the 'confirm' trigger."""
     update = _cb(update_id=5, chat_id=111, data="yes, book them", message_id=200)
 
     with patch("src.webhook_handler._invoke_safe") as mock_invoke:
@@ -200,7 +200,7 @@ def test_yes_book_them_callback_triggers_confirm():
 # ---------------------------------------------------------------------------
 
 def test_skip_callback_sends_skip_message_without_graph():
-    """"skip" with no awaiting_weak_areas state sends the skip message and returns."""
+    """ "skip" with no awaiting_weak_areas state sends the skip message and returns."""
     update = _cb(update_id=6, chat_id=111, data="skip", message_id=201)
 
     with patch("src.webhook_handler._graph") as mock_graph, \
@@ -221,7 +221,7 @@ def test_skip_callback_sends_skip_message_without_graph():
 # ---------------------------------------------------------------------------
 
 def test_ok_rating_callback_triggers_rate_with_score_3():
-    """"😐 OK" callback triggers 'rate' with quality_score=3."""
+    """😐 OK" callback triggers 'rate' with quality_score=3."""
     update = _cb(update_id=7, chat_id=111, data="😐 OK", message_id=202)
 
     with patch("src.webhook_handler._invoke_safe") as mock_invoke:
@@ -237,7 +237,7 @@ def test_ok_rating_callback_triggers_rate_with_score_3():
 # ---------------------------------------------------------------------------
 
 def test_category_callback_triggers_study_topic_category():
-    """"category:DSA" triggers 'study_topic_category' with the correct category."""
+    """category:DSA" triggers 'study_topic_category' with the correct category."""
     update = _cb(update_id=8, chat_id=111, data="category:DSA")
 
     with patch("src.webhook_handler._invoke_safe") as mock_invoke:
@@ -253,7 +253,7 @@ def test_category_callback_triggers_study_topic_category():
 # ---------------------------------------------------------------------------
 
 def test_subtopic_id_valid_triggers_study_topic_confirm():
-    """"subtopic_id:5" with a matching DB row triggers 'study_topic_confirm'."""
+    """subtopic_id:5" with a matching DB row triggers 'study_topic_confirm'."""
     update = _cb(update_id=9, chat_id=111, data="subtopic_id:5", message_id=203)
 
     mock_row = {"name": "DSA - Arrays"}
@@ -276,7 +276,7 @@ def test_subtopic_id_valid_triggers_study_topic_confirm():
 # ---------------------------------------------------------------------------
 
 def test_subtopic_id_invalid_returns_early():
-    """"subtopic_id:abc" is invalid — returns ok without invoking the graph."""
+    """subtopic_id:abc" is invalid — returns ok without invoking the graph."""
     update = _cb(update_id=10, chat_id=111, data="subtopic_id:abc")
 
     with patch("src.webhook_handler._invoke_safe") as mock_invoke:
@@ -291,7 +291,7 @@ def test_subtopic_id_invalid_returns_early():
 # ---------------------------------------------------------------------------
 
 def test_studied_valid_id_updates_db_and_sends_confirmation():
-    """"studied:7" with a valid DB row updates status and sends a success message."""
+    """studied:7" with a valid DB row updates status and sends a success message."""
     update = _cb(update_id=11, chat_id=111, data="studied:7", message_id=204)
 
     mock_update_cursor = MagicMock()
@@ -320,7 +320,7 @@ def test_studied_valid_id_updates_db_and_sends_confirmation():
 # ---------------------------------------------------------------------------
 
 def test_studied_invalid_id_sends_error_message():
-    """"studied:999" where DB rowcount=0 sends an error message."""
+    """studied:999" where DB rowcount=0 sends an error message."""
     update = _cb(update_id=12, chat_id=111, data="studied:999", message_id=205)
 
     mock_cursor = MagicMock()

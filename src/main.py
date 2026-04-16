@@ -14,7 +14,7 @@ import uvicorn
 from pathlib import Path
 from dotenv import load_dotenv
 
-from src.server import app
+from src.api.app import app
 
 
 load_dotenv(Path(__file__).parents[1] / ".env", override=True)

@@ -13,7 +13,7 @@ import threading
 from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
-from src.api.schemas.telegram import TelegramUpdate
+from src.models.telegram import TelegramUpdate
 from src.core.db import get_connection
 from src.integrations.telegram_client import (
     remove_buttons,
@@ -42,8 +42,12 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
     try:
         logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
         _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
-        logger.info("Graph invoke done, checking state.db size")
-        logger.info("state.db size: %s bytes", os.path.getsize("db/state.db"))
+        state_db_path = os.path.abspath("db/state.db")
+        try:
+            logger.debug("Graph invoke done, checking state.db size: %s", state_db_path)
+            logger.debug("state.db size: %s bytes", os.path.getsize(state_db_path))
+        except OSError as e:
+            logger.debug("Unable to read state.db size at %s: %s", state_db_path, e)
         logger.info("Graph invocation complete: trigger=%s", trigger)
         if trigger in ("confirm", "on_demand", "rate", "study_topic_confirm", "studied") and message_id is not None:
             with _confirm_lock:
@@ -56,7 +60,7 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
             "Graph invocation failed [trigger=%s chat_id=%s]: %s",
             trigger, chat_id, e, exc_info=True,
         )
-        if trigger in ("confirm", "on_demand", "rate") and message_id is not None:
+        if message_id is not None:
             with _confirm_lock:
                 _in_flight_message_ids.discard(message_id)
 
@@ -148,6 +152,8 @@ async def handle_update(update: TelegramUpdate) -> JSONResponse:
                         if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
                             return JSONResponse({"ok": True})
                         _confirmed_message_ids.add(message_id)
+                        if len(_confirmed_message_ids) > _MAX_CONFIRMED:
+                            _confirmed_message_ids.pop()
                 trigger = "skip"
         elif cb in ("😕 hard", "😐 ok", "😊 easy"):
             if message_id is not None:
@@ -194,7 +200,11 @@ async def handle_update(update: TelegramUpdate) -> JSONResponse:
             extra["proposed_topic"] = row["name"]
             extra["message_id"] = message_id
         elif cb.startswith("studied:"):
-            topic_id = int(callback_data[len("studied:"):])  # preserve original case
+            try:
+                topic_id = int(callback_data[len("studied:"):])
+            except ValueError:
+                logger.warning("Invalid studied callback_data received: %s", callback_data)
+                return JSONResponse({"ok": True})
             if message_id is not None:
                 with _confirm_lock:
                     if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
