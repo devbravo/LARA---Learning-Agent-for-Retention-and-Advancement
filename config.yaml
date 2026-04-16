@@ -1,7 +1,7 @@
 schedule:
   daily_planning:
-    hour: 8
-    minute: 01
+    hour: 10
+    minute: 3
     misfire_grace_time: 3600
   sunday_planning:
     hour: 9
