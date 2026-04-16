@@ -3,7 +3,7 @@
 Personal Learning Assistant for Diego Sabajo. Tracks study topics via SM-2
 spaced repetition, sends proactive daily plans via Telegram, reads Google
 Calendar to plan around real schedule, generates study briefs via Claude API,
-and books [Study] events on Google Calendar after user confirmation.
+and books [Mock] events on Google Calendar after user confirmation.
 
 **Stack:** Python 3.11+, LangGraph, FastAPI, APScheduler, SQLite, Telegram Bot API
 
@@ -40,6 +40,8 @@ and books [Study] events on Google Calendar after user confirmation.
 | Rating tap (😕 😐 😊) | `log_session` → `output` → END (waits for weak areas reply) |
 | Weak areas reply or Skip | `log_weak_areas` → `output` → END |
 | `/briefing` | `daily_planning` (manual trigger for testing) |
+| `/studied` | Webhook helper sends in-progress topic picker (inline buttons) |
+| `studied:<topic_id>` tap | Promotes topic to `active`, resets SM-2 fields, sets first review for tomorrow |
 
 ## Graph flow
 

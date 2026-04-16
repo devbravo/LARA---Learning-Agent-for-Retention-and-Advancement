@@ -1,6 +1,6 @@
 # LARA
 
-Personal Learning Assistant for Diego Sabajo. Tracks study topics using SM-2 spaced repetition, sends proactive daily plans via Telegram, reads Google Calendar to plan around your real schedule, generates focused study briefs via Claude, and books `[Study]` events on Google Calendar after confirmation.
+Personal Learning Assistant for Diego Sabajo. Tracks study topics using SM-2 spaced repetition, sends proactive daily plans via Telegram, reads Google Calendar to plan around your real schedule, generates focused study briefs via Claude, and books `[Mock]` events on Google Calendar after confirmation.
 
 ---
 
@@ -8,9 +8,10 @@ Personal Learning Assistant for Diego Sabajo. Tracks study topics using SM-2 spa
 
 - **SM-2 spaced repetition** — topics ranked by tier and easiness factor; intervals grow automatically based on session quality
 - **Morning briefing** — sent daily via Telegram with your calendar, free windows, and assigned study blocks
-- **On-demand study** — send `/study`, tap a duration, get an AI-generated brief for the highest-priority due topic
+- **On-demand study** — send `/study` to generate a brief for the highest-priority due topic (defaults to 30 min unless a duration callback is provided)
 - **Done flow** — send `/done` after studying; LARA asks how each session went, prompts for weak areas, logs everything, and updates SM-2
-- **Calendar safety** — reads all events to plan around them, only writes events it created (`[Study]` prefix, `creator.self == True`)
+- **In-progress graduation flow** — send `/studied`, pick an in-progress topic, and promote it to active with first review scheduled for tomorrow
+- **Calendar safety** — reads all events to plan around them and only creates new `[Mock]` events
 - **Protected block** — never sends messages or fires jobs during configured protected hours
 
 ---
@@ -25,7 +26,7 @@ Telegram ──► FastAPI /webhook ──► LangGraph graph ──► Telegram
                Google Calendar      SQLite            Claude API
                (read + write)    (SM-2 state,       (study briefs
                                   sessions log)       only)
-APScheduler ──► daily_planning (daily + Sunday variant)
+APScheduler ──► daily_planning (daily + Sunday variant + evening preview)
 ```
 
 ### LangGraph nodes
@@ -66,7 +67,8 @@ APScheduler ──► daily_planning (daily + Sunday variant)
 
 ```
 lara/
-├── config.yaml              # Topics, focus windows, protected blocks
+├── config.yaml              # Schedule, focus windows, protected blocks
+├── topics.yaml              # Study topic catalog (tier/status/default duration)
 ├── requirements.txt
 ├── .env.example
 ├── pytest.ini
@@ -140,7 +142,7 @@ WEBHOOK_SECRET=   # generate: python -c "import secrets; print(secrets.token_hex
 python -m src.core.db
 ```
 
-Creates `db/learning.db`, seeds topics from `config.yaml`, and prints them to confirm.
+Creates `db/learning.db`, seeds topics from `topics.yaml`, and prints them to confirm.
 
 ### 5. Register the Telegram webhook
 
@@ -157,6 +159,12 @@ python -m src.main
 ```
 
 Starts FastAPI (port 8000) and APScheduler in a single async process.
+
+### Scheduler status
+
+```bash
+curl http://localhost:8000/scheduler-status
+```
 
 ### Health check
 
@@ -186,7 +194,7 @@ sqlite3 db/state.db "DELETE FROM checkpoints; DELETE FROM writes;"
 rm db/learning.db
 python -m src.core.db
 ```
-## Reseed after config changes (topics, focus windows, protected blocks):
+## Reseed after topic changes:
 ```commandline
 python -m src.core.db
 ``` 
@@ -223,7 +231,8 @@ Confirm these mock interview blocks?
 
 ### On-demand study
 
-Send `/study` → tap duration → receive AI-generated study brief
+Send `/study` to generate an AI brief immediately (default 30 min).
+Duration callbacks (`30/45/60 min`) are also supported when that keyboard is presented.
 
 ```
 [30 min] [45 min] [60 min]
@@ -262,7 +271,8 @@ LARA: All sessions logged for today. Great work! 💪
 
 ## Customising topics
 
-Edit `config.yaml` and re-run `python -m src.core.db` to seed new topics. Existing topics are never overwritten (`INSERT OR IGNORE`).
+Edit `topics.yaml` and re-run `python -m src.core.db` to seed/update topics.
+Seeding uses upsert semantics (`ON CONFLICT(name) DO UPDATE`) for `tier`, `status`, and conditional `next_review` handling.
 
 ```yaml
 topics:
@@ -280,8 +290,8 @@ focus_windows:
     end: "22:00"
 
 protected_blocks:
-  - start: "22:00"
-    end: "23:00"
+  - start: "15:00"
+    end: "19:00"
 ```
 
 ---
@@ -300,6 +310,6 @@ Pure Python — no API calls needed.
 
 - `.env` and `credentials/` are gitignored and never committed
 - Every webhook request validated against `WEBHOOK_SECRET` (HTTP 403 on mismatch)
-- Agent never modifies GCal events it didn't create (`creator.self` check at tool level)
+- Calendar write path creates new `[Mock]` events only; existing events are not modified
 - SQLite files are local only — never exposed via HTTP
 
