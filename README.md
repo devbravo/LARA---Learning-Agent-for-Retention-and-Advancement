@@ -1,7 +1,8 @@
 # LARA
 
-Personal Learning Assistant for Diego Sabajo. Tracks study topics using SM-2 spaced repetition, sends proactive daily plans via Telegram, reads Google Calendar to plan around your real schedule, generates focused study briefs via Claude, and books `[Mock]` events on Google Calendar after confirmation.
-
+Personal Learning Assistant for Diego Sabajo. 
+Tracks study topics using SM-2 spaced repetition, sends proactive daily plans via Telegram, 
+reads Google Calendar to plan around your real schedule, generates focused study briefs via Claude, and books `[Mock]` events on Google Calendar after confirmation.
 ---
 
 ## Features
@@ -11,7 +12,7 @@ Personal Learning Assistant for Diego Sabajo. Tracks study topics using SM-2 spa
 - **On-demand study** — send `/study` to generate a brief for the highest-priority due topic (defaults to 30 min unless a duration callback is provided)
 - **Done flow** — send `/done` after studying; LARA asks how each session went, prompts for weak areas, logs everything, and updates SM-2
 - **In-progress graduation flow** — send `/studied`, pick an in-progress topic, and promote it to active with first review scheduled for tomorrow
-- **Calendar safety** — reads all events to plan around them and only creates new `[Mock]` events
+- **Calendar safety** — reads all events to plan around them and only creates new tagged `[Mock]` and `[Study]` events; it does not modify unrelated calendar entries
 - **Protected block** — never sends messages or fires jobs during configured protected hours
 
 ---

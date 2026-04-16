@@ -187,12 +187,14 @@ def gap_finder(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def _rebook_study_events(
-    in_progress_rows: list, timed_events: list, target_date, config: dict
+        in_progress_rows: list, timed_events: list, target_date, config: dict
 ) -> None:
-    """Auto-book [Study] GCal events for in_progress topics not already on the calendar today."""
     tz = pytz.timezone(config["timezone"])
     offset = datetime.now(tz).strftime("%z")
     offset_str = f"{offset[:3]}:{offset[3:]}"
+
+    start_hour = 8  # start at 08:00
+
     for row in in_progress_rows:
         topic_name = row["name"]
         already_booked = any(
@@ -201,13 +203,17 @@ def _rebook_study_events(
         )
         if not already_booked:
             try:
+                start = f"{target_date.isoformat()}T{start_hour:02d}:00:00{offset_str}"
+                end = f"{target_date.isoformat()}T{start_hour + 1:02d}:00:00{offset_str}"
                 _gcal.write_study_event(
                     topic=topic_name,
-                    start=f"{target_date.isoformat()}T08:00:00{offset_str}",
-                    end=f"{target_date.isoformat()}T09:00:00{offset_str}",
+                    start=start,
+                    end=end,
                 )
             except Exception as e:
                 logger.warning("Failed to rebook [Study] for %s: %s", topic_name, e)
+
+        start_hour += 1  # always advance, whether booked or already on calendar
 
 
 def _get_topic_config(topic_name: str, config: dict) -> dict:
@@ -402,8 +408,12 @@ def daily_planning(state: AgentState) -> AgentState:
             ).fetchall()
         if in_progress_rows:
             lines.append("⏳ In Progress:")
+            start_hour = 8 # TODO MAGIC NUMBER
             for row in in_progress_rows:
-                lines.append(f" • {row['name']}")
+                t_start = f"{start_hour:02d}:00"
+                t_end = f"{start_hour + 1:02d}:00"
+                lines.append(f"• {t_start}–{t_end} [STUDY] {row['name']} (60min)")
+                start_hour += 1
             lines.append("")
 
         # Auto-rebook [Study] events for in_progress topics
@@ -867,7 +877,7 @@ def study_topic_category(state: AgentState) -> AgentState:
 
         with get_connection() as conn:
             rows = conn.execute(
-                """SELECT name, tier FROM topics
+                """SELECT id, name, tier FROM topics
                    WHERE status = 'inactive' AND tier IN (1, 2)
                    ORDER BY tier ASC, name ASC"""
             ).fetchall()
@@ -876,15 +886,15 @@ def study_topic_category(state: AgentState) -> AgentState:
         available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
 
         if category == "Other":
-            subtopics = [r["name"] for r in available if " - " not in r["name"]]
+            subtopic_rows = [r for r in available if " - " not in r["name"]]
         else:
-            subtopics = [r["name"] for r in available if r["name"].startswith(f"{category} - ")]
+            subtopic_rows = [r for r in available if r["name"].startswith(f"{category} - ")]
 
-        if not subtopics:
+        if not subtopic_rows:
             _telegram.send_message(f"No topics found in category '{category}'.")
             return {}
 
-        buttons = [(name, f"subtopic:{name}") for name in subtopics]
+        buttons = [(r["name"], f"subtopic_id:{r['id']}") for r in subtopic_rows]
         _telegram.send_inline_buttons("Which topic?", buttons)
         return {}
 

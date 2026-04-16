@@ -182,9 +182,27 @@ async def webhook(
         elif cb.startswith("category:"):
             trigger = "study_topic_category"
             extra["study_topic_category"] = callback_data[len("category:"):]  # preserve original case
-        elif cb.startswith("subtopic:"):
+        elif cb.startswith("subtopic_id:"):
+            try:
+                topic_id = int(callback_data[len("subtopic_id:"):])
+            except ValueError:
+                logger.warning("Invalid subtopic callback_data received: %s", callback_data)
+                return JSONResponse({"ok": True})
+            if message_id is not None:
+                with _confirm_lock:
+                    if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
+                        logger.info("message_id=%s already processed for subtopic — ignoring", message_id)
+                        return JSONResponse({"ok": True})
+                    _in_flight_message_ids.add(message_id)
+            with _db_get_connection() as conn:
+                row = conn.execute(
+                    "SELECT name FROM topics WHERE id = ?",
+                    (topic_id,)).fetchone()
+            if row is None:
+                logger.warning("Unknown subtopic id in callback_data: %s", callback_data)
+                return JSONResponse({"ok": True})
             trigger = "study_topic_confirm"
-            extra["proposed_topic"] = callback_data[len("subtopic:"):]  # preserve original case
+            extra["proposed_topic"] = row["name"]
         elif cb.startswith("studied:"):
             topic_id = int(callback_data[len("studied:"):])  # preserve original case
             if message_id is not None:
@@ -336,7 +354,7 @@ def _invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
         logger.info("Graph invoke done, checking state.db size")
         logger.info("state.db size: %s bytes", os.path.getsize("db/state.db"))
         logger.info("Graph invocation complete: trigger=%s", trigger)
-        if trigger in ("confirm", "on_demand", "rate") and message_id is not None:
+        if trigger in ("confirm", "on_demand", "rate", "study_topic_confirm") and message_id is not None:
             with _confirm_lock:
                 _in_flight_message_ids.discard(message_id)
                 _confirmed_message_ids.add(message_id)

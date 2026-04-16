@@ -3,7 +3,8 @@
 Personal Learning Assistant for Diego Sabajo. Tracks study topics via SM-2
 spaced repetition, sends proactive daily plans via Telegram, reads Google
 Calendar to plan around real schedule, generates study briefs via Claude API,
-and books [Mock] events on Google Calendar after user confirmation.
+books [Mock] events on Google Calendar after user confirmation, and 
+creates or rebooks [Study] events for the in-progress study flow.
 
 **Stack:** Python 3.11+, LangGraph, FastAPI, APScheduler, SQLite, Telegram Bot API
 
