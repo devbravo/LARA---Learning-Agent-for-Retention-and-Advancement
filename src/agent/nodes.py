@@ -56,6 +56,7 @@ class AgentState(TypedDict, total=False):
     awaiting_weak_areas: bool
     current_topic_id: int | None
     current_topic_name: str | None
+    study_topic_category: str | None    # selected category in /study_topic flow, e.g. "DSA"
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -119,13 +120,16 @@ def route_from_router(state: AgentState) -> str:
     """Conditional edge: maps trigger → next node name."""
     trigger = state.get("trigger", "")
     mapping = {
-        "daily":       "daily_planning",
-        "evening":     "daily_planning",
-        "on_demand":   "on_demand",
-        "done":        "done_parser",
-        "confirm":     "output",
-        "rate":        "log_session",
-        "weak_areas":  "log_weak_areas",
+        "daily":                "daily_planning",
+        "evening":              "daily_planning",
+        "on_demand":            "on_demand",
+        "done":                 "done_parser",
+        "confirm":              "output",
+        "rate":                 "log_session",
+        "weak_areas":           "log_weak_areas",
+        "study_topic":          "study_topic",
+        "study_topic_category": "study_topic_category",
+        "study_topic_confirm":  "study_topic_confirm",
     }
     return mapping.get(trigger, "output")
 
@@ -181,6 +185,30 @@ def gap_finder(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 # Node: daily_planning
 # ---------------------------------------------------------------------------
+
+def _rebook_study_events(
+    in_progress_rows: list, timed_events: list, target_date, config: dict
+) -> None:
+    """Auto-book [Study] GCal events for in_progress topics not already on the calendar today."""
+    tz = pytz.timezone(config["timezone"])
+    offset = datetime.now(tz).strftime("%z")
+    offset_str = f"{offset[:3]}:{offset[3:]}"
+    for row in in_progress_rows:
+        topic_name = row["name"]
+        already_booked = any(
+            _is_topic_in_summary(topic_name, ev.get("summary", ""))
+            for ev in timed_events
+        )
+        if not already_booked:
+            try:
+                _gcal.write_study_event(
+                    topic=topic_name,
+                    start=f"{target_date.isoformat()}T08:00:00{offset_str}",
+                    end=f"{target_date.isoformat()}T09:00:00{offset_str}",
+                )
+            except Exception as e:
+                logger.warning("Failed to rebook [Study] for %s: %s", topic_name, e)
+
 
 def _get_topic_config(topic_name: str, config: dict) -> dict:
     for t in config.get("topics", []):
@@ -377,6 +405,9 @@ def daily_planning(state: AgentState) -> AgentState:
             for row in in_progress_rows:
                 lines.append(f" • {row['name']}")
             lines.append("")
+
+        # Auto-rebook [Study] events for in_progress topics
+        _rebook_study_events(in_progress_rows, timed_events, target_date, config)
 
         assigned_names = {slot["topic"] for slot in proposed_slots}
         backlog_topics = [t for t in available_topics if t["name"] not in assigned_names]
@@ -781,3 +812,125 @@ def output(state: AgentState) -> AgentState:
                 print(f"[output] Confirmation send failed: {e}")
 
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Node: study_topic
+# ---------------------------------------------------------------------------
+
+def study_topic(state: AgentState) -> AgentState:
+    """Entry point: query inactive tier 1 (or tier 2 fallback) topics, send category picker."""
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                """SELECT name, tier FROM topics
+                   WHERE status = 'inactive' AND tier IN (1, 2)
+                   ORDER BY tier ASC, name ASC"""
+            ).fetchall()
+
+        tier1 = [r for r in rows if r["tier"] == 1]
+        available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
+
+        if not available:
+            _telegram.send_message("No inactive topics available to start studying.")
+            return {}
+
+        categories = sorted(set(
+            r["name"].split(" - ")[0] if " - " in r["name"] else "Other"
+            for r in available
+        ))
+
+        buttons = [(c, f"category:{c}") for c in categories]
+        _telegram.send_inline_buttons("Which category?", buttons)
+        return {}
+
+    except Exception as e:
+        logger.error("study_topic failed: %s", e, exc_info=True)
+        try:
+            _telegram.send_message(f"⚠️ Failed to load topics: {e}")
+        except Exception:
+            pass
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Node: study_topic_category
+# ---------------------------------------------------------------------------
+
+def study_topic_category(state: AgentState) -> AgentState:
+    """Received category selection: filter subtopics for that category, send subtopic buttons."""
+    try:
+        category = state.get("study_topic_category")
+        if not category:
+            _telegram.send_message("⚠️ No category selected.")
+            return {}
+
+        with get_connection() as conn:
+            rows = conn.execute(
+                """SELECT name, tier FROM topics
+                   WHERE status = 'inactive' AND tier IN (1, 2)
+                   ORDER BY tier ASC, name ASC"""
+            ).fetchall()
+
+        tier1 = [r for r in rows if r["tier"] == 1]
+        available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
+
+        if category == "Other":
+            subtopics = [r["name"] for r in available if " - " not in r["name"]]
+        else:
+            subtopics = [r["name"] for r in available if r["name"].startswith(f"{category} - ")]
+
+        if not subtopics:
+            _telegram.send_message(f"No topics found in category '{category}'.")
+            return {}
+
+        buttons = [(name, f"subtopic:{name}") for name in subtopics]
+        _telegram.send_inline_buttons("Which topic?", buttons)
+        return {}
+
+    except Exception as e:
+        logger.error("study_topic_category failed: %s", e, exc_info=True)
+        try:
+            _telegram.send_message(f"⚠️ Failed to load subtopics: {e}")
+        except Exception:
+            pass
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Node: study_topic_confirm
+# ---------------------------------------------------------------------------
+
+def study_topic_confirm(state: AgentState) -> AgentState:
+    """Received subtopic selection: set status=in_progress in DB, confirm to user."""
+    try:
+        topic_name = state.get("proposed_topic")
+        if not topic_name:
+            _telegram.send_message("⚠️ No topic selected.")
+            return {}
+
+        with get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE topics SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP
+                   WHERE name = ? AND status = 'inactive'""",
+                (topic_name,),
+            )
+            if cursor.rowcount == 0:
+                _telegram.send_message(
+                    f"⚠️ Topic '{topic_name}' not found or already in progress."
+                )
+                return {}
+
+        _telegram.send_message(
+            f"✅ {topic_name} added to In Progress. "
+            "It will be booked on your calendar tomorrow morning."
+        )
+        return {}
+
+    except Exception as e:
+        logger.error("study_topic_confirm failed: %s", e, exc_info=True)
+        try:
+            _telegram.send_message(f"⚠️ Failed to set topic in progress: {e}")
+        except Exception:
+            pass
+        return {}

@@ -129,6 +129,39 @@ def write_event(topic: str, start: str, end: str) -> dict:
     }
 
 
+def write_study_event(topic: str, start: str, end: str) -> dict:
+    """
+    Create a new [Study] event on GOOGLE_CALENDAR_ID.
+
+    Args:
+        topic: Topic name — prefixed with '[Study]' automatically.
+        start: ISO-8601 datetime string (e.g. '2026-04-03T08:00:00').
+        end:   ISO-8601 datetime string.
+
+    Returns the created event dict (id, summary, start, end, creator).
+    """
+    calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
+    body = {
+        "summary": f"[Study] {topic}",
+        "description": "Booked by LARA - Personal Learning Assistant",
+        "start": {"dateTime": start, "timeZone": "UTC"},
+        "end": {"dateTime": end, "timeZone": "UTC"},
+    }
+    try:
+        service = _get_service()
+        created = service.events().insert(calendarId=calendar_id, body=body).execute()
+    except HttpError as e:
+        raise RuntimeError(f"Google Calendar API error {e.resp.status}: {e.reason}") from e
+
+    return {
+        "id": created.get("id"),
+        "summary": created.get("summary"),
+        "start": created.get("start", {}),
+        "end": created.get("end", {}),
+        "creator": created.get("creator", {}),
+    }
+
+
 if __name__ == "__main__":
     events = get_events(date.today())
     print(json.dumps(events, indent=2))

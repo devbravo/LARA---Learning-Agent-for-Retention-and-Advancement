@@ -179,6 +179,12 @@ async def webhook(
                 if message_id is not None:
                     extra["message_id"] = message_id
 
+        elif cb.startswith("category:"):
+            trigger = "study_topic_category"
+            extra["study_topic_category"] = callback_data[len("category:"):]  # preserve original case
+        elif cb.startswith("subtopic:"):
+            trigger = "study_topic_confirm"
+            extra["proposed_topic"] = callback_data[len("subtopic:"):]  # preserve original case
         elif cb.startswith("studied:"):
             topic_id = int(callback_data[len("studied:"):])  # preserve original case
             if message_id is not None:
@@ -259,6 +265,8 @@ async def webhook(
             trigger = "on_demand"
         elif message_text.strip().lower() == '/briefing':
             trigger = "daily"
+        elif message_text.strip().lower() == '/study_topic':
+            trigger = "study_topic"
         elif message_text.strip().lower() == '/studied':
             with _db_get_connection() as conn:
                 rows = conn.execute(
