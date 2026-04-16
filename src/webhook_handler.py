@@ -134,7 +134,7 @@ async def handle_update(update: TelegramUpdate) -> JSONResponse:
         elif cb == "skip":
             state = _graph.get_state(chat_id)
             if state.get("awaiting_weak_areas"):
-                if message_text is not None:
+                if message_id is not None:
                     with _confirm_lock:
                         if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
                             logger.info("message_id=%s already processed for weak_areas skip — ignoring repeat tap",

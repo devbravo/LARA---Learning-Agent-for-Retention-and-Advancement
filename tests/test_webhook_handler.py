@@ -184,7 +184,7 @@ def test_briefing_message_triggers_daily():
 # ---------------------------------------------------------------------------
 
 def test_yes_book_them_callback_triggers_confirm():
-    """yes, book them" callback triggers the 'confirm' trigger."""
+    """\"yes, book them" callback triggers the 'confirm' trigger."""
     update = _cb(update_id=5, chat_id=111, data="yes, book them", message_id=200)
 
     with patch("src.webhook_handler._invoke_safe") as mock_invoke:
@@ -200,7 +200,7 @@ def test_yes_book_them_callback_triggers_confirm():
 # ---------------------------------------------------------------------------
 
 def test_skip_callback_sends_skip_message_without_graph():
-    """ "skip" with no awaiting_weak_areas state sends the skip message and returns."""
+    """\"skip\" with no awaiting_weak_areas state sends the skip message and returns."""
     update = _cb(update_id=6, chat_id=111, data="skip", message_id=201)
 
     with patch("src.webhook_handler._graph") as mock_graph, \
