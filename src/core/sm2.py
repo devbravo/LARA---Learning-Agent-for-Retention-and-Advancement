@@ -4,9 +4,10 @@ This module contains pure interval/EF calculation plus DB read/write helpers
 for due-topic selection and post-session updates.
 """
 
-import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
+
+from src.repositories import sm2_repository
 
 DB_PATH = Path(__file__).parents[2] / "db" / "learning.db"
 
@@ -59,23 +60,7 @@ def get_due_topics(db_path: str | None = None, target_date: date | None = None) 
     path = db_path or str(DB_PATH)
     if target_date is None:
         target_date = date.today()
-    date_str = target_date.isoformat()
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            """
-            SELECT id, name, tier, easiness_factor, interval_days, repetitions, next_review, weak_areas
-            FROM topics
-            WHERE next_review <= ?
-              AND status = 'active'
-            ORDER BY tier ASC, easiness_factor ASC
-            """,
-            (date_str,),
-        ).fetchall()
-    finally:
-        conn.close()
-    return [dict(row) for row in rows]
+    return sm2_repository.fetch_due_topics(path=path, target_date=target_date)
 
 
 def update_topic_after_session(db_path: str | None = None, topic_id: int = 0, quality: int = 3) -> None:
@@ -90,36 +75,23 @@ def update_topic_after_session(db_path: str | None = None, topic_id: int = 0, qu
         ValueError: If ``topic_id`` does not exist.
     """
     path = db_path or str(DB_PATH)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    try:
-        row = conn.execute(
-            "SELECT easiness_factor, interval_days, repetitions FROM topics WHERE id = ?",
-            (topic_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError(f"Topic id={topic_id} not found")
+    row = sm2_repository.fetch_sm2_state(path=path, topic_id=topic_id)
+    if row is None:
+        raise ValueError(f"Topic id={topic_id} not found")
 
-        new_ef, new_interval, new_reps = calculate_next_review(
-            quality=quality,
-            easiness_factor=row["easiness_factor"],
-            interval_days=row["interval_days"],
-            repetitions=row["repetitions"],
-        )
-        next_review = (date.today() + timedelta(days=new_interval)).isoformat()
+    new_ef, new_interval, new_reps = calculate_next_review(
+        quality=quality,
+        easiness_factor=row["easiness_factor"],
+        interval_days=row["interval_days"],
+        repetitions=row["repetitions"],
+    )
+    next_review = (date.today() + timedelta(days=new_interval)).isoformat()
 
-        conn.execute(
-            """
-            UPDATE topics
-            SET easiness_factor = ?,
-                interval_days   = ?,
-                repetitions     = ?,
-                next_review     = ?,
-                updated_at      = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (new_ef, new_interval, new_reps, next_review, topic_id),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    sm2_repository.update_sm2_state(
+        path=path,
+        topic_id=topic_id,
+        easiness_factor=new_ef,
+        interval_days=new_interval,
+        repetitions=new_reps,
+        next_review=next_review,
+    )

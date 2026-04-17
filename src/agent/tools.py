@@ -5,7 +5,6 @@ A tool touches something outside the graph's own state (calendar, DB, etc.).
 All 5 tools are decorated with @tool for LangGraph/LangChain compatibility.
 """
 
-import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -18,6 +17,7 @@ load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
 from src.integrations import gcal as _gcal
+from src.repositories import session_repository, topic_repository
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
 _DB_PATH = str(Path(__file__).parents[2] / "db" / "learning.db")
@@ -128,25 +128,14 @@ def log_study_session(
     if quality_score not in (2, 3, 5):
         raise ValueError(f"quality_score must be 2, 3, or 5 — got {quality_score}")
 
-    # Write session log
-    conn = sqlite3.connect(_DB_PATH)
-    try:
-        conn.execute(
-            """
-            INSERT INTO sessions (topic_id, duration_min, quality_score, weak_areas)
-            VALUES (?, ?, ?, ?)
-            """,
-            (topic_id, duration_min, quality_score, weak_areas or None),
-        )
-        # Update weak_areas on topic for display in briefs
-        if weak_areas:
-            conn.execute(
-                "UPDATE topics SET weak_areas = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (weak_areas, topic_id),
-            )
-        conn.commit()
-    finally:
-        conn.close()
+    session_repository.insert_session(
+        topic_id=topic_id,
+        duration_min=duration_min,
+        quality_score=quality_score,
+        weak_areas=weak_areas or None,
+    )
+    if weak_areas:
+        topic_repository.update_topic_weak_areas(topic_id, weak_areas)
 
     # Update SM-2 state
     _sm2.update_topic_after_session(db_path=_DB_PATH, topic_id=topic_id, quality=quality_score)

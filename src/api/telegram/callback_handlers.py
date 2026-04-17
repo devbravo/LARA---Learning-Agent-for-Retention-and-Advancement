@@ -16,7 +16,6 @@ import logging
 from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
-from src.core.db import get_connection
 from src.integrations.telegram_client import remove_buttons, send_message
 from src.api.telegram import dispatcher
 from src.services import topic_service
@@ -181,12 +180,8 @@ def handle_subtopic_id(callback_data: str, chat_id: int, message_id: int | None)
             logger.info("message_id=%s already processed for subtopic — ignoring", message_id)
             return None
 
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT name FROM topics WHERE id = ?", (topic_id,)
-        ).fetchone()
-
-    if row is None:
+    topic_name = topic_service.get_topic_name_by_id(topic_id)
+    if topic_name is None:
         logger.warning("Unknown subtopic id in callback_data: %s", callback_data)
         if message_id is not None:
             dispatcher.clear_in_flight(message_id)
@@ -196,7 +191,7 @@ def handle_subtopic_id(callback_data: str, chat_id: int, message_id: int | None)
         trigger="study_topic_confirm",
         chat_id=chat_id,
         message_id=message_id,
-        extra={"proposed_topic": row["name"], "message_id": message_id},
+        extra={"proposed_topic": topic_name, "message_id": message_id},
     )
 
 
