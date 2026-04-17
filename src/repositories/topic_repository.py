@@ -6,7 +6,7 @@ and node layers.
 
 from typing import Any
 
-from src.core.db import get_connection
+from src.infrastructure.db import get_connection
 
 
 def get_topic_name_by_id(topic_id: int) -> str | None:

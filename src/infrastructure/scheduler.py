@@ -25,7 +25,9 @@ from src.integrations.telegram_client import send_message
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-load_dotenv(Path(__file__).parents[1] / ".env", override=True)
+_PROJECT_ROOT = Path(__file__).parents[2]
+
+load_dotenv(_PROJECT_ROOT / ".env", override=True)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,7 @@ def _load_config() -> dict[str, Any]:
     Returns:
         Parsed configuration content.
     """
-    with open(Path(__file__).parents[1] / "config.yaml") as f:
+    with open(_PROJECT_ROOT / "config.yaml") as f:
         return yaml.safe_load(f)
 
 _TZ = pytz.timezone(_load_config()["timezone"])
