@@ -8,7 +8,7 @@ All exceptions are caught and surfaced as user-friendly messages in state.
 import pytz
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import TypedDict
+from typing import cast, TypedDict
 
 import logging
 from src.core import sm2 as _sm2_mod
@@ -16,8 +16,6 @@ from src.core import sm2 as _sm2_mod
 import yaml
 
 from src.agent.formatting import (
-    event_duration_min,
-    format_event_time,
     format_time,
     local_datetime_str,
 )
@@ -79,9 +77,13 @@ class AgentState(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 
 def router(state: AgentState) -> AgentState:
-    """
-    Entry point. Validates trigger is set.
-    Routing is handled by conditional edges — this node just passes through.
+    """Validate the incoming trigger before graph routing.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Empty update when trigger is present, otherwise an error message payload.
     """
     trigger = state.get("trigger", "")
     if not trigger:
@@ -90,7 +92,14 @@ def router(state: AgentState) -> AgentState:
 
 
 def route_from_router(state: AgentState) -> str:
-    """Conditional edge: maps trigger → next node name."""
+    """Map a trigger string to the next graph node name.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Graph node key used by conditional edges.
+    """
     trigger = state.get("trigger", "")
     mapping = {
         "daily":                "daily_planning",
@@ -108,7 +117,14 @@ def route_from_router(state: AgentState) -> str:
 
 
 def route_from_daily_planning(state: AgentState) -> str:
-    """Conditional edge: skip confirm for evening briefings or when there's nothing to book."""
+    """Pick the next node after ``daily_planning``.
+
+    Args:
+        state: State returned by ``daily_planning``.
+
+    Returns:
+        ``output`` for preview/no-plan flows, otherwise ``confirm``.
+    """
     if state.get("preview_only"):
         return "output"
     return "confirm" if state.get("has_study_plan") else "output"
@@ -119,7 +135,14 @@ def route_from_daily_planning(state: AgentState) -> str:
 # ---------------------------------------------------------------------------
 
 def calendar_reader(state: AgentState) -> AgentState:
-    """Read-only GCal fetch for today. Returns structured event list in messages."""
+    """Fetch today's calendar events and report count.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update with a status message.
+    """
     try:
         events = _gcal.get_events(date.today())
         return {"messages": state.get("messages", []) + [f"📅 Fetched {len(events)} events"]}
@@ -132,7 +155,14 @@ def calendar_reader(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def sm2_engine(state: AgentState) -> AgentState:
-    """Returns due topics ranked by tier + easiness factor."""
+    """Fetch due topics from SM-2 and report count.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update with a status message.
+    """
     try:
         topics = _sm2.get_due_topics()
         return {"messages": state.get("messages", []) + [f"🧠 {len(topics)} topics due"]}
@@ -145,7 +175,14 @@ def sm2_engine(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def gap_finder(state: AgentState) -> AgentState:
-    """Computes free windows respecting protected blocks."""
+    """Compute today's free windows and report count.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update with a status message.
+    """
     try:
         config = _load_config()
         events = _gcal.get_events(date.today())
@@ -160,12 +197,13 @@ def gap_finder(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def daily_planning(state: AgentState) -> AgentState:
-    """
-    Assembles the morning plan (trigger="daily") or evening preview (trigger="evening")
-    from calendar + SM-2 + gap finder.
+    """Build either the morning plan or evening preview payload.
 
-    Evening flow: reads tomorrow's calendar and SM-2 due topics, sets preview_only=True,
-    and routes straight to output without confirmation buttons or calendar writes.
+    Args:
+        state: Current partial agent state containing the trigger.
+
+    Returns:
+        Partial ``AgentState`` containing generated messages and planning fields.
     """
     try:
         trigger = state.get("trigger", "daily")
@@ -181,14 +219,10 @@ def daily_planning(state: AgentState) -> AgentState:
 
         if is_evening:
             topics_config = _load_topics()
-            return build_evening_preview_state(
-                target_date,
-                events,
-                timed_events,
-                due_topics,
-                config,
-                topics_config,
+            evening_state = build_evening_preview_state(
+                target_date, events, timed_events, due_topics, config, topics_config
             )
+            return cast(AgentState, evening_state)
 
         # --- Morning briefing: full interactive plan for today ---
         _TZ = pytz.timezone(config["timezone"])
@@ -254,17 +288,17 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("No mock interview windows available today — calendar fully booked.")
 
         message = "\n".join(lines)
-        return {
+        return cast(AgentState, {
             "proposed_topic": proposed_topic,
             "proposed_slot": proposed_slot,
             "proposed_slots": proposed_slots if proposed_slots else None,
             "has_study_plan": has_study_plan,
             "preview_only": False,
             "messages": [message],
-        }
+        })
 
     except Exception as e:
-        return {"messages": [f"⚠️ Daily briefing failed: {e}"]}
+        return cast(AgentState, {"messages": [f"⚠️ Daily briefing failed: {e}"]})
 
 
 # ---------------------------------------------------------------------------
@@ -272,9 +306,13 @@ def daily_planning(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def on_demand(state: AgentState) -> AgentState:
-    """
-    Handles 'I have X min' flow.
-    Validates the requested duration fits a free window, sets proposed_topic/slot.
+    """Prepare the on-demand study flow state.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Partial state with selected topic and a status/brief-generation message.
     """
     try:
         due_topics = _sm2.get_due_topics()
@@ -299,9 +337,14 @@ def on_demand(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def done_parser(state: AgentState) -> AgentState:
-    """
-    Find the first unlogged slot from proposed_slots and send rating buttons.
-    Sets current_topic_id and current_topic_name in state.
+    """Start the done-flow by prompting a rating for the next unlogged topic.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update with ``current_topic_id`` and ``current_topic_name`` when
+        a loggable topic is found, otherwise an empty update.
     """
     logger.info("done_parser: entered")
 
@@ -347,7 +390,14 @@ def done_parser(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def generate_brief(state: AgentState) -> AgentState:
-    """Calls Claude API to generate a study brief. Only node that calls an LLM."""
+    """Generate a study brief through Claude for the selected topic.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update containing the generated brief or a fallback message.
+    """
     try:
         topic = state.get("proposed_topic") or "General Study"
         duration_min = state.get("duration_min") or 30
@@ -379,11 +429,13 @@ def generate_brief(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def confirm(state: AgentState) -> AgentState:
-    """
-    Sends the assembled plan to Telegram.
-    Daily briefing flow: sends inline buttons (Yes, book them / Skip).
-    On-demand flow: sends the study brief as a plain message (no booking needed).
-    Does NOT advance state — next trigger arrives via webhook.
+    """Send the assembled plan/brief to Telegram and wait for user action.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Always an empty state update; follow-up happens on next webhook trigger.
     """
     messages = state.get("messages") or []
     fallback_text = messages[-1] if messages else ""
@@ -409,7 +461,15 @@ def confirm(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def log_session(state: AgentState) -> AgentState:
-    """Logs session row with quality_score and prompts for weak areas."""
+    """Persist today's session rating and prompt for weak areas.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update toggling ``awaiting_weak_areas`` on success, otherwise an
+        error message payload.
+    """
     try:
         topic_id = state.get("current_topic_id")
         topic_name = state.get("current_topic_name") or "topic"
@@ -450,7 +510,15 @@ def log_session(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def log_weak_areas(state: AgentState) -> AgentState:
-    """Saves weak areas (or marks resolved on Skip), then prompts for next unlogged slot."""
+    """Persist weak-area notes and continue or close the done-flow loop.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update clearing ``awaiting_weak_areas`` and optionally pointing to
+        the next topic to rate.
+    """
     try:
         messages = state.get("messages") or []
         text = messages[0].strip() if messages else ""
@@ -503,9 +571,13 @@ def log_weak_areas(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def output(state: AgentState) -> AgentState:
-    """
-    Sends final message via Telegram.
-    If a confirmed slot exists, books it on Google Calendar.
+    """Send final outbound messages and book confirmed calendar events.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Always an empty update after side effects complete.
     """
     trigger = state.get("trigger", "")
 
@@ -593,7 +665,14 @@ def output(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def study_topic(state: AgentState) -> AgentState:
-    """Entry point: query inactive tier 1 (or tier 2 fallback) topics, send category picker."""
+    """Start the topic-picking flow by sending category buttons.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Empty state update; interaction continues through callback triggers.
+    """
     try:
         rows = topic_repository.get_inactive_topics_tier1_or2()
 
@@ -627,7 +706,14 @@ def study_topic(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def study_topic_category(state: AgentState) -> AgentState:
-    """Received category selection: filter subtopics for that category, send subtopic buttons."""
+    """Handle category selection and send matching topic buttons.
+
+    Args:
+        state: Current partial agent state containing ``study_topic_category``.
+
+    Returns:
+        Empty state update; interaction continues through callback triggers.
+    """
     try:
         category = state.get("study_topic_category")
         if not category:
@@ -666,7 +752,14 @@ def study_topic_category(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def study_topic_confirm(state: AgentState) -> AgentState:
-    """Received subtopic selection: set status=in_progress in DB, confirm to user."""
+    """Mark the selected topic as ``in_progress`` and notify the user.
+
+    Args:
+        state: Current partial agent state containing ``proposed_topic``.
+
+    Returns:
+        Empty state update after DB write + Telegram side effects.
+    """
     try:
         topic_name = state.get("proposed_topic")
         if not topic_name:

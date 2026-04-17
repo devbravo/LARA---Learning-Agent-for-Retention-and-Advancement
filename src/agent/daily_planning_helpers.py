@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from src.agent.formatting import (
     event_duration_min,
@@ -13,9 +14,18 @@ from src.agent.formatting import (
 from src.agent.planning_helpers import get_prebooked_topics, get_topic_config
 from src.core import gap_finder as _gap_finder
 
+if TYPE_CHECKING:
+    from src.agent.nodes import AgentState
+
 
 def append_calendar_lines(lines: list[str], timed_events: list[dict], empty_label: str) -> None:
-    """Append calendar summary lines for timed events to an existing message list."""
+    """Append the day calendar section to a message being assembled.
+
+    Args:
+        lines: Mutable list of message lines to append to.
+        timed_events: Calendar events with explicit ``dateTime`` boundaries.
+        empty_label: Fallback line used when no timed events are present.
+    """
     if timed_events:
         lines.append("📅 Your day:")
         for ev in timed_events:
@@ -38,7 +48,17 @@ def append_evening_study_window_lines(
     config: dict,
     topics_config: dict,
 ) -> None:
-    """Append evening preview study-window lines based on free windows and due topics."""
+    """Append the evening study-window section.
+
+    Args:
+        lines: Mutable list of message lines to append to.
+        target_date: Date being previewed.
+        events: Raw calendar events for ``target_date``.
+        timed_events: Timed subset of ``events``.
+        due_topics: Topics returned by SM-2 for the target date.
+        config: Runtime config values from ``config.yaml``.
+        topics_config: Topic metadata loaded from ``topics.yaml``.
+    """
     free_windows = _gap_finder.find_free_windows(events, target_date, config)
     prebooked = get_prebooked_topics(timed_events, due_topics)
     available_topics = [t for t in due_topics if t["name"] not in prebooked]
@@ -63,7 +83,12 @@ def append_evening_study_window_lines(
 
 
 def append_sm2_pick_lines(lines: list[str], due_topics: list[dict]) -> None:
-    """Append SM-2 due-topic picks to an existing message list."""
+    """Append the SM-2 due-topic list section.
+
+    Args:
+        lines: Mutable list of message lines to append to.
+        due_topics: Ranked due topics from SM-2.
+    """
     if due_topics:
         lines.append("📌 SM-2 picks tomorrow:")
         for i, topic in enumerate(due_topics, 1):
@@ -81,7 +106,19 @@ def pack_mock_slots(
     min_window_minutes: int,
     lines: list[str],
 ) -> tuple[str | None, dict | None, list[dict]]:
-    """Pack due topics into free windows and append resulting [Mock] lines."""
+    """Pack due topics into free windows and append resulting ``[Mock]`` lines.
+
+    Args:
+        target_date: Date being planned.
+        free_windows: Free windows returned by ``gap_finder``.
+        available_topics: Due topics not already prebooked.
+        topics_config: Topic metadata loaded from ``topics.yaml``.
+        min_window_minutes: Minimum remaining window size to schedule a slot.
+        lines: Mutable list of message lines to append to.
+
+    Returns:
+        A tuple of ``(proposed_topic, proposed_slot, proposed_slots)`` for state.
+    """
     proposed_topic = None
     proposed_slot = None
     proposed_slots: list[dict] = []
@@ -139,8 +176,20 @@ def build_evening_preview_state(
     due_topics: list[dict],
     config: dict,
     topics_config: dict,
-) -> dict:
-    """Build the read-only evening preview state payload."""
+) -> "AgentState":
+    """Build the read-only evening preview state payload.
+
+    Args:
+        target_date: Date being previewed.
+        events: Raw calendar events for ``target_date``.
+        timed_events: Timed subset of ``events``.
+        due_topics: Topics returned by SM-2 for the target date.
+        config: Runtime config values from ``config.yaml``.
+        topics_config: Topic metadata loaded from ``topics.yaml``.
+
+    Returns:
+        A partial ``AgentState`` with preview flags and a single composed message.
+    """
     day_str = target_date.strftime("%A %B %-d")
     lines = [f"🌙 Tomorrow's plan — {day_str}", ""]
     append_calendar_lines(lines, timed_events, "📅 Your day: No meetings tomorrow")
