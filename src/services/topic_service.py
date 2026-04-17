@@ -8,10 +8,11 @@ from src.core.db import get_connection
 
 
 def graduate_topic(topic_id: int) -> str:
-    """
-    Set topic status to active, reset SM-2 state.
-    Returns topic name on success.
-    Raises ValueError if topic not found.
+    """Promote an in-progress topic to active and reset SM-2 scheduling fields.
+    Args:
+        topic_id: Database id of the topic to graduate.
+    Returns:
+        Topic name for user-facing confirmation messages.
     """
     with get_connection() as conn:
         cursor = conn.execute(
@@ -32,10 +33,11 @@ def graduate_topic(topic_id: int) -> str:
     return topic_name
 
 
-def get_in_progress_topics() -> list[dict]:
-    """
-    Return all in_progress topics ordered by tier ASC, name ASC.
-    Returns list of dicts with keys: id, name.
+def get_in_progress_topics() -> list[dict[str, int | str]]:
+    """Return all in-progress topics ordered by tier then name.
+
+    Returns:
+        List of dictionaries with keys ``id`` and ``name``.
     """
     with get_connection() as conn:
         rows = conn.execute(

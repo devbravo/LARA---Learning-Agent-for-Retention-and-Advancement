@@ -23,7 +23,6 @@ class Intent:
         message_id: Source Telegram message id when available.
         extra: Additional partial state passed to graph invocation.
     """
-
     trigger: str
     chat_id: int
     message_id: int | None
@@ -48,7 +47,6 @@ def parse_callback(
     Returns:
         ``Intent`` or ``JSONResponse`` for recognized callbacks, else ``None``.
     """
-
     if cb in ("30 min", "45 min", "60 min"):
         return callback_handlers.handle_duration(cb, chat_id, message_id)
     elif cb in ("yes, book them", "confirm"):
@@ -69,11 +67,9 @@ def parse_callback(
 
 def parse_message(message_text: str, chat_id: int) -> ParseResult:
     """Parse incoming text message into a dispatchable result.
-
     Args:
         message_text: Raw Telegram text payload.
         chat_id: Telegram chat identifier.
-
     Returns:
         ``Intent`` or ``JSONResponse`` for recognized commands/replies,
         otherwise ``None``.

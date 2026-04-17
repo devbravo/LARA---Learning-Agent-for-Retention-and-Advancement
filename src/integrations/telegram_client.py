@@ -1,3 +1,9 @@
+"""Telegram Bot API adapter for sending messages and inline keyboards.
+
+Async helper functions are wrapped by sync convenience functions so callers can
+invoke Telegram operations from scheduler threads and executor jobs.
+"""
+
 import asyncio
 import os
 from pathlib import Path
@@ -11,6 +17,10 @@ load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
 
 def _get_bot() -> tuple[Bot, int]:
+    """Create a configured bot client and resolve default chat id.
+    Returns:
+        Tuple of ``(Bot, chat_id)``.
+    """
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not token:
@@ -21,6 +31,7 @@ def _get_bot() -> tuple[Bot, int]:
 
 
 async def _send_message(text: str) -> None:
+    """Send a plain HTML-enabled Telegram message to the default chat."""
     bot, chat_id = _get_bot()
     try:
         async with bot:
@@ -30,6 +41,12 @@ async def _send_message(text: str) -> None:
 
 
 async def _send_buttons(text: str, buttons: list[str]) -> None:
+    """Send a message with a single-row inline keyboard.
+
+    Args:
+        text: Message text.
+        buttons: Callback labels (label equals callback data).
+    """
     bot, chat_id = _get_bot()
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(label, callback_data=label) for label in buttons]]
@@ -47,8 +64,13 @@ async def _send_buttons(text: str, buttons: list[str]) -> None:
 
 
 async def _send_inline_buttons(text: str, buttons: list[tuple[str, str]]) -> None:
-    """Send a message with inline keyboard where label and callback_data can differ.
-    Each button is a (label, callback_data) tuple. One button per row."""
+    """Send a message with an inline keyboard where label and data can differ.
+
+    Args:
+        text: Message text.
+        buttons: Sequence of ``(label, callback_data)`` tuples, one button per
+            row.
+    """
     bot, chat_id = _get_bot()
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(label, callback_data=data)] for label, data in buttons]
@@ -66,6 +88,7 @@ async def _send_inline_buttons(text: str, buttons: list[tuple[str, str]]) -> Non
 
 
 async def _remove_buttons(chat_id: int, message_id: int) -> None:
+    """Remove inline keyboard buttons from an existing Telegram message."""
     bot, _ = _get_bot()
     try:
         async with bot:
@@ -76,23 +99,27 @@ async def _remove_buttons(chat_id: int, message_id: int) -> None:
             )
     except TelegramError as e:
         if isinstance(e, BadRequest) and "not modified" in str(e).lower():
-            return # already removed, ignore
+            return  # already removed, ignore
         raise RuntimeError(f"Telegram remove_buttons failed: {e}") from e
 
 
 def send_message(text: str) -> None:
+    """Synchronous wrapper for ``_send_message``."""
     asyncio.run(_send_message(text))
 
 
 def send_buttons(text: str, buttons: list[str]) -> None:
+    """Synchronous wrapper for ``_send_buttons``."""
     asyncio.run(_send_buttons(text, buttons))
 
 
 def send_inline_buttons(text: str, buttons: list[tuple[str, str]]) -> None:
+    """Synchronous wrapper for ``_send_inline_buttons``."""
     asyncio.run(_send_inline_buttons(text, buttons))
 
 
 def remove_buttons(chat_id: int, message_id: int) -> None:
+    """Synchronous wrapper for ``_remove_buttons``."""
     asyncio.run(_remove_buttons(chat_id, message_id))
 
 
