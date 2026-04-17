@@ -8,13 +8,27 @@ All exceptions are caught and surfaced as user-friendly messages in state.
 import pytz
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TypedDict
 
 import logging
 from src.core import sm2 as _sm2_mod
 
 import yaml
 
+from src.agent.formatting import (
+    event_duration_min,
+    format_event_time,
+    format_time,
+    local_datetime_str,
+    topic_due_label,
+)
+from src.agent.planning_helpers import (
+    build_in_progress_study_slots,
+    build_missing_study_events,
+    get_prebooked_topics,
+    get_topic_config,
+    rebook_study_events,
+)
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
 from src.integrations import claude_api as _claude
@@ -56,49 +70,6 @@ class AgentState(TypedDict, total=False):
     current_topic_id: int | None
     current_topic_name: str | None
     study_topic_category: str | None    # selected category in /study_topic flow, e.g. "DSA"
-
-# ---------------------------------------------------------------------------
-# Formatting helpers
-# ---------------------------------------------------------------------------
-
-def _fmt_time(t) -> str:
-    """Format a datetime.time or HH:MM string to 'HH:MM'."""
-    if hasattr(t, "strftime"):
-        return t.strftime("%H:%M")
-    return str(t)[:5]
-
-
-def _fmt_event_time(dt_dict: dict) -> str:
-    """Parse a GCal start/end dict to a readable 'HH:MM' string."""
-    if "dateTime" in dt_dict:
-        dt = datetime.fromisoformat(dt_dict["dateTime"]).replace(tzinfo=None)
-        return dt.strftime("%H:%M")
-    return "all-day"
-
-
-def _event_duration_min(event: dict) -> int:
-    """Compute duration in minutes from a GCal event dict."""
-    try:
-        s = datetime.fromisoformat(event["start"]["dateTime"]).replace(tzinfo=None)
-        e = datetime.fromisoformat(event["end"]["dateTime"]).replace(tzinfo=None)
-        return int((e - s).total_seconds() / 60)
-    except Exception:
-        return 0
-
-
-def _topic_due_label(topic: dict) -> str:
-    """Return 'due' or 'due tomorrow' based on next_review."""
-    try:
-        nr = date.fromisoformat(topic["next_review"])
-        delta = (nr - date.today()).days
-        if delta <= 0:
-            return "due"
-        if delta == 1:
-            return "due tomorrow"
-        return f"due in {delta}d"
-    except Exception:
-        return "due"
-
 
 # ---------------------------------------------------------------------------
 # Node: router
@@ -185,61 +156,6 @@ def gap_finder(state: AgentState) -> AgentState:
 # Node: daily_planning
 # ---------------------------------------------------------------------------
 
-def _rebook_study_events(
-        in_progress_topics: list[str], timed_events: list[dict[str, Any]], target_date: date, config: dict
-) -> None:
-    tz = pytz.timezone(config["timezone"])
-    offset = datetime.now(tz).strftime("%z")
-    offset_str = f"{offset[:3]}:{offset[3:]}"
-
-    start_hour = 8  # start at 08:00
-
-    for topic_name in in_progress_topics:
-        already_booked = any(
-            _is_topic_in_summary(topic_name, ev.get("summary", ""))
-            for ev in timed_events
-        )
-        if not already_booked:
-            try:
-                start = f"{target_date.isoformat()}T{start_hour:02d}:00:00{offset_str}"
-                end = f"{target_date.isoformat()}T{start_hour + 1:02d}:00:00{offset_str}"
-                _gcal.write_study_event(
-                    topic=topic_name,
-                    start=start,
-                    end=end,
-                )
-            except Exception as e:
-                logger.warning("Failed to rebook [Study] for %s: %s", topic_name, e)
-
-        start_hour += 1  # always advance, whether booked or already on calendar
-
-
-def _get_topic_config(topic_name: str, config: dict) -> dict:
-    for t in config.get("topics", []):
-        if t["name"] == topic_name:
-            return t
-    return {}
-
-
-def _is_topic_in_summary(topic_name: str, summary: str) -> bool:
-    norm_topic = topic_name.lower().replace(" and ", " & ")
-    norm_summary = summary.lower().replace(" and ", " & ")
-    return norm_topic in norm_summary or norm_summary in norm_topic
-
-
-def _get_prebooked_topics(events: list, due_topics: list) -> set:
-    prebooked = set()
-    for topic in due_topics:
-        for ev in events:
-            raw_summary = ev.get("summary") or ""
-            if not raw_summary:
-                continue
-            if _is_topic_in_summary(topic["name"], raw_summary):
-                prebooked.add(topic["name"])
-                break
-    return prebooked
-
-
 def daily_planning(state: AgentState) -> AgentState:
     """
     Assembles the morning plan (trigger="daily") or evening preview (trigger="evening")
@@ -269,8 +185,8 @@ def daily_planning(state: AgentState) -> AgentState:
             if timed_events:
                 lines.append("📅 Your day:")
                 for ev in timed_events:
-                    t = _fmt_event_time(ev["start"])
-                    dur = _event_duration_min(ev)
+                    t = format_event_time(ev["start"])
+                    dur = event_duration_min(ev)
                     dur_str = f"{dur}min" if dur else ""
                     summary = ev.get("summary", "(No title)")
                     lines.append(f"• {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
@@ -280,7 +196,7 @@ def daily_planning(state: AgentState) -> AgentState:
 
             # Study windows for tomorrow (no after_time filter — all windows are in the future)
             free_windows = _gap_finder.find_free_windows(events, target_date, config)
-            prebooked = _get_prebooked_topics(timed_events, due_topics)
+            prebooked = get_prebooked_topics(timed_events, due_topics)
             available_topics = [t for t in due_topics if t["name"] not in prebooked]
             topics_config = _load_topics()
 
@@ -290,13 +206,13 @@ def daily_planning(state: AgentState) -> AgentState:
                     topic = available_topics[i] if i < len(available_topics) else None
                     if topic is None:
                         break
-                    topic_cfg = _get_topic_config(topic["name"], topics_config)
+                    topic_cfg = get_topic_config(topic["name"], topics_config)
                     default_duration = topic_cfg.get("default_duration_minutes", 60)
                     duration = min(default_duration, win["duration_min"])
-                    t_start = _fmt_time(win["start"])
+                    t_start = format_time(win["start"])
                     start_dt = datetime.combine(target_date, win["start"])
                     end_dt = start_dt + timedelta(minutes=duration)
-                    t_end = _fmt_time(end_dt.time())
+                    t_end = format_time(end_dt.time())
                     lines.append(f"• {t_start}–{t_end} → {topic['name']} ({duration}min)")
             else:
                 lines.append("🧠 Study windows: None found for tomorrow")
@@ -306,7 +222,7 @@ def daily_planning(state: AgentState) -> AgentState:
             if due_topics:
                 lines.append("📌 SM-2 picks tomorrow:")
                 for i, topic in enumerate(due_topics, 1):
-                    label = _topic_due_label(topic)
+                    label = topic_due_label(topic)
                     ef = topic["easiness_factor"]
                     lines.append(f"• {i}. {topic['name']} — {label} (EF: {ef})")
                 lines.append("")
@@ -322,8 +238,19 @@ def daily_planning(state: AgentState) -> AgentState:
         # --- Morning briefing: full interactive plan for today ---
         _TZ = pytz.timezone(config["timezone"])
         after_time = datetime.now(_TZ).time()
-        free_windows = _gap_finder.find_free_windows(events, target_date, config, after_time)
-        prebooked = _get_prebooked_topics(timed_events, due_topics)
+
+        # Fetch in_progress topics BEFORE computing free windows so their
+        # [Study] blocks are treated as busy by gap_finder and don't overlap [Mock] slots.
+        in_progress_topics = topic_repository.get_in_progress_topic_names()
+
+        study_busy_events = build_missing_study_events(
+            in_progress_topics, timed_events, target_date, config
+        )
+
+        free_windows = _gap_finder.find_free_windows(
+            events + study_busy_events, target_date, config, after_time
+        )
+        prebooked = get_prebooked_topics(timed_events, due_topics)
 
         # --- Build message ---
         day_str = target_date.strftime("%A %B %-d")
@@ -333,8 +260,8 @@ def daily_planning(state: AgentState) -> AgentState:
         if timed_events:
             lines.append("📅 Your day:")
             for ev in timed_events:
-                t = _fmt_event_time(ev["start"])
-                dur = _event_duration_min(ev)
+                t = format_event_time(ev["start"])
+                dur = event_duration_min(ev)
                 dur_str = f"{dur}min" if dur else ""
                 summary = ev.get("summary", "(No title)")
                 lines.append(f"• {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
@@ -369,12 +296,12 @@ def daily_planning(state: AgentState) -> AgentState:
                         if remaining_min < min_window_minutes:
                             break  # not enough time left in this window for anything useful
                         topic = remaining_topics[0]
-                        topic_cfg = _get_topic_config(topic["name"], topics_config)
+                        topic_cfg = get_topic_config(topic["name"], topics_config)
                         default_duration = topic_cfg.get("default_duration_minutes", 60)
                         duration = min(default_duration, remaining_min)
                         end_dt = cursor + timedelta(minutes=duration)
-                        t_start = _fmt_time(cursor.time())
-                        t_end = _fmt_time(end_dt.time())
+                        t_start = format_time(cursor.time())
+                        t_end = format_time(end_dt.time())
                         lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
                         if topic.get("weak_areas"):
                             lines.append(f" ⚠️ Focus on: {topic['weak_areas']}")
@@ -400,19 +327,18 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("🎯 Mock interview blocks: None found today")
             lines.append("")
 
-        in_progress_topics = topic_repository.get_in_progress_topic_names()
-        if in_progress_topics:
+        in_progress_study_slots = build_in_progress_study_slots(in_progress_topics, timed_events, target_date)
+
+        if in_progress_study_slots:
             lines.append("⏳ In Progress:")
-            start_hour = 8  # TODO MAGIC NUMBER
-            for topic_name in in_progress_topics:
-                t_start = f"{start_hour:02d}:00"
-                t_end = f"{start_hour + 1:02d}:00"
-                lines.append(f"• {t_start}–{t_end} [STUDY] {topic_name} (60min)")
-                start_hour += 1
+            for slot in in_progress_study_slots:
+                lines.append(
+                    f"• {slot['start']}–{slot['end']} [STUDY] {slot['topic']} ({slot['duration_min']}min)"
+                )
             lines.append("")
 
         # Auto-rebook [Study] events for in_progress topics
-        _rebook_study_events(in_progress_topics, timed_events, target_date, config)
+        rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
         assigned_names = {slot["topic"] for slot in proposed_slots}
         backlog_topics = [t for t in available_topics if t["name"] not in assigned_names]
@@ -563,9 +489,10 @@ def confirm(state: AgentState) -> AgentState:
     On-demand flow: sends the study brief as a plain message (no booking needed).
     Does NOT advance state — next trigger arrives via webhook.
     """
+    messages = state.get("messages") or []
+    fallback_text = messages[-1] if messages else ""
     try:
-        messages = state.get("messages") or []
-        text = messages[-1] if messages else "Ready to study?"
+        text = fallback_text or "Ready to study?"
 
         if state.get("proposed_slots"):
             # Daily briefing flow, needs confirmation before booking
@@ -575,7 +502,7 @@ def confirm(state: AgentState) -> AgentState:
             _telegram.send_message(text)
     except Exception as e:
         try:
-            _telegram.send_message(f"⚠️ Button send failed: {e}\n\n{messages[-1] if messages else ''}")
+            _telegram.send_message(f"⚠️ Button send failed: {e}\n\n{fallback_text}")
         except Exception:
             pass
     return {}
@@ -710,8 +637,6 @@ def output(state: AgentState) -> AgentState:
         today = date.today()
         config = _load_config()
         tz = pytz.timezone(config["timezone"])
-        offset = datetime.now(tz).strftime("%z")
-        offset_str = f"{offset[:3]}:{offset[3:]}"
 
         booked: list[str] = []
         slots = state.get("proposed_slots")
@@ -719,12 +644,14 @@ def output(state: AgentState) -> AgentState:
         if slots:
             for slot in slots:
                 try:
-                    t_start = _fmt_time(slot["start"])
-                    t_end = _fmt_time(slot["end"])
+                    t_start = format_time(slot["start"])
+                    t_end = format_time(slot["end"])
+                    start_hour, start_minute = map(int, t_start.split(":"))
+                    end_hour, end_minute = map(int, t_end.split(":"))
                     _gcal.write_event(
                         topic=slot["topic"],
-                        start=f"{today.isoformat()}T{t_start}:00{offset_str}",
-                        end=f"{today.isoformat()}T{t_end}:00{offset_str}",
+                        start=local_datetime_str(today, start_hour, start_minute, tz),
+                        end=local_datetime_str(today, end_hour, end_minute, tz),
                     )
                     booked.append(slot["topic"])
                 except Exception as e:
@@ -734,12 +661,14 @@ def output(state: AgentState) -> AgentState:
                 topic = state.get("proposed_topic")
                 slot = state.get("proposed_slot")
                 if topic and slot:
-                    t_start = _fmt_time(slot["start"])
-                    t_end = _fmt_time(slot["end"])
+                    t_start = format_time(slot["start"])
+                    t_end = format_time(slot["end"])
+                    start_hour, start_minute = map(int, t_start.split(":"))
+                    end_hour, end_minute = map(int, t_end.split(":"))
                     _gcal.write_event(
                         topic=topic,
-                        start=f"{today.isoformat()}T{t_start}:00{offset_str}",
-                        end=f"{today.isoformat()}T{t_end}:00{offset_str}",
+                        start=local_datetime_str(today, start_hour, start_minute, tz),
+                        end=local_datetime_str(today, end_hour, end_minute, tz),
                     )
                     booked.append(topic)
             except Exception as e:

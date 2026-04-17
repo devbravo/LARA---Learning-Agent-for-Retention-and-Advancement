@@ -19,9 +19,6 @@ import tempfile
 from datetime import date
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -314,8 +311,8 @@ def test_rebooking_fires_when_not_already_booked():
 
     mock_write = MagicMock()
     with patch.object(nodes_module._gcal, "write_study_event", mock_write):
-        from src.agent.nodes import _rebook_study_events
-        _rebook_study_events(in_progress_topics, timed_events, target_date, config)
+        from src.agent.planning_helpers import rebook_study_events
+        rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     mock_write.assert_called_once()
     _, kwargs = mock_write.call_args
@@ -335,8 +332,8 @@ def test_rebooking_fires_for_each_unbooked_in_progress_topic():
 
     mock_write = MagicMock()
     with patch.object(nodes_module._gcal, "write_study_event", mock_write):
-        from src.agent.nodes import _rebook_study_events
-        _rebook_study_events(in_progress_topics, timed_events, target_date, config)
+        from src.agent.planning_helpers import rebook_study_events
+        rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     assert mock_write.call_count == 2
 
@@ -362,8 +359,8 @@ def test_rebooking_skipped_when_study_event_already_booked():
 
     mock_write = MagicMock()
     with patch.object(nodes_module._gcal, "write_study_event", mock_write):
-        from src.agent.nodes import _rebook_study_events
-        _rebook_study_events(in_progress_topics, timed_events, target_date, config)
+        from src.agent.planning_helpers import rebook_study_events
+        rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     mock_write.assert_not_called()
 
@@ -385,9 +382,139 @@ def test_rebooking_skipped_for_booked_books_unbooked():
 
     mock_write = MagicMock()
     with patch.object(nodes_module._gcal, "write_study_event", mock_write):
-        from src.agent.nodes import _rebook_study_events
-        _rebook_study_events(in_progress_topics, timed_events, target_date, config)
+        from src.agent.planning_helpers import rebook_study_events
+        rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     mock_write.assert_called_once()
     _, kwargs = mock_write.call_args
     assert kwargs["topic"] == "LLMOps - MLflow"
+
+
+def test_missing_study_busy_events_skip_topics_already_booked_later_in_day():
+    """Planning should not synthesize an 08:00 study block when a real event already exists later."""
+    target_date = date.today()
+    config = {"timezone": "UTC"}
+    in_progress_topics = ["DSA - Arrays"]
+    timed_events = [
+        {
+            "summary": "[Study] DSA - Arrays",
+            "start": {"dateTime": f"{target_date.isoformat()}T14:00:00+00:00"},
+            "end": {"dateTime": f"{target_date.isoformat()}T15:00:00+00:00"},
+        }
+    ]
+
+    from src.agent.planning_helpers import build_missing_study_events
+
+    assert build_missing_study_events(in_progress_topics, timed_events, target_date, config) == []
+
+
+def test_missing_study_busy_events_preserve_default_slot_order_for_unbooked_topics():
+    """Synthetic planning blocks should mirror rebooking's 08:00+ slot sequence."""
+    target_date = date.today()
+    config = {"timezone": "UTC"}
+    in_progress_topics = ["DSA - Arrays", "LLMOps - MLflow"]
+    timed_events = [
+        {
+            "summary": "[Study] DSA - Arrays",
+            "start": {"dateTime": f"{target_date.isoformat()}T14:00:00+00:00"},
+            "end": {"dateTime": f"{target_date.isoformat()}T15:00:00+00:00"},
+        }
+    ]
+
+    from src.agent.planning_helpers import build_missing_study_events
+
+    events = build_missing_study_events(in_progress_topics, timed_events, target_date, config)
+
+    assert len(events) == 1
+    assert events[0]["summary"] == "[Study] LLMOps - MLflow"
+    assert f"{target_date.isoformat()}T09:00:00" in events[0]["start"]["dateTime"]
+    assert f"{target_date.isoformat()}T10:00:00" in events[0]["end"]["dateTime"]
+
+
+def test_in_progress_study_slots_use_actual_booked_time_when_present():
+    """The in-progress display should show the real booked [Study] event time when available."""
+    target_date = date.today()
+    timed_events = [
+        {
+            "summary": "[Study] DSA - Arrays",
+            "start": {"dateTime": f"{target_date.isoformat()}T14:00:00+00:00"},
+            "end": {"dateTime": f"{target_date.isoformat()}T15:30:00+00:00"},
+        }
+    ]
+
+    from src.agent.planning_helpers import build_in_progress_study_slots
+
+    slots = build_in_progress_study_slots(["DSA - Arrays"], timed_events, target_date)
+
+    assert slots == [
+        {
+            "topic": "DSA - Arrays",
+            "start": "14:00",
+            "end": "15:30",
+            "duration_min": 90,
+        }
+    ]
+
+
+def test_in_progress_study_slots_mix_actual_and_default_slots_chronologically():
+    """Display slots should combine real and fallback study times in chronological order."""
+    target_date = date.today()
+    timed_events = [
+        {
+            "summary": "[Study] DSA - Arrays",
+            "start": {"dateTime": f"{target_date.isoformat()}T14:00:00+00:00"},
+            "end": {"dateTime": f"{target_date.isoformat()}T15:00:00+00:00"},
+        }
+    ]
+
+    from src.agent.planning_helpers import build_in_progress_study_slots
+
+    slots = build_in_progress_study_slots(["DSA - Arrays", "LLMOps - MLflow"], timed_events, target_date)
+
+    assert slots == [
+        {
+            "topic": "LLMOps - MLflow",
+            "start": "09:00",
+            "end": "10:00",
+            "duration_min": 60,
+        },
+        {
+            "topic": "DSA - Arrays",
+            "start": "14:00",
+            "end": "15:00",
+            "duration_min": 60,
+        },
+    ]
+
+
+def test_missing_study_busy_events_stop_before_invalid_next_day_timestamps():
+    """Synthetic busy events should stop before generating invalid T24:00-style timestamps."""
+    target_date = date.today()
+    config = {"timezone": "UTC"}
+    in_progress_topics = [f"Topic {i}" for i in range(17)]
+
+    from src.agent.planning_helpers import build_missing_study_events
+
+    events = build_missing_study_events(in_progress_topics, [], target_date, config)
+
+    assert len(events) == 16
+    assert all("T24:" not in event["start"]["dateTime"] for event in events)
+    assert all("T24:" not in event["end"]["dateTime"] for event in events)
+
+
+def test_rebook_study_events_stop_when_no_valid_same_day_slot_remains():
+    """Rebooking should not try to create study events beyond the final same-day slot."""
+    target_date = date.today()
+    config = {"timezone": "UTC"}
+    in_progress_topics = [f"Topic {i}" for i in range(17)]
+
+    from src.agent import nodes as nodes_module
+
+    mock_write = MagicMock()
+    with patch.object(nodes_module._gcal, "write_study_event", mock_write):
+        from src.agent.planning_helpers import rebook_study_events
+        rebook_study_events(in_progress_topics, [], target_date, config)
+
+    assert mock_write.call_count == 16
+
+
