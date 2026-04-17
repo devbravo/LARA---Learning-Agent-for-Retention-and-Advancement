@@ -1,8 +1,8 @@
 """
-Unit tests for src/webhook_handler.py
+Unit tests for the Telegram webhook handler package.
 
 Pure unit tests — no FastAPI TestClient, no real DB, no Telegram calls.
-All external dependencies (_graph, DB, Telegram) are mocked.
+All external dependencies (graph, DB, Telegram) are mocked.
 
 asyncio.run() drains the default executor before returning (Python 3.9+), so
 executor-dispatched callables complete before any assertion runs.
@@ -21,12 +21,12 @@ from src.models.telegram import (
     TelegramMessage,
     TelegramUpdate,
 )
-from src.webhook_handler import (
+from src.api.telegram.dispatcher import (
     _confirmed_message_ids,
     _in_flight_message_ids,
     _processed_updates,
-    handle_update,
 )
+from src.api.telegram.handler import handle_update
 
 
 # ---------------------------------------------------------------------------
@@ -105,10 +105,7 @@ def test_deduplication_skips_second_call():
     """Second call with the same update_id returns ok without invoking the graph."""
     update = _msg(update_id=55555, chat_id=111, text="/study")
 
-    with patch("src.webhook_handler._invoke_safe") as mock_invoke, \
-         patch("src.webhook_handler._graph") as mock_graph:
-        mock_graph.get_state.return_value = {}
-
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
         first_count = mock_invoke.call_count  # 1 (executor ran synchronously via asyncio.run)
 
@@ -124,7 +121,7 @@ def test_unknown_callback_returns_ok_without_graph():
     """An unrecognised callback_data returns ok and never invokes the graph."""
     update = _cb(update_id=1, chat_id=111, data="totally_unknown_action")
 
-    with patch("src.webhook_handler._invoke_safe") as mock_invoke:
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         result = _run(handle_update(update))
 
     assert result.body == b'{"ok":true}'
@@ -139,8 +136,7 @@ def test_done_message_triggers_done():
     """/done text triggers the 'done' trigger."""
     update = _msg(update_id=2, chat_id=111, text="/done")
 
-    with patch("src.webhook_handler._invoke_safe") as mock_invoke, \
-         patch("src.webhook_handler._graph"):
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
@@ -155,8 +151,7 @@ def test_study_message_triggers_on_demand():
     """/study text triggers the 'on_demand' trigger."""
     update = _msg(update_id=3, chat_id=111, text="/study")
 
-    with patch("src.webhook_handler._invoke_safe") as mock_invoke, \
-         patch("src.webhook_handler._graph"):
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
@@ -171,8 +166,7 @@ def test_briefing_message_triggers_daily():
     """/briefing text triggers the 'daily' trigger."""
     update = _msg(update_id=4, chat_id=111, text="/briefing")
 
-    with patch("src.webhook_handler._invoke_safe") as mock_invoke, \
-         patch("src.webhook_handler._graph"):
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
@@ -187,7 +181,7 @@ def test_yes_book_them_callback_triggers_confirm():
     """\"yes, book them" callback triggers the 'confirm' trigger."""
     update = _cb(update_id=5, chat_id=111, data="yes, book them", message_id=200)
 
-    with patch("src.webhook_handler._invoke_safe") as mock_invoke:
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
@@ -203,9 +197,9 @@ def test_skip_callback_sends_skip_message_without_graph():
     """\"skip\" with no awaiting_weak_areas state sends the skip message and returns."""
     update = _cb(update_id=6, chat_id=111, data="skip", message_id=201)
 
-    with patch("src.webhook_handler._graph") as mock_graph, \
-         patch("src.webhook_handler.send_message") as mock_send, \
-         patch("src.webhook_handler._invoke_safe") as mock_invoke:
+    with patch("src.api.telegram.callback_handlers._graph") as mock_graph, \
+         patch("src.api.telegram.callback_handlers.send_message") as mock_send, \
+         patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         mock_graph.get_state.return_value = {}
 
         result = _run(handle_update(update))
@@ -224,7 +218,7 @@ def test_ok_rating_callback_triggers_rate_with_score_3():
     """😐 OK" callback triggers 'rate' with quality_score=3."""
     update = _cb(update_id=7, chat_id=111, data="😐 OK", message_id=202)
 
-    with patch("src.webhook_handler._invoke_safe") as mock_invoke:
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
@@ -240,7 +234,7 @@ def test_category_callback_triggers_study_topic_category():
     """category:DSA" triggers 'study_topic_category' with the correct category."""
     update = _cb(update_id=8, chat_id=111, data="category:DSA")
 
-    with patch("src.webhook_handler._invoke_safe") as mock_invoke:
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
@@ -262,8 +256,8 @@ def test_subtopic_id_valid_triggers_study_topic_confirm():
     mock_conn.__exit__ = MagicMock(return_value=False)
     mock_conn.execute.return_value.fetchone.return_value = mock_row
 
-    with patch("src.webhook_handler.get_connection", return_value=mock_conn), \
-         patch("src.webhook_handler._invoke_safe") as mock_invoke:
+    with patch("src.api.telegram.callback_handlers.get_connection", return_value=mock_conn), \
+         patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
@@ -279,7 +273,7 @@ def test_subtopic_id_invalid_returns_early():
     """subtopic_id:abc" is invalid — returns ok without invoking the graph."""
     update = _cb(update_id=10, chat_id=111, data="subtopic_id:abc")
 
-    with patch("src.webhook_handler._invoke_safe") as mock_invoke:
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         result = _run(handle_update(update))
 
     assert result.body == b'{"ok":true}'
@@ -304,9 +298,9 @@ def test_studied_valid_id_updates_db_and_sends_confirmation():
     mock_conn.__exit__ = MagicMock(return_value=False)
     mock_conn.execute.side_effect = [mock_update_cursor, mock_select_cursor]
 
-    with patch("src.webhook_handler.get_connection", return_value=mock_conn), \
-         patch("src.webhook_handler.send_message") as mock_send, \
-         patch("src.webhook_handler.remove_buttons"):
+    with patch("src.services.topic_service.get_connection", return_value=mock_conn), \
+         patch("src.api.telegram.callback_handlers.send_message") as mock_send, \
+         patch("src.api.telegram.callback_handlers.remove_buttons"):
         _run(handle_update(update))
 
     mock_send.assert_called_once()
@@ -331,8 +325,8 @@ def test_studied_invalid_id_sends_error_message():
     mock_conn.__exit__ = MagicMock(return_value=False)
     mock_conn.execute.return_value = mock_cursor
 
-    with patch("src.webhook_handler.get_connection", return_value=mock_conn), \
-         patch("src.webhook_handler.send_message") as mock_send:
+    with patch("src.services.topic_service.get_connection", return_value=mock_conn), \
+         patch("src.api.telegram.callback_handlers.send_message") as mock_send:
         result = _run(handle_update(update))
 
     assert result.body == b'{"ok":true}'
@@ -354,8 +348,8 @@ def test_in_flight_message_id_blocks_repeat_tap():
 
     update = _cb(update_id=13, chat_id=111, data="yes, book them", message_id=message_id)
 
-    with patch("src.webhook_handler._invoke_safe") as mock_invoke, \
-         patch("src.webhook_handler.send_message"):
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke, \
+         patch("src.api.telegram.callback_handlers.send_message"):
         result = _run(handle_update(update))
 
     assert result.body == b'{"ok":true}'

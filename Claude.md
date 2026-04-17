@@ -166,18 +166,29 @@ src/
     app.py               # FastAPI app factory + lifespan (scheduler start/stop)
     routes/
       health.py          # GET /health
-      webhook.py         # POST /webhook — auth check + parse → delegates to webhook_handler
+      webhook.py         # POST /webhook — auth check + parse → delegates to handle_update()
       scheduler_status.py  # GET /scheduler-status
-    schemas/
-      telegram.py        # Pydantic models for Telegram payloads (TelegramUpdate, etc.)
-  webhook_handler.py     # Intent detection, deduplication, _invoke_safe, handle_update()
+    telegram/
+      __init__.py
+      handler.py         # handle_update() — dedup + parse + dispatch (thin orchestrator)
+      intent_parser.py   # Intent dataclass; parse_callback / parse_message
+      callback_handlers.py  # one function per callback type (confirm, skip, rating, etc.)
+      message_handlers.py   # one function per command (/done, /study, /briefing, etc.)
+      dispatcher.py      # _invoke_safe, dedup sets, idempotency lock
   server.py              # Backwards compat: from src.api.app import app
+  services/
+    topic_service.py     # graduate_topic(), get_in_progress_topics() — studied: DB logic
 ```
 
 **Responsibilities:**
 - `src/api/app.py` — app factory only; registers routers, manages scheduler lifespan
 - `src/api/routes/webhook.py` — validates `X-Telegram-Bot-Api-Secret-Token`, parses raw JSON into `TelegramUpdate`, delegates to `handle_update()`
-- `src/webhook_handler.py` — owns all business logic: deduplication sets (`_processed_updates`, `_in_flight_message_ids`, `_confirmed_message_ids`), intent detection (`cb.startswith(...)` / `message_text ==` branches), `_invoke_safe()`, and the `studied:` inline DB path
+- `src/api/telegram/handler.py` — thin orchestrator: dedup via dispatcher, parse via intent_parser, dispatch to invoke_safe or return direct response
+- `src/api/telegram/dispatcher.py` — owns dedup sets (`_processed_updates`, `_in_flight_message_ids`, `_confirmed_message_ids`), idempotency lock, `invoke_safe()`
+- `src/api/telegram/intent_parser.py` — defines `Intent` dataclass; `parse_callback` and `parse_message` delegate to handler modules
+- `src/api/telegram/callback_handlers.py` — one function per callback type; handles idempotency checks; `handle_studied` returns `JSONResponse` directly
+- `src/api/telegram/message_handlers.py` — one function per command; `handle_studied_command` returns `JSONResponse` directly
+- `src/services/topic_service.py` — `graduate_topic()` and `get_in_progress_topics()`; uses `get_connection()` from `src.core.db`
 - `src/server.py` — one-liner re-export (`from src.api.app import app`) to preserve the `from src.server import app` import in `main.py`
 
 ---

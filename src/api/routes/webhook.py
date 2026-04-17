@@ -3,7 +3,7 @@ import os
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from src.models.telegram import TelegramUpdate
-from src.webhook_handler import handle_update
+from src.api.telegram.handler import handle_update
 
 router = APIRouter()
 
