@@ -40,8 +40,8 @@ creates or rebooks [Study] events for the in-progress study flow.
 | `/done` | `done_parser` → END (waits for rating tap) |
 | Rating tap (😕 😐 😊) | `log_session` → `output` → END (waits for weak areas reply) |
 | Weak areas reply or Skip | `log_weak_areas` → `output` → END |
-| `/briefing` | `daily_planning` (manual trigger for testing) |
-| `/studied` | Webhook helper sends in-progress topic picker (inline buttons) |
+| `/plan` | `daily_planning` (manual trigger for testing) |
+| `/activate` | Webhook helper sends in-progress topic picker (inline buttons) |
 | `studied:<topic_id>` tap | Promotes topic to `active`, resets SM-2 fields, sets first review for tomorrow |
 
 ## Graph flow

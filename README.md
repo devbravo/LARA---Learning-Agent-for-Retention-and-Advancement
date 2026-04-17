@@ -11,7 +11,7 @@ reads Google Calendar to plan around your real schedule, generates focused study
 - **Morning briefing** — sent daily via Telegram with your calendar, free windows, and assigned study blocks
 - **On-demand study** — send `/study` to generate a brief for the highest-priority due topic (defaults to 30 min unless a duration callback is provided)
 - **Done flow** — send `/done` after studying; LARA asks how each session went, prompts for weak areas, logs everything, and updates SM-2
-- **In-progress graduation flow** — send `/studied`, pick an in-progress topic, and promote it to active with first review scheduled for tomorrow
+- **In-progress graduation flow** — send `/activate`, pick an in-progress topic, and promote it to active with first review scheduled for tomorrow
 - **Calendar safety** — reads all events to plan around them and only creates new tagged `[Mock]` and `[Study]` events; it does not modify unrelated calendar entries
 - **Protected block** — never sends messages or fires jobs during configured protected hours
 
