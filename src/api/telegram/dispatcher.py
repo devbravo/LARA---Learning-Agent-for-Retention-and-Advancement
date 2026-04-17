@@ -1,13 +1,15 @@
-"""
-Dispatcher — invocation control, deduplication, and idempotency state.
+"""Webhook dispatch utilities: deduplication, idempotency, and safe invocation.
 
-Owns all dedup sets and the invoke_safe function.
-All state is module-level so it persists across requests in the same process.
+This module centralizes mutable in-memory state used by webhook handling:
+- seen update ids (duplicate delivery guard),
+- in-flight / confirmed message ids (repeat-tap idempotency),
+- safe graph invocation that never propagates exceptions to executor threads.
 """
 
 import logging
 import os
 import threading
+from typing import Any
 
 from src.agent import graph as _graph
 
@@ -25,7 +27,12 @@ _confirm_lock = threading.Lock()
 
 
 def is_duplicate(update_id: int) -> bool:
-    """Check and register update_id. Returns True if already seen (duplicate)."""
+    """Check whether an update id has already been processed.
+    Args:
+        update_id: Telegram ``update_id``.
+    Returns:
+        ``True`` if the id was already seen; ``False`` if newly registered.
+    """
     if update_id in _processed_updates:
         return True
     _processed_updates.add(update_id)
@@ -35,9 +42,12 @@ def is_duplicate(update_id: int) -> bool:
 
 
 def try_mark_in_flight(message_id: int) -> bool:
-    """
-    Attempt to claim message_id as in-flight.
-    Returns False if already in-flight or confirmed (repeat tap); True if newly claimed.
+    """Attempt to claim a message id for single processing.
+    Args:
+        message_id: Telegram message id associated with callback buttons.
+    Returns:
+        ``False`` when already in-flight/confirmed (repeat tap), otherwise
+        ``True`` after marking the id as in-flight.
     """
     with _confirm_lock:
         if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
@@ -47,7 +57,10 @@ def try_mark_in_flight(message_id: int) -> bool:
 
 
 def mark_confirmed(message_id: int) -> None:
-    """Move message_id from in-flight to confirmed (called on successful invocation)."""
+    """Mark a message id as confirmed and clear its in-flight state.
+    Args:
+        message_id: Telegram message id that completed successfully.
+    """
     with _confirm_lock:
         _in_flight_message_ids.discard(message_id)
         _confirmed_message_ids.add(message_id)
@@ -56,13 +69,24 @@ def mark_confirmed(message_id: int) -> None:
 
 
 def clear_in_flight(message_id: int) -> None:
-    """Remove message_id from in-flight (called on error)."""
+    """Remove a message id from in-flight tracking.
+    Args:
+        message_id: Telegram message id to release, typically on error.
+    """
     with _confirm_lock:
         _in_flight_message_ids.discard(message_id)
 
 
-def invoke_safe(trigger: str, chat_id: int, **kwargs) -> None:
-    """Invoke the graph, catching all exceptions so executor threads never crash."""
+def invoke_safe(trigger: str, chat_id: int, **kwargs: Any) -> None:
+    """Invoke the graph while preventing thread-level crashes.
+    Args:
+        trigger: Graph trigger to invoke.
+        chat_id: Telegram chat id used as LangGraph thread id.
+        **kwargs: Optional state payload forwarded to graph invocation.
+    Notes:
+        On success, eligible message ids are moved to confirmed state.
+        On failure, in-flight state is cleared and the exception is logged.
+    """
     message_id: int | None = kwargs.get("message_id")
     try:
         logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)

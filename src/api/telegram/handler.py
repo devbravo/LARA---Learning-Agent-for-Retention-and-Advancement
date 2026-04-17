@@ -1,15 +1,15 @@
-"""
-Telegram update handler — thin orchestrator.
+"""Telegram update orchestrator.
 
-Responsibilities:
-  1. Deduplication via dispatcher
-  2. Extract chat_id, callback_data, message_text, message_id from update
-  3. Parse into Intent (or direct JSONResponse) via intent_parser
-  4. Dispatch: invoke_safe for graph triggers, return direct responses otherwise
+This module coordinates update processing without embedding business logic:
+1) deduplicate updates,
+2) extract normalized payload fields,
+3) parse into ``Intent`` or direct response,
+4) dispatch to executor-backed graph invocation when required.
 """
 
 import asyncio
 import logging
+from typing import TypeAlias
 
 from fastapi.responses import JSONResponse
 
@@ -20,9 +20,17 @@ from src.api.telegram.intent_parser import Intent, parse_callback, parse_message
 
 logger = logging.getLogger(__name__)
 
+ParseResult: TypeAlias = Intent | JSONResponse | None
+
 
 async def handle_update(update: TelegramUpdate) -> JSONResponse:
-    """Process a Telegram update: dedup, extract intent, invoke graph."""
+    """Process a single Telegram update end-to-end.
+    Args:
+        update: Parsed Telegram webhook payload.
+    Returns:
+        ``JSONResponse({'ok': True})`` for handled or ignored updates, or a
+        direct response produced by callback/message handlers.
+    """
     logger.debug("Webhook update: update_id=%s", update.update_id)
 
     # --- 1. Deduplication ---
@@ -52,7 +60,7 @@ async def handle_update(update: TelegramUpdate) -> JSONResponse:
         return JSONResponse({"ok": True})
 
     # --- 3. Parse intent ---
-    result = None
+    result: ParseResult = None
 
     if callback_data is not None:
         cb = callback_data.lower()

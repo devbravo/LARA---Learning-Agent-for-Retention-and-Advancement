@@ -1,8 +1,9 @@
-"""
-Message handlers — one function per Telegram command / message type.
+"""Telegram message handlers for command and free-text updates.
 
-Each function returns an Intent (for graph dispatch), a JSONResponse
-(for direct response with no graph invocation), or None to signal early return.
+This module translates message text into either:
+- an ``Intent`` that should be dispatched to the graph,
+- a direct ``JSONResponse`` for command flows handled without graph invocation,
+- or ``None`` for unrecognized input.
 """
 
 import asyncio
@@ -18,30 +19,56 @@ from src.services import topic_service
 logger = logging.getLogger(__name__)
 
 
-def handle_done(chat_id: int):
-    """Handle /done command → trigger 'done'."""
+def handle_done(chat_id: int) -> Intent:
+    """Build an intent for the ``/done`` command.
+    Args:
+        chat_id: Telegram chat identifier used as LangGraph thread id.
+    Returns:
+        Intent with ``trigger='done'``.
+    """
     return Intent(trigger="done", chat_id=chat_id, message_id=None, extra={})
 
 
-def handle_study(chat_id: int):
-    """Handle /study command → trigger 'on_demand'."""
+def handle_study(chat_id: int) -> Intent:
+    """Build an intent for the ``/study`` command.
+    Args:
+        chat_id: Telegram chat identifier used as LangGraph thread id.
+    Returns:
+        Intent with ``trigger='on_demand'``.
+    """
     return Intent(trigger="on_demand", chat_id=chat_id, message_id=None, extra={})
 
 
-def handle_briefing(chat_id: int):
-    """Handle /briefing command → trigger 'daily'."""
+def handle_briefing(chat_id: int) -> Intent:
+    """Build an intent for the ``/briefing`` command.
+    Args:
+        chat_id: Telegram chat identifier used as LangGraph thread id.
+    Returns:
+        Intent with ``trigger='daily'``.
+    """
     return Intent(trigger="daily", chat_id=chat_id, message_id=None, extra={})
 
 
-def handle_study_topic(chat_id: int):
-    """Handle /study_topic command → trigger 'study_topic'."""
+def handle_study_topic(chat_id: int) -> Intent:
+    """Build an intent for the ``/study_topic`` command.
+    Args:
+        chat_id: Telegram chat identifier used as LangGraph thread id.
+    Returns:
+        Intent with ``trigger='study_topic'``.
+    """
     return Intent(trigger="study_topic", chat_id=chat_id, message_id=None, extra={})
 
 
 def handle_studied_command(chat_id: int) -> JSONResponse:
-    """
-    Handle /studied command — show inline buttons for in-progress topics.
-    Returns JSONResponse directly (no graph invocation needed).
+    """Handle ``/studied`` by listing in-progress topics as inline buttons.
+    This command is handled directly from the webhook path without graph
+    invocation.
+    Args:
+        chat_id: Telegram chat identifier (currently unused by this handler,
+            included for interface consistency).
+    Returns:
+        ``JSONResponse({'ok': True})`` after scheduling the outbound Telegram
+        message/button send.
     """
     topics = topic_service.get_in_progress_topics()
     loop = asyncio.get_event_loop()
@@ -59,10 +86,14 @@ def handle_studied_command(chat_id: int) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-def handle_weak_areas(message_text: str, chat_id: int):
-    """
-    Handle free-text reply when awaiting_weak_areas is set → trigger 'weak_areas'.
-    Returns None for unrecognized messages.
+def handle_weak_areas(message_text: str, chat_id: int) -> Intent | None:
+    """Convert free text into a ``weak_areas`` intent when expected.
+    Args:
+        message_text: Raw user text from Telegram.
+        chat_id: Telegram chat identifier used to inspect checkpointed state.
+    Returns:
+        Intent with ``trigger='weak_areas'`` when the current state expects a
+        weak-areas reply; otherwise ``None``.
     """
     state = _graph.get_state(chat_id)
     if state.get("awaiting_weak_areas"):

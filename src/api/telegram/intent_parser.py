@@ -1,30 +1,52 @@
-"""
-Intent parser — pure parsing from Telegram update fields to Intent objects.
+"""Intent parsing utilities for Telegram webhook updates.
 
-Intent is defined here. callback_handlers and message_handlers are imported
-lazily inside functions to break the circular dependency
-(they import Intent from this module).
+This module converts normalized callback/message input into one of:
+- ``Intent`` (graph dispatch),
+- ``JSONResponse`` (direct response path),
+- ``None`` (unknown/ignored input).
 """
 
 from dataclasses import dataclass, field
+from typing import Any, TypeAlias
+
+from fastapi.responses import JSONResponse
+
 from src.api.telegram import callback_handlers, message_handlers
 
 
 @dataclass
 class Intent:
+    """Dispatch envelope for graph invocations.
+    Attributes:
+        trigger: Graph trigger name.
+        chat_id: Telegram chat id used as LangGraph thread id.
+        message_id: Source Telegram message id when available.
+        extra: Additional partial state passed to graph invocation.
+    """
+
     trigger: str
     chat_id: int
     message_id: int | None
-    extra: dict = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
-def parse_callback(cb: str, callback_data: str, chat_id: int, message_id: int | None):
-    """
-    Parse callback_data into an Intent or JSONResponse.
-    Returns None for unknown callbacks.
+ParseResult: TypeAlias = Intent | JSONResponse | None
 
-    cb          — callback_data.lower() (for comparisons)
-    callback_data — original case (for extracting values that may be case-sensitive)
+
+def parse_callback(
+    cb: str,
+    callback_data: str,
+    chat_id: int,
+    message_id: int | None,
+) -> ParseResult:
+    """Parse callback data into a dispatchable result.
+    Args:
+        cb: Lowercased callback text used for branch comparisons.
+        callback_data: Original callback payload preserving case.
+        chat_id: Telegram chat identifier.
+        message_id: Telegram message id associated with callback buttons.
+    Returns:
+        ``Intent`` or ``JSONResponse`` for recognized callbacks, else ``None``.
     """
 
     if cb in ("30 min", "45 min", "60 min"):
@@ -45,10 +67,16 @@ def parse_callback(cb: str, callback_data: str, chat_id: int, message_id: int | 
         return None
 
 
-def parse_message(message_text: str, chat_id: int):
-    """
-    Parse message text into an Intent or JSONResponse.
-    Returns None for unrecognized messages.
+def parse_message(message_text: str, chat_id: int) -> ParseResult:
+    """Parse incoming text message into a dispatchable result.
+
+    Args:
+        message_text: Raw Telegram text payload.
+        chat_id: Telegram chat identifier.
+
+    Returns:
+        ``Intent`` or ``JSONResponse`` for recognized commands/replies,
+        otherwise ``None``.
     """
     text_lower = message_text.strip().lower()
 

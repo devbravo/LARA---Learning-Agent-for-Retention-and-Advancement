@@ -9,6 +9,7 @@ This module defines the transport boundary for incoming Telegram updates:
 import os
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from src.models.telegram import TelegramUpdate
 from src.api.telegram.handler import handle_update
@@ -20,7 +21,7 @@ router = APIRouter()
 async def webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
-):
+) -> JSONResponse:
     """Receive and validate a Telegram webhook update.
     Args:
         request: FastAPI request containing the Telegram update payload.
