@@ -444,7 +444,7 @@ def test_in_progress_study_slots_use_actual_booked_time_when_present():
 
     from src.agent.planning_helpers import build_in_progress_study_slots
 
-    slots = build_in_progress_study_slots(["DSA - Arrays"], timed_events)
+    slots = build_in_progress_study_slots(["DSA - Arrays"], timed_events, target_date)
 
     assert slots == [
         {
@@ -469,7 +469,7 @@ def test_in_progress_study_slots_mix_actual_and_default_slots_chronologically():
 
     from src.agent.planning_helpers import build_in_progress_study_slots
 
-    slots = build_in_progress_study_slots(["DSA - Arrays", "LLMOps - MLflow"], timed_events)
+    slots = build_in_progress_study_slots(["DSA - Arrays", "LLMOps - MLflow"], timed_events, target_date)
 
     assert slots == [
         {
@@ -485,5 +485,36 @@ def test_in_progress_study_slots_mix_actual_and_default_slots_chronologically():
             "duration_min": 60,
         },
     ]
+
+
+def test_missing_study_busy_events_stop_before_invalid_next_day_timestamps():
+    """Synthetic busy events should stop before generating invalid T24:00-style timestamps."""
+    target_date = date.today()
+    config = {"timezone": "UTC"}
+    in_progress_topics = [f"Topic {i}" for i in range(17)]
+
+    from src.agent.planning_helpers import build_missing_study_events
+
+    events = build_missing_study_events(in_progress_topics, [], target_date, config)
+
+    assert len(events) == 16
+    assert all("T24:" not in event["start"]["dateTime"] for event in events)
+    assert all("T24:" not in event["end"]["dateTime"] for event in events)
+
+
+def test_rebook_study_events_stop_when_no_valid_same_day_slot_remains():
+    """Rebooking should not try to create study events beyond the final same-day slot."""
+    target_date = date.today()
+    config = {"timezone": "UTC"}
+    in_progress_topics = [f"Topic {i}" for i in range(17)]
+
+    from src.agent import nodes as nodes_module
+
+    mock_write = MagicMock()
+    with patch.object(nodes_module._gcal, "write_study_event", mock_write):
+        from src.agent.planning_helpers import rebook_study_events
+        rebook_study_events(in_progress_topics, [], target_date, config)
+
+    assert mock_write.call_count == 16
 
 

@@ -16,6 +16,7 @@ Thread ID: chat_id from state (one thread per user).
 
 import sqlite3
 from pathlib import Path
+from typing import Any, cast
 
 from dotenv import load_dotenv
 
@@ -56,7 +57,7 @@ def build_graph(checkpointer=None):
     Args:
         checkpointer: Optional LangGraph checkpointer. Defaults to SqliteSaver.
     """
-    builder = StateGraph(AgentState)
+    builder: Any = StateGraph(cast(Any, AgentState))
 
     # Register all nodes
     builder.add_node("router", router)
@@ -131,10 +132,10 @@ graph = build_graph()
 def get_state(chat_id: int) -> dict:
     """Read the latest checkpointed state for a given chat_id. Returns {} if none."""
     try:
-        config = {"configurable": {"thread_id": str(chat_id)}}
+        config = cast(Any, {"configurable": {"thread_id": str(chat_id)}})
         snapshot = graph.get_state(config)
         if snapshot and snapshot.values:
-            return snapshot.values
+            return cast(dict, snapshot.values)
         return {}
     except Exception:
         return {}
@@ -155,16 +156,17 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
         "trigger": trigger,
         "chat_id": chat_id,
     }
+    initial_state_dict: Any = initial_state
     # Only include kwargs that are explicitly provided — don't overwrite
     # checkpointed state with None values
     for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot",
                 "quality_score", "messages", "current_topic_id", "current_topic_name",
                 "study_topic_category"):
         if kwargs.get(key) is not None:
-            initial_state[key] = kwargs[key]
+            initial_state_dict[key] = kwargs[key]
 
-    config = {"configurable": {"thread_id": str(chat_id)}}
-    return graph.invoke(initial_state, config=config)
+    config = cast(Any, {"configurable": {"thread_id": str(chat_id)}})
+    return cast(AgentState, graph.invoke(cast(Any, initial_state), config=config))
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,6 @@ from src.agent.planning_helpers import (
     build_missing_study_events,
     get_prebooked_topics,
     get_topic_config,
-    is_topic_in_summary,
     rebook_study_events,
 )
 from src.core import gap_finder as _gap_finder
@@ -328,7 +327,7 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("🎯 Mock interview blocks: None found today")
             lines.append("")
 
-        in_progress_study_slots = build_in_progress_study_slots(in_progress_topics, timed_events)
+        in_progress_study_slots = build_in_progress_study_slots(in_progress_topics, timed_events, target_date)
 
         if in_progress_study_slots:
             lines.append("⏳ In Progress:")
