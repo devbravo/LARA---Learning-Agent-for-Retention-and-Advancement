@@ -322,7 +322,26 @@ def daily_planning(state: AgentState) -> AgentState:
         # --- Morning briefing: full interactive plan for today ---
         _TZ = pytz.timezone(config["timezone"])
         after_time = datetime.now(_TZ).time()
-        free_windows = _gap_finder.find_free_windows(events, target_date, config, after_time)
+
+        # Fetch in_progress topics BEFORE computing free windows so their
+        # [Study] blocks are treated as busy by gap_finder and don't overlap [Mock] slots.
+        in_progress_topics = topic_repository.get_in_progress_topic_names()
+
+        # Build synthetic busy event dicts for [Study] blocks (08:00 + 1h each).
+        _tz_offset = datetime.now(pytz.timezone(config["timezone"])).strftime("%z")
+        _offset_str = f"{_tz_offset[:3]}:{_tz_offset[3:]}"
+        study_busy_events = [
+            {
+                "summary": f"[Study] {topic_name}",
+                "start": {"dateTime": f"{target_date.isoformat()}T{8 + i:02d}:00:00{_offset_str}"},
+                "end":   {"dateTime": f"{target_date.isoformat()}T{8 + i + 1:02d}:00:00{_offset_str}"},
+            }
+            for i, topic_name in enumerate(in_progress_topics)
+        ]
+
+        free_windows = _gap_finder.find_free_windows(
+            events + study_busy_events, target_date, config, after_time
+        )
         prebooked = _get_prebooked_topics(timed_events, due_topics)
 
         # --- Build message ---
@@ -400,7 +419,6 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("🎯 Mock interview blocks: None found today")
             lines.append("")
 
-        in_progress_topics = topic_repository.get_in_progress_topic_names()
         if in_progress_topics:
             lines.append("⏳ In Progress:")
             start_hour = 8  # TODO MAGIC NUMBER
