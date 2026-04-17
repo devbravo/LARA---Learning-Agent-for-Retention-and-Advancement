@@ -1,5 +1,13 @@
+"""SQLite helpers for schema initialization and topic seeding.
+
+This module owns local DB path constants, connection creation, and one-time
+bootstrap operations used in development/runtime startup flows.
+"""
+
 import sqlite3
 from pathlib import Path
+from typing import Any
+
 import yaml
 
 DB_PATH = Path(__file__).parents[2] / "db" / "learning.db"
@@ -7,12 +15,17 @@ TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
 
 
 def get_connection() -> sqlite3.Connection:
+    """Create a SQLite connection configured with row-name access.
+    Returns:
+        ``sqlite3.Connection`` with ``row_factory`` set to ``sqlite3.Row``.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db() -> None:
+    """Create required tables and apply lightweight compatibility migrations."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_connection() as conn:
         # Migrate existing DB: add active column if missing
@@ -57,15 +70,21 @@ def init_db() -> None:
         """)
 
 
-def _map_status(topic: dict) -> dict:
-    """Map active boolean from topics.yaml to status string."""
-    t = dict(topic)
+def _map_status(topic: dict[str, Any]) -> dict[str, Any]:
+    """Normalize topic status from legacy ``active`` to ``status``.
+    Args:
+        topic: One topic object loaded from ``topics.yaml``.
+    Returns:
+        A copied topic mapping guaranteed to contain a ``status`` key.
+    """
+    t: dict[str, Any] = dict(topic)
     if "status" not in t:
         t["status"] = "active" if t.get("active", True) else "inactive"
     return t
 
 
 def seed_topics() -> None:
+    """Upsert topics from ``topics.yaml`` into the ``topics`` table."""
     with open(TOPICS_PATH) as f:
         config = yaml.safe_load(f)
 

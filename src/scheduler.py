@@ -9,13 +9,15 @@ Jobs:
 Timezone: America/Paramaribo
 Guard:    never invoke during the 15:00–19:30 protected block.
 """
-import os
-import yaml
-import pytz
-import logging
 
+import os
+import logging
 from pathlib import Path
 from datetime import datetime
+from typing import Any
+
+import pytz
+import yaml
 from dotenv import load_dotenv
 
 from src.agent import graph as _graph
@@ -27,7 +29,12 @@ load_dotenv(Path(__file__).parents[1] / ".env", override=True)
 
 logger = logging.getLogger(__name__)
 
-def _load_config() -> dict:
+
+def _load_config() -> dict[str, Any]:
+    """Load ``config.yaml`` into a dictionary.
+    Returns:
+        Parsed configuration content.
+    """
     with open(Path(__file__).parents[1] / "config.yaml") as f:
         return yaml.safe_load(f)
 
@@ -36,7 +43,10 @@ logger.info("Current time in Paramaribo: %s", datetime.now(_TZ))
 
 
 def _is_protected_block() -> bool:
-    """Return True if current local time falls inside any protected block."""
+    """Check whether the current local time is in a protected block.
+    Returns:
+        ``True`` when now is inside any configured protected interval.
+    """
     config = _load_config()
     now = datetime.now(_TZ).time()
     for block in config.get("protected_blocks", []):
@@ -47,6 +57,9 @@ def _is_protected_block() -> bool:
     return False
 
 def _run_daily_planning() -> None:
+    """Invoke the graph with ``trigger='daily'`` if outside protected time.
+    On failure, logs the exception and sends a user-facing Telegram warning.
+    """
     chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
     if _is_protected_block():
         logger.warning("Daily briefing skipped — inside protected block (15:00–19:30).")
@@ -64,6 +77,9 @@ def _run_daily_planning() -> None:
 
 
 def _run_evening_briefing() -> None:
+    """Invoke the graph with ``trigger='evening'`` if outside protected time.
+    On failure, logs the exception and sends a user-facing Telegram warning.
+    """
     chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
     if _is_protected_block():
         logger.warning("Evening briefing skipped — inside protected block (15:00–19:30).")
@@ -80,6 +96,10 @@ def _run_evening_briefing() -> None:
 
 
 def build_scheduler() -> AsyncIOScheduler:
+    """Create and configure the APScheduler instance used by the API app.
+    Returns:
+        ``AsyncIOScheduler`` with weekday/sunday daily jobs and evening preview.
+    """
     config = _load_config()
     scheduler = AsyncIOScheduler(timezone=_TZ)
 

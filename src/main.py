@@ -5,7 +5,6 @@ Starts FastAPI (via uvicorn) and APScheduler in the same async process.
 """
 
 import os
-import sys
 import signal
 import asyncio
 import logging
@@ -39,6 +38,7 @@ _PORT = int(os.environ.get("PORT", "8000"))
 
 
 async def main() -> None:
+    """Run the uvicorn server with graceful signal-based shutdown handling."""
     config = uvicorn.Config(
         app=app,
         host=_HOST,
