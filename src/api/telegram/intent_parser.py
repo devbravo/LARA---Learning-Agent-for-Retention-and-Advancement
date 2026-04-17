@@ -7,6 +7,7 @@ lazily inside functions to break the circular dependency
 """
 
 from dataclasses import dataclass, field
+from src.api.telegram import callback_handlers, message_handlers
 
 
 @dataclass
@@ -25,7 +26,6 @@ def parse_callback(cb: str, callback_data: str, chat_id: int, message_id: int | 
     cb          — callback_data.lower() (for comparisons)
     callback_data — original case (for extracting values that may be case-sensitive)
     """
-    from src.api.telegram import callback_handlers
 
     if cb in ("30 min", "45 min", "60 min"):
         return callback_handlers.handle_duration(cb, chat_id, message_id)
@@ -50,8 +50,6 @@ def parse_message(message_text: str, chat_id: int):
     Parse message text into an Intent or JSONResponse.
     Returns None for unrecognized messages.
     """
-    from src.api.telegram import message_handlers
-
     text_lower = message_text.strip().lower()
 
     if text_lower in ("/done", "done"):
