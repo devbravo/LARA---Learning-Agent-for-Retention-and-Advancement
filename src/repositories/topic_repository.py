@@ -1,4 +1,8 @@
-"""Topic-focused SQL query functions."""
+"""Topic repository SQL helpers.
+
+This module contains topic-specific database reads and writes used by service
+and node layers.
+"""
 
 from typing import Any
 
@@ -6,7 +10,14 @@ from src.core.db import get_connection
 
 
 def get_topic_name_by_id(topic_id: int) -> str | None:
-    """Return topic name for a topic id, or ``None`` when not found."""
+    """Return topic name for a given id.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        Topic name, or ``None`` when the row does not exist.
+    """
     with get_connection() as conn:
         row = conn.execute("SELECT name FROM topics WHERE id = ?", (topic_id,)).fetchone()
     return row["name"] if row else None
@@ -15,7 +26,11 @@ def get_topic_name_by_id(topic_id: int) -> str | None:
 def graduate_topic_to_active(topic_id: int) -> bool:
     """Set topic status to active and reset SM-2 progression fields.
 
-    Returns ``True`` when a row was updated, else ``False``.
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        ``True`` when a row was updated, else ``False``.
     """
     with get_connection() as conn:
         cursor = conn.execute(
@@ -32,7 +47,11 @@ def graduate_topic_to_active(topic_id: int) -> bool:
 
 
 def get_in_progress_topics() -> list[dict[str, int | str]]:
-    """Return in-progress topics ordered by tier and name."""
+    """Return in-progress topics ordered by tier and name.
+
+    Returns:
+        List of dicts containing ``id`` and ``name``.
+    """
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT id, name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
@@ -50,7 +69,14 @@ def get_in_progress_topic_names() -> list[str]:
 
 
 def get_topic_id_by_name(topic_name: str) -> int | None:
-    """Return topic id for a name (case-insensitive), or ``None``."""
+    """Return topic id for a case-insensitive topic name.
+
+    Args:
+        topic_name: Topic display name.
+
+    Returns:
+        Topic id, or ``None`` when no match exists.
+    """
     with get_connection() as conn:
         row = conn.execute(
             "SELECT id FROM topics WHERE name = ? COLLATE NOCASE",
@@ -60,7 +86,14 @@ def get_topic_id_by_name(topic_name: str) -> int | None:
 
 
 def get_topic_weak_areas_by_name(topic_name: str) -> str | None:
-    """Return weak areas text for a topic name (case-insensitive), or ``None``."""
+    """Return weak-areas text for a topic name.
+
+    Args:
+        topic_name: Topic display name (case-insensitive lookup).
+
+    Returns:
+        Weak-areas string, or ``None`` when missing/empty.
+    """
     with get_connection() as conn:
         row = conn.execute(
             "SELECT weak_areas FROM topics WHERE name = ? COLLATE NOCASE",
@@ -70,7 +103,12 @@ def get_topic_weak_areas_by_name(topic_name: str) -> str | None:
 
 
 def update_topic_weak_areas(topic_id: int, weak_areas: str | None) -> None:
-    """Set or clear the operational weak-areas field for a topic."""
+    """Set or clear operational weak areas for a topic.
+
+    Args:
+        topic_id: Topic primary key.
+        weak_areas: Weak-areas text or ``None`` to clear the field.
+    """
     with get_connection() as conn:
         conn.execute(
             "UPDATE topics SET weak_areas = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -79,7 +117,11 @@ def update_topic_weak_areas(topic_id: int, weak_areas: str | None) -> None:
 
 
 def get_inactive_topics_tier1_or2() -> list[dict[str, Any]]:
-    """Return inactive tier-1/2 topics ordered by tier and name."""
+    """Return inactive tier-1/2 topics ordered by tier and name.
+
+    Returns:
+        List of dicts with keys ``id``, ``name``, and ``tier``.
+    """
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT id, name, tier FROM topics
@@ -92,7 +134,11 @@ def get_inactive_topics_tier1_or2() -> list[dict[str, Any]]:
 def set_topic_in_progress(topic_name: str) -> bool:
     """Set topic status to in_progress for an inactive topic name.
 
-    Returns ``True`` when a row was updated, else ``False``.
+    Args:
+        topic_name: Topic display name.
+
+    Returns:
+        ``True`` when a row was updated, else ``False``.
     """
     with get_connection() as conn:
         cursor = conn.execute(

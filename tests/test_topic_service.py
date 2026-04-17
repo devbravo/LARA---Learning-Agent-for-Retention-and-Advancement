@@ -73,7 +73,7 @@ def test_graduate_topic_sets_active(tmp_path):
     conn.commit()
     conn.close()
 
-    with patch("src.services.topic_service.get_connection", side_effect=_make_conn_factory(db_path)):
+    with patch("src.repositories.topic_repository.get_connection", side_effect=_make_conn_factory(db_path)):
         name = topic_service.graduate_topic(1)
 
     assert name == "DSA - Arrays"
@@ -89,7 +89,7 @@ def test_graduate_topic_raises_for_unknown_id(tmp_path):
     """graduate_topic raises ValueError when the topic id does not exist."""
     db_path = _create_db(tmp_path)
 
-    with patch("src.services.topic_service.get_connection", side_effect=_make_conn_factory(db_path)):
+    with patch("src.repositories.topic_repository.get_connection", side_effect=_make_conn_factory(db_path)):
         with pytest.raises(ValueError, match="not found in DB"):
             topic_service.graduate_topic(999)
 
@@ -114,7 +114,7 @@ def test_get_in_progress_topics_returns_correct_rows(tmp_path):
     conn.commit()
     conn.close()
 
-    with patch("src.services.topic_service.get_connection", side_effect=_make_conn_factory(db_path)):
+    with patch("src.repositories.topic_repository.get_connection", side_effect=_make_conn_factory(db_path)):
         result = topic_service.get_in_progress_topics()
 
     names = [r["name"] for r in result]
@@ -130,7 +130,7 @@ def test_get_in_progress_topics_returns_empty_when_none(tmp_path):
     conn.commit()
     conn.close()
 
-    with patch("src.services.topic_service.get_connection", side_effect=_make_conn_factory(db_path)):
+    with patch("src.repositories.topic_repository.get_connection", side_effect=_make_conn_factory(db_path)):
         result = topic_service.get_in_progress_topics()
 
     assert result == []

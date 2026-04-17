@@ -1,4 +1,4 @@
-"""Session-focused SQL query functions."""
+"""Session repository SQL helpers."""
 
 from src.core.db import get_connection
 
@@ -15,7 +15,13 @@ def get_logged_topic_names_for_today() -> set[str]:
 
 
 def upsert_today_session(topic_id: int, duration_min: int, quality_score: int) -> None:
-    """Insert or update today's session row for a topic."""
+    """Insert or update today's session row for a topic.
+
+    Args:
+        topic_id: Topic primary key.
+        duration_min: Session duration in minutes.
+        quality_score: Session quality score (2/3/5).
+    """
     with get_connection() as conn:
         existing = conn.execute(
             "SELECT id FROM sessions WHERE topic_id = ? AND DATE(studied_at) = DATE('now')",
@@ -34,7 +40,14 @@ def upsert_today_session(topic_id: int, duration_min: int, quality_score: int) -
 
 
 def get_today_session_id(topic_id: int) -> int | None:
-    """Return today's session id for a topic, or ``None`` if not logged."""
+    """Return today's session id for a topic.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        Session id when present, else ``None``.
+    """
     with get_connection() as conn:
         row = conn.execute(
             "SELECT id FROM sessions WHERE topic_id = ? AND DATE(studied_at) = DATE('now')",
@@ -44,7 +57,12 @@ def get_today_session_id(topic_id: int) -> int | None:
 
 
 def update_session_weak_areas(session_id: int, weak_areas: str) -> None:
-    """Update weak_areas for a specific session row."""
+    """Update weak-areas notes for a specific session row.
+
+    Args:
+        session_id: Session primary key.
+        weak_areas: Free-text weak-areas notes.
+    """
     with get_connection() as conn:
         conn.execute(
             "UPDATE sessions SET weak_areas = ? WHERE id = ?",
@@ -53,7 +71,14 @@ def update_session_weak_areas(session_id: int, weak_areas: str) -> None:
 
 
 def insert_session(topic_id: int, duration_min: int, quality_score: int, weak_areas: str | None) -> None:
-    """Insert a new session row."""
+    """Insert a new session row.
+
+    Args:
+        topic_id: Topic primary key.
+        duration_min: Session duration in minutes.
+        quality_score: Session quality score (2/3/5).
+        weak_areas: Optional weak-areas notes.
+    """
     with get_connection() as conn:
         conn.execute(
             """INSERT INTO sessions (topic_id, duration_min, quality_score, weak_areas)

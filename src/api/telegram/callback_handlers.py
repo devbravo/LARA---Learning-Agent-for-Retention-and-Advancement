@@ -24,7 +24,7 @@ from src.api.telegram.intent_parser import Intent
 logger = logging.getLogger(__name__)
 
 
-def handle_duration(cb: str, chat_id: int, message_id: int | None):
+def handle_duration(cb: str, chat_id: int, message_id: int | None) -> Intent | None:
     """Convert a duration callback into an ``on_demand`` intent.
     Args:
         cb: Normalized callback text, expected in ``{"30 min", "45 min", "60 min"}``.
@@ -45,7 +45,7 @@ def handle_duration(cb: str, chat_id: int, message_id: int | None):
     return Intent(trigger="on_demand", chat_id=chat_id, message_id=message_id, extra=extra)
 
 
-def handle_confirm(cb: str, chat_id: int, message_id: int | None):
+def handle_confirm(cb: str, chat_id: int, message_id: int | None) -> Intent | None:
     """Convert a confirmation callback into a ``confirm`` intent.
     On duplicate taps, this handler sends an "Already booked" notice and
     returns ``None`` so the callback is ignored safely.
@@ -70,7 +70,7 @@ def handle_confirm(cb: str, chat_id: int, message_id: int | None):
     return Intent(trigger="confirm", chat_id=chat_id, message_id=message_id, extra=extra)
 
 
-def handle_skip(chat_id: int, message_id: int | None):
+def handle_skip(chat_id: int, message_id: int | None) -> Intent | None:
     """Handle ``skip`` callbacks for both booking and weak-area flows.
     Behavior depends on checkpointed state:
     - If ``awaiting_weak_areas`` is true, returns an Intent for
@@ -110,7 +110,7 @@ def handle_skip(chat_id: int, message_id: int | None):
         return Intent(trigger="skip", chat_id=chat_id, message_id=message_id, extra={})
 
 
-def handle_rating(cb: str, chat_id: int, message_id: int | None):
+def handle_rating(cb: str, chat_id: int, message_id: int | None) -> Intent | None:
     """Convert a rating callback into a ``rate`` intent.
     Args:
         cb: Lowercased rating label (``"😕 hard"``, ``"😐 ok"``, ``"😊 easy"``).
@@ -137,7 +137,7 @@ def handle_rating(cb: str, chat_id: int, message_id: int | None):
     return Intent(trigger="rate", chat_id=chat_id, message_id=message_id, extra=extra)
 
 
-def handle_category(callback_data: str, chat_id: int):
+def handle_category(callback_data: str, chat_id: int) -> Intent:
     """Convert ``category:<name>`` callback data into a category intent.
     Args:
         callback_data: Raw callback payload with ``category:`` prefix.
@@ -156,7 +156,7 @@ def handle_category(callback_data: str, chat_id: int):
     )
 
 
-def handle_subtopic_id(callback_data: str, chat_id: int, message_id: int | None):
+def handle_subtopic_id(callback_data: str, chat_id: int, message_id: int | None) -> Intent | None:
     """Resolve ``subtopic_id:<id>`` callback data into a topic-confirm intent.
     The handler validates id format, applies idempotency protection, and
     resolves the topic name from the database before returning an intent.

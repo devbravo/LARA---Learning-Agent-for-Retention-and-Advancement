@@ -9,10 +9,15 @@ from src.repositories import topic_repository
 
 def graduate_topic(topic_id: int) -> str:
     """Promote an in-progress topic to active and reset SM-2 scheduling fields.
+
     Args:
         topic_id: Database id of the topic to graduate.
+
     Returns:
         Topic name for user-facing confirmation messages.
+
+    Raises:
+        ValueError: If the topic cannot be found.
     """
     updated = topic_repository.graduate_topic_to_active(topic_id)
     if not updated:

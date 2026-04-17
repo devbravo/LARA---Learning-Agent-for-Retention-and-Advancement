@@ -250,13 +250,7 @@ def test_subtopic_id_valid_triggers_study_topic_confirm():
     """subtopic_id:5" with a matching DB row triggers 'study_topic_confirm'."""
     update = _cb(update_id=9, chat_id=111, data="subtopic_id:5", message_id=203)
 
-    mock_row = {"name": "DSA - Arrays"}
-    mock_conn = MagicMock()
-    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-    mock_conn.__exit__ = MagicMock(return_value=False)
-    mock_conn.execute.return_value.fetchone.return_value = mock_row
-
-    with patch("src.api.telegram.callback_handlers.get_connection", return_value=mock_conn), \
+    with patch("src.services.topic_service.get_topic_name_by_id", return_value="DSA - Arrays"), \
          patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
@@ -288,17 +282,7 @@ def test_studied_valid_id_updates_db_and_sends_confirmation():
     """studied:7" with a valid DB row updates status and sends a success message."""
     update = _cb(update_id=11, chat_id=111, data="studied:7", message_id=204)
 
-    mock_update_cursor = MagicMock()
-    mock_update_cursor.rowcount = 1
-    mock_select_cursor = MagicMock()
-    mock_select_cursor.fetchone.return_value = {"name": "DSA - Arrays"}
-
-    mock_conn = MagicMock()
-    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-    mock_conn.__exit__ = MagicMock(return_value=False)
-    mock_conn.execute.side_effect = [mock_update_cursor, mock_select_cursor]
-
-    with patch("src.services.topic_service.get_connection", return_value=mock_conn), \
+    with patch("src.services.topic_service.graduate_topic", return_value="DSA - Arrays"), \
          patch("src.api.telegram.callback_handlers.send_message") as mock_send, \
          patch("src.api.telegram.callback_handlers.remove_buttons"):
         _run(handle_update(update))
@@ -317,15 +301,7 @@ def test_studied_invalid_id_sends_error_message():
     """studied:999" where DB rowcount=0 sends an error message."""
     update = _cb(update_id=12, chat_id=111, data="studied:999", message_id=205)
 
-    mock_cursor = MagicMock()
-    mock_cursor.rowcount = 0
-
-    mock_conn = MagicMock()
-    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-    mock_conn.__exit__ = MagicMock(return_value=False)
-    mock_conn.execute.return_value = mock_cursor
-
-    with patch("src.services.topic_service.get_connection", return_value=mock_conn), \
+    with patch("src.services.topic_service.graduate_topic", side_effect=ValueError("Topic id=999 not found in DB")), \
          patch("src.api.telegram.callback_handlers.send_message") as mock_send:
         result = _run(handle_update(update))
 

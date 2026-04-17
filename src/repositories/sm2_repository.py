@@ -1,11 +1,19 @@
-"""SM-2 related SQL query functions."""
+"""SM-2 repository SQL helpers."""
 
 import sqlite3
 from datetime import date
 
 
 def fetch_due_topics(path: str, target_date: date) -> list[dict]:
-    """Fetch active topics due on or before ``target_date``."""
+    """Fetch active topics due on or before a date.
+
+    Args:
+        path: SQLite database path.
+        target_date: Due-date cutoff.
+
+    Returns:
+        List of due topic dictionaries ordered by tier and easiness factor.
+    """
     date_str = target_date.isoformat()
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
@@ -26,7 +34,16 @@ def fetch_due_topics(path: str, target_date: date) -> list[dict]:
 
 
 def fetch_sm2_state(path: str, topic_id: int) -> dict | None:
-    """Fetch SM-2 fields for a topic id, or ``None`` when not found."""
+    """Fetch SM-2 state fields for a topic id.
+
+    Args:
+        path: SQLite database path.
+        topic_id: Topic primary key.
+
+    Returns:
+        Dict containing ``easiness_factor``, ``interval_days``, and
+        ``repetitions``; ``None`` when not found.
+    """
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     try:
@@ -47,7 +64,16 @@ def update_sm2_state(
     repetitions: int,
     next_review: str,
 ) -> None:
-    """Persist recalculated SM-2 fields for a topic."""
+    """Persist recalculated SM-2 fields for a topic.
+
+    Args:
+        path: SQLite database path.
+        topic_id: Topic primary key.
+        easiness_factor: Updated easiness factor.
+        interval_days: Updated review interval in days.
+        repetitions: Updated repetition count.
+        next_review: Next review date in ISO format.
+    """
     conn = sqlite3.connect(path)
     try:
         conn.execute(

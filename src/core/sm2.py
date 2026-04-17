@@ -49,11 +49,13 @@ def calculate_next_review(
 
 def get_due_topics(db_path: str | None = None, target_date: date | None = None) -> list[dict]:
     """Return topics where next_review <= target_date and status = 'active', ordered by tier ASC, easiness_factor ASC.
+
     Args:
         db_path: Optional path to the SQLite database. Defaults to DB_PATH.
         target_date: The date to check due topics against. Defaults to today.
                      Pass date.today() + timedelta(days=1) for tomorrow's due topics
                      (used by the evening briefing).
+
     Returns:
         List of topic rows as dictionaries.
     """

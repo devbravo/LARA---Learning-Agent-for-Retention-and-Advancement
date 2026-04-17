@@ -11,8 +11,6 @@ from typing import Any, TypeAlias
 
 from fastapi.responses import JSONResponse
 
-from src.api.telegram import callback_handlers, message_handlers
-
 
 @dataclass
 class Intent:
@@ -47,6 +45,8 @@ def parse_callback(
     Returns:
         ``Intent`` or ``JSONResponse`` for recognized callbacks, else ``None``.
     """
+    from src.api.telegram import callback_handlers
+
     if cb in ("30 min", "45 min", "60 min"):
         return callback_handlers.handle_duration(cb, chat_id, message_id)
     elif cb in ("yes, book them", "confirm"):
@@ -74,6 +74,8 @@ def parse_message(message_text: str, chat_id: int) -> ParseResult:
         ``Intent`` or ``JSONResponse`` for recognized commands/replies,
         otherwise ``None``.
     """
+    from src.api.telegram import message_handlers
+
     text_lower = message_text.strip().lower()
 
     if text_lower in ("/done", "done"):
