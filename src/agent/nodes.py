@@ -8,10 +8,9 @@ All exceptions are caught and surfaced as user-friendly messages in state.
 import pytz
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import logging
-import sqlite3
 from src.core import sm2 as _sm2_mod
 
 import yaml
@@ -21,7 +20,7 @@ from src.core import sm2 as _sm2
 from src.integrations import claude_api as _claude
 from src.integrations import gcal as _gcal
 from src.integrations import telegram_client as _telegram
-from src.core.db import get_connection
+from src.repositories import session_repository, topic_repository
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
 _TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
@@ -187,7 +186,7 @@ def gap_finder(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def _rebook_study_events(
-        in_progress_rows: list, timed_events: list, target_date, config: dict
+        in_progress_topics: list[str], timed_events: list[dict[str, Any]], target_date: date, config: dict
 ) -> None:
     tz = pytz.timezone(config["timezone"])
     offset = datetime.now(tz).strftime("%z")
@@ -195,8 +194,7 @@ def _rebook_study_events(
 
     start_hour = 8  # start at 08:00
 
-    for row in in_progress_rows:
-        topic_name = row["name"]
+    for topic_name in in_progress_topics:
         already_booked = any(
             _is_topic_in_summary(topic_name, ev.get("summary", ""))
             for ev in timed_events
@@ -402,22 +400,19 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("🎯 Mock interview blocks: None found today")
             lines.append("")
 
-        with get_connection() as conn:
-            in_progress_rows = conn.execute(
-                "SELECT name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
-            ).fetchall()
-        if in_progress_rows:
+        in_progress_topics = topic_repository.get_in_progress_topic_names()
+        if in_progress_topics:
             lines.append("⏳ In Progress:")
-            start_hour = 8 # TODO MAGIC NUMBER
-            for row in in_progress_rows:
+            start_hour = 8  # TODO MAGIC NUMBER
+            for topic_name in in_progress_topics:
                 t_start = f"{start_hour:02d}:00"
                 t_end = f"{start_hour + 1:02d}:00"
-                lines.append(f"• {t_start}–{t_end} [STUDY] {row['name']} (60min)")
+                lines.append(f"• {t_start}–{t_end} [STUDY] {topic_name} (60min)")
                 start_hour += 1
             lines.append("")
 
         # Auto-rebook [Study] events for in_progress topics
-        _rebook_study_events(in_progress_rows, timed_events, target_date, config)
+        _rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
         assigned_names = {slot["topic"] for slot in proposed_slots}
         backlog_topics = [t for t in available_topics if t["name"] not in assigned_names]
@@ -495,13 +490,7 @@ def done_parser(state: AgentState) -> AgentState:
             return {}
 
         # Find topics already logged today
-        with get_connection() as conn:
-            rows = conn.execute(
-                """SELECT DISTINCT t.name FROM sessions s
-                   JOIN topics t ON t.id = s.topic_id
-                   WHERE date(s.studied_at) = date('now')"""
-            ).fetchall()
-        logged_names = {row["name"] for row in rows}
+        logged_names = session_repository.get_logged_topic_names_for_today()
 
         unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
         if not unlogged:
@@ -511,19 +500,15 @@ def done_parser(state: AgentState) -> AgentState:
         slot = unlogged[0]
         topic_name = slot["topic"]
 
-        with get_connection() as conn:
-            row = conn.execute(
-                "SELECT id FROM topics WHERE name = ? COLLATE NOCASE", (topic_name,)
-            ).fetchone()
-
-        if row is None:
+        topic_id = topic_repository.get_topic_id_by_name(topic_name)
+        if topic_id is None:
             _telegram.send_message(f"⚠️ Topic '{topic_name}' not found in database.")
             return {}
 
         logger.info("done_parser: sending rating buttons for %s", topic_name)
         _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
         return {
-            "current_topic_id": row["id"],
+            "current_topic_id": topic_id,
             "current_topic_name": topic_name,
         }
     except Exception as e:
@@ -547,13 +532,9 @@ def generate_brief(state: AgentState) -> AgentState:
 
         # Build context from weak_areas if available
         context = "General review"
-        with get_connection() as conn:
-            row = conn.execute(
-                "SELECT weak_areas FROM topics WHERE name = ? COLLATE NOCASE",
-                (topic,)
-            ).fetchone()
-        if row and row["weak_areas"]:
-            context = f"Focus on weak areas: {row['weak_areas']}"
+        weak_areas = topic_repository.get_topic_weak_areas_by_name(topic)
+        if weak_areas:
+            context = f"Focus on weak areas: {weak_areas}"
 
         brief = _claude.generate_brief(
             topic=topic,
@@ -623,30 +604,13 @@ def log_session(state: AgentState) -> AgentState:
                 duration_min = slot["duration_min"]
                 break
 
-        db_path = str(Path(__file__).parents[2] / "db" / "learning.db")
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            existing = conn.execute(
-                "SELECT id FROM sessions WHERE topic_id = ? AND DATE(studied_at) = DATE('now')",
-                (topic_id,)
-            ).fetchone()
+        session_repository.upsert_today_session(
+            topic_id=topic_id,
+            duration_min=duration_min,
+            quality_score=quality,
+        )
 
-            if existing:
-                conn.execute(
-                    "UPDATE sessions SET quality_score = ?, duration_min = ? WHERE id = ?",
-                    (quality, duration_min, existing["id"]),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO sessions (topic_id, duration_min, quality_score) VALUES (?, ?, ?)",
-                    (topic_id, duration_min, quality),
-                )
-            conn.commit()
-        finally:
-            conn.close()
-
-        _sm2_mod.update_topic_after_session(db_path=db_path, topic_id=topic_id, quality=quality)
+        _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=quality)
 
         _telegram.send_buttons(
             "Any weak areas to note? Reply with text or tap Skip.",
@@ -673,58 +637,33 @@ def log_weak_areas(state: AgentState) -> AgentState:
             _telegram.send_message("⚠️ Cannot log weak areas: missing topic.")
             return {"awaiting_weak_areas": False}
 
-        with get_connection() as conn:
-            session_row = conn.execute(
-                "SELECT id FROM sessions WHERE topic_id = ? AND DATE(studied_at) = DATE('now')",
-                (topic_id,)
-            ).fetchone()
+        session_id = session_repository.get_today_session_id(topic_id)
 
         if text:
-            with get_connection() as conn:
-                if session_row:
-                    conn.execute(
-                        "UPDATE sessions SET weak_areas = ? WHERE id = ?",
-                        (text, session_row["id"]),
-                    )
-                conn.execute(
-                    "UPDATE topics SET weak_areas = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (text, topic_id),
-
-                )
+            if session_id is not None:
+                session_repository.update_session_weak_areas(session_id, text)
+            topic_repository.update_topic_weak_areas(topic_id, text)
         else:
             # Skip — mark existing weak areas as resolved
-            with get_connection() as conn:
-                conn.execute(
-                    "UPDATE topics SET weak_areas = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (topic_id,),
-                )
+            topic_repository.update_topic_weak_areas(topic_id, None)
 
         # Check for next unlogged slot
         proposed_slots = state.get("proposed_slots") or []
-        with get_connection() as conn:
-            rows = conn.execute(
-                """SELECT DISTINCT t.name FROM sessions s
-                   JOIN topics t ON t.id = s.topic_id
-                   WHERE date(s.studied_at) = date('now')"""
-            ).fetchall()
-        logged_names = {row["name"] for row in rows}
+        logged_names = session_repository.get_logged_topic_names_for_today()
 
         unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
 
         if unlogged:
             next_topic_name = unlogged[0]["topic"]
-            with get_connection() as conn:
-                row = conn.execute(
-                    "SELECT id FROM topics WHERE name = ? COLLATE NOCASE", (next_topic_name,)
-                ).fetchone()
+            next_topic_id = topic_repository.get_topic_id_by_name(next_topic_name)
 
-            if row:
+            if next_topic_id is not None:
                 _telegram.send_buttons(
                     f"How did {next_topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"]
                 )
                 return {
                     "awaiting_weak_areas": False,
-                    "current_topic_id": row["id"],
+                    "current_topic_id": next_topic_id,
                     "current_topic_name": next_topic_name,
                 }
 
@@ -831,12 +770,7 @@ def output(state: AgentState) -> AgentState:
 def study_topic(state: AgentState) -> AgentState:
     """Entry point: query inactive tier 1 (or tier 2 fallback) topics, send category picker."""
     try:
-        with get_connection() as conn:
-            rows = conn.execute(
-                """SELECT name, tier FROM topics
-                   WHERE status = 'inactive' AND tier IN (1, 2)
-                   ORDER BY tier ASC, name ASC"""
-            ).fetchall()
+        rows = topic_repository.get_inactive_topics_tier1_or2()
 
         tier1 = [r for r in rows if r["tier"] == 1]
         available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
@@ -875,12 +809,7 @@ def study_topic_category(state: AgentState) -> AgentState:
             _telegram.send_message("⚠️ No category selected.")
             return {}
 
-        with get_connection() as conn:
-            rows = conn.execute(
-                """SELECT id, name, tier FROM topics
-                   WHERE status = 'inactive' AND tier IN (1, 2)
-                   ORDER BY tier ASC, name ASC"""
-            ).fetchall()
+        rows = topic_repository.get_inactive_topics_tier1_or2()
 
         tier1 = [r for r in rows if r["tier"] == 1]
         available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
@@ -919,17 +848,12 @@ def study_topic_confirm(state: AgentState) -> AgentState:
             _telegram.send_message("⚠️ No topic selected.")
             return {}
 
-        with get_connection() as conn:
-            cursor = conn.execute(
-                """UPDATE topics SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP
-                   WHERE name = ? AND status = 'inactive'""",
-                (topic_name,),
+        updated = topic_repository.set_topic_in_progress(topic_name)
+        if not updated:
+            _telegram.send_message(
+                f"⚠️ Topic '{topic_name}' not found or already in progress."
             )
-            if cursor.rowcount == 0:
-                _telegram.send_message(
-                    f"⚠️ Topic '{topic_name}' not found or already in progress."
-                )
-                return {}
+            return {}
 
         _telegram.send_message(
             f"✅ {topic_name} added to In Progress. "

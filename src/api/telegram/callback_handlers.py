@@ -16,7 +16,6 @@ import logging
 from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
-from src.core.db import get_connection
 from src.integrations.telegram_client import remove_buttons, send_message
 from src.api.telegram import dispatcher
 from src.services import topic_service
@@ -25,7 +24,7 @@ from src.api.telegram.intent_parser import Intent
 logger = logging.getLogger(__name__)
 
 
-def handle_duration(cb: str, chat_id: int, message_id: int | None):
+def handle_duration(cb: str, chat_id: int, message_id: int | None) -> Intent | None:
     """Convert a duration callback into an ``on_demand`` intent.
     Args:
         cb: Normalized callback text, expected in ``{"30 min", "45 min", "60 min"}``.
@@ -46,7 +45,7 @@ def handle_duration(cb: str, chat_id: int, message_id: int | None):
     return Intent(trigger="on_demand", chat_id=chat_id, message_id=message_id, extra=extra)
 
 
-def handle_confirm(cb: str, chat_id: int, message_id: int | None):
+def handle_confirm(cb: str, chat_id: int, message_id: int | None) -> Intent | None:
     """Convert a confirmation callback into a ``confirm`` intent.
     On duplicate taps, this handler sends an "Already booked" notice and
     returns ``None`` so the callback is ignored safely.
@@ -71,7 +70,7 @@ def handle_confirm(cb: str, chat_id: int, message_id: int | None):
     return Intent(trigger="confirm", chat_id=chat_id, message_id=message_id, extra=extra)
 
 
-def handle_skip(chat_id: int, message_id: int | None):
+def handle_skip(chat_id: int, message_id: int | None) -> Intent | None:
     """Handle ``skip`` callbacks for both booking and weak-area flows.
     Behavior depends on checkpointed state:
     - If ``awaiting_weak_areas`` is true, returns an Intent for
@@ -111,7 +110,7 @@ def handle_skip(chat_id: int, message_id: int | None):
         return Intent(trigger="skip", chat_id=chat_id, message_id=message_id, extra={})
 
 
-def handle_rating(cb: str, chat_id: int, message_id: int | None):
+def handle_rating(cb: str, chat_id: int, message_id: int | None) -> Intent | None:
     """Convert a rating callback into a ``rate`` intent.
     Args:
         cb: Lowercased rating label (``"😕 hard"``, ``"😐 ok"``, ``"😊 easy"``).
@@ -138,7 +137,7 @@ def handle_rating(cb: str, chat_id: int, message_id: int | None):
     return Intent(trigger="rate", chat_id=chat_id, message_id=message_id, extra=extra)
 
 
-def handle_category(callback_data: str, chat_id: int):
+def handle_category(callback_data: str, chat_id: int) -> Intent:
     """Convert ``category:<name>`` callback data into a category intent.
     Args:
         callback_data: Raw callback payload with ``category:`` prefix.
@@ -157,7 +156,7 @@ def handle_category(callback_data: str, chat_id: int):
     )
 
 
-def handle_subtopic_id(callback_data: str, chat_id: int, message_id: int | None):
+def handle_subtopic_id(callback_data: str, chat_id: int, message_id: int | None) -> Intent | None:
     """Resolve ``subtopic_id:<id>`` callback data into a topic-confirm intent.
     The handler validates id format, applies idempotency protection, and
     resolves the topic name from the database before returning an intent.
@@ -181,12 +180,8 @@ def handle_subtopic_id(callback_data: str, chat_id: int, message_id: int | None)
             logger.info("message_id=%s already processed for subtopic — ignoring", message_id)
             return None
 
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT name FROM topics WHERE id = ?", (topic_id,)
-        ).fetchone()
-
-    if row is None:
+    topic_name = topic_service.get_topic_name_by_id(topic_id)
+    if topic_name is None:
         logger.warning("Unknown subtopic id in callback_data: %s", callback_data)
         if message_id is not None:
             dispatcher.clear_in_flight(message_id)
@@ -196,7 +191,7 @@ def handle_subtopic_id(callback_data: str, chat_id: int, message_id: int | None)
         trigger="study_topic_confirm",
         chat_id=chat_id,
         message_id=message_id,
-        extra={"proposed_topic": row["name"], "message_id": message_id},
+        extra={"proposed_topic": topic_name, "message_id": message_id},
     )
 
 

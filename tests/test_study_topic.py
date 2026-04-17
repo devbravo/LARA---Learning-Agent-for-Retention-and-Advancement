@@ -241,8 +241,10 @@ def test_study_topic_confirm_sets_in_progress():
         {"name": "DSA - Arrays", "tier": 1, "status": "inactive"},
     ])
 
-    with patch("src.agent.nodes.get_connection", _make_get_connection(path)), \
-         patch("src.agent.nodes._telegram.send_message"):
+    from src.agent import nodes as nodes_module
+
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(nodes_module._telegram, "send_message"):
         from src.agent.nodes import study_topic_confirm
         study_topic_confirm({"proposed_topic": "DSA - Arrays"})
 
@@ -259,9 +261,11 @@ def test_study_topic_confirm_sends_confirmation_message():
         {"name": "DSA - Arrays", "tier": 1, "status": "inactive"},
     ])
 
+    from src.agent import nodes as nodes_module
+
     mock_send = MagicMock()
-    with patch("src.agent.nodes.get_connection", _make_get_connection(path)), \
-         patch("src.agent.nodes._telegram.send_message", mock_send):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(nodes_module._telegram, "send_message", mock_send):
         from src.agent.nodes import study_topic_confirm
         study_topic_confirm({"proposed_topic": "DSA - Arrays"})
 
@@ -275,9 +279,11 @@ def test_study_topic_confirm_no_op_when_already_in_progress():
         {"name": "DSA - Arrays", "tier": 1, "status": "in_progress"},
     ])
 
+    from src.agent import nodes as nodes_module
+
     mock_send = MagicMock()
-    with patch("src.agent.nodes.get_connection", _make_get_connection(path)), \
-         patch("src.agent.nodes._telegram.send_message", mock_send):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(nodes_module._telegram, "send_message", mock_send):
         from src.agent.nodes import study_topic_confirm
         study_topic_confirm({"proposed_topic": "DSA - Arrays"})
 
@@ -301,13 +307,15 @@ def test_rebooking_fires_when_not_already_booked():
     """write_study_event is called once when the in_progress topic has no [Study] event today."""
     target_date = date.today()
     config = {"timezone": "UTC"}
-    in_progress_rows = [{"name": "DSA - Arrays"}]
+    in_progress_topics = ["DSA - Arrays"]
     timed_events: list = []
 
+    from src.agent import nodes as nodes_module
+
     mock_write = MagicMock()
-    with patch("src.agent.nodes._gcal.write_study_event", mock_write):
+    with patch.object(nodes_module._gcal, "write_study_event", mock_write):
         from src.agent.nodes import _rebook_study_events
-        _rebook_study_events(in_progress_rows, timed_events, target_date, config)
+        _rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     mock_write.assert_called_once()
     _, kwargs = mock_write.call_args
@@ -320,13 +328,15 @@ def test_rebooking_fires_for_each_unbooked_in_progress_topic():
     """write_study_event is called once per unbooked in_progress topic."""
     target_date = date.today()
     config = {"timezone": "UTC"}
-    in_progress_rows = [{"name": "DSA - Arrays"}, {"name": "LLMOps - MLflow"}]
+    in_progress_topics = ["DSA - Arrays", "LLMOps - MLflow"]
     timed_events: list = []
 
+    from src.agent import nodes as nodes_module
+
     mock_write = MagicMock()
-    with patch("src.agent.nodes._gcal.write_study_event", mock_write):
+    with patch.object(nodes_module._gcal, "write_study_event", mock_write):
         from src.agent.nodes import _rebook_study_events
-        _rebook_study_events(in_progress_rows, timed_events, target_date, config)
+        _rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     assert mock_write.call_count == 2
 
@@ -339,7 +349,7 @@ def test_rebooking_skipped_when_study_event_already_booked():
     """write_study_event is NOT called when a [Study] event for the topic already exists."""
     target_date = date.today()
     config = {"timezone": "UTC"}
-    in_progress_rows = [{"name": "DSA - Arrays"}]
+    in_progress_topics = ["DSA - Arrays"]
     timed_events = [
         {
             "summary": "[Study] DSA - Arrays",
@@ -348,10 +358,12 @@ def test_rebooking_skipped_when_study_event_already_booked():
         }
     ]
 
+    from src.agent import nodes as nodes_module
+
     mock_write = MagicMock()
-    with patch("src.agent.nodes._gcal.write_study_event", mock_write):
+    with patch.object(nodes_module._gcal, "write_study_event", mock_write):
         from src.agent.nodes import _rebook_study_events
-        _rebook_study_events(in_progress_rows, timed_events, target_date, config)
+        _rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     mock_write.assert_not_called()
 
@@ -360,7 +372,7 @@ def test_rebooking_skipped_for_booked_books_unbooked():
     """When one topic is booked and another is not, only the unbooked one is written."""
     target_date = date.today()
     config = {"timezone": "UTC"}
-    in_progress_rows = [{"name": "DSA - Arrays"}, {"name": "LLMOps - MLflow"}]
+    in_progress_topics = ["DSA - Arrays", "LLMOps - MLflow"]
     timed_events = [
         {
             "summary": "[Study] DSA - Arrays",
@@ -369,10 +381,12 @@ def test_rebooking_skipped_for_booked_books_unbooked():
         }
     ]
 
+    from src.agent import nodes as nodes_module
+
     mock_write = MagicMock()
-    with patch("src.agent.nodes._gcal.write_study_event", mock_write):
+    with patch.object(nodes_module._gcal, "write_study_event", mock_write):
         from src.agent.nodes import _rebook_study_events
-        _rebook_study_events(in_progress_rows, timed_events, target_date, config)
+        _rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     mock_write.assert_called_once()
     _, kwargs = mock_write.call_args

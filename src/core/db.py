@@ -16,6 +16,7 @@ TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
 
 def get_connection() -> sqlite3.Connection:
     """Create a SQLite connection configured with row-name access.
+
     Returns:
         ``sqlite3.Connection`` with ``row_factory`` set to ``sqlite3.Row``.
     """
@@ -72,8 +73,10 @@ def init_db() -> None:
 
 def _map_status(topic: dict[str, Any]) -> dict[str, Any]:
     """Normalize topic status from legacy ``active`` to ``status``.
+
     Args:
         topic: One topic object loaded from ``topics.yaml``.
+
     Returns:
         A copied topic mapping guaranteed to contain a ``status`` key.
     """
