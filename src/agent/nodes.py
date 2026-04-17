@@ -739,7 +739,14 @@ def study_topic_category(state: AgentState) -> AgentState:
             return {}
 
         buttons = [(r["name"], f"subtopic_id:{r['id']}") for r in subtopic_rows]
-        _telegram.send_inline_buttons("Which topic?", buttons)
+        try:
+            _telegram.send_inline_buttons("Which topic?", buttons)
+        except RuntimeError as e:
+            if "timed out" in str(e).lower():
+                # Telegram likely delivered the message despite the timeout — log and continue
+                logger.warning("send_inline_buttons timed out but message was likely delivered: %s", e)
+            else:
+                raise
         return {}
 
     except Exception as e:

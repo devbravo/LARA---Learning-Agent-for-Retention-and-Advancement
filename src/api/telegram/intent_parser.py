@@ -6,28 +6,12 @@ This module converts normalized callback/message input into one of:
 - ``None`` (unknown/ignored input).
 """
 
-from dataclasses import dataclass, field
-from typing import Any, TypeAlias
-
 from fastapi.responses import JSONResponse
 
+from src.api.telegram import callback_handlers, message_handlers
+from src.api.telegram.types import Intent, ParseResult
 
-@dataclass
-class Intent:
-    """Dispatch envelope for graph invocations.
-    Attributes:
-        trigger: Graph trigger name.
-        chat_id: Telegram chat id used as LangGraph thread id.
-        message_id: Source Telegram message id when available.
-        extra: Additional partial state passed to graph invocation.
-    """
-    trigger: str
-    chat_id: int
-    message_id: int | None
-    extra: dict[str, Any] = field(default_factory=dict)
-
-
-ParseResult: TypeAlias = Intent | JSONResponse | None
+__all__ = ["Intent", "ParseResult", "parse_callback", "parse_message"]
 
 
 def parse_callback(
@@ -45,8 +29,6 @@ def parse_callback(
     Returns:
         ``Intent`` or ``JSONResponse`` for recognized callbacks, else ``None``.
     """
-    from src.api.telegram import callback_handlers
-
     if cb in ("30 min", "45 min", "60 min"):
         return callback_handlers.handle_duration(cb, chat_id, message_id)
     elif cb in ("yes, book them", "confirm"):
@@ -56,7 +38,7 @@ def parse_callback(
     elif cb in ("😕 hard", "😐 ok", "😊 easy"):
         return callback_handlers.handle_rating(cb, chat_id, message_id)
     elif cb.startswith("category:"):
-        return callback_handlers.handle_category(callback_data, chat_id)
+        return callback_handlers.handle_category(callback_data, chat_id, message_id)
     elif cb.startswith("subtopic_id:"):
         return callback_handlers.handle_subtopic_id(callback_data, chat_id, message_id)
     elif cb.startswith("studied:"):
@@ -74,21 +56,19 @@ def parse_message(message_text: str, chat_id: int) -> ParseResult:
         ``Intent`` or ``JSONResponse`` for recognized commands/replies,
         otherwise ``None``.
     """
-    from src.api.telegram import message_handlers
-
     text_lower = message_text.strip().lower()
 
-    if text_lower == "/done": # Log completed study sessions and rate how they went
+    if text_lower == "/done":
         return message_handlers.handle_done(chat_id)
-    elif text_lower == "/study": # Generate a study brief for the highest-priority due topic
+    elif text_lower == "/study":
         return message_handlers.handle_study(chat_id)
-    elif text_lower == "/plan": # Generate today's study plan
-        return message_handlers.handle_briefing(chat_id)
-    elif text_lower == "/pick": # Choose a specific topic to start studying
+    elif text_lower == "/plan":
+        return message_handlers.handle_daily(chat_id)
+    elif text_lower == "/pick":
         return message_handlers.handle_study_topic(chat_id)
-    elif text_lower == "/activate": # Show in-progress topics and move one into active review
+    elif text_lower == "/activate":
         return message_handlers.handle_studied_command(chat_id)
-    elif text_lower == "/help": # Show the command guide
+    elif text_lower == "/help":
         return message_handlers.handle_help_command(chat_id)
     else:
         return message_handlers.handle_weak_areas(message_text, chat_id)

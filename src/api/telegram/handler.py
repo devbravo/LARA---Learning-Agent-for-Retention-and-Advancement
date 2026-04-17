@@ -9,18 +9,17 @@ This module coordinates update processing without embedding business logic:
 
 import asyncio
 import logging
-from typing import TypeAlias
 
 from fastapi.responses import JSONResponse
 
 from src.models.telegram import TelegramUpdate
 from src.integrations.telegram_client import send_buttons
 from src.api.telegram import dispatcher
-from src.api.telegram.intent_parser import Intent, parse_callback, parse_message
+from src.api.telegram.intent_parser import parse_callback, parse_message
+from src.api.telegram.types import Intent, ParseResult
 
 logger = logging.getLogger(__name__)
 
-ParseResult: TypeAlias = Intent | JSONResponse | None
 
 
 async def handle_update(update: TelegramUpdate) -> JSONResponse:
