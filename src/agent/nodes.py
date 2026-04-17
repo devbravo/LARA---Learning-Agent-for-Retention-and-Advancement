@@ -20,13 +20,16 @@ from src.agent.formatting import (
     format_event_time,
     format_time,
     local_datetime_str,
-    topic_due_label,
+)
+from src.agent.daily_planning_helpers import (
+    append_calendar_lines,
+    build_evening_preview_state,
+    pack_mock_slots,
 )
 from src.agent.planning_helpers import (
     build_in_progress_study_slots,
     build_missing_study_events,
     get_prebooked_topics,
-    get_topic_config,
     rebook_study_events,
 )
 from src.core import gap_finder as _gap_finder
@@ -176,64 +179,16 @@ def daily_planning(state: AgentState) -> AgentState:
         due_topics = _sm2.get_due_topics(target_date=target_date)
         timed_events = [e for e in events if "dateTime" in e.get("start", {})]
 
-        # --- Evening briefing: read-only preview for tomorrow ---
         if is_evening:
-            day_str = target_date.strftime("%A %B %-d")
-            lines = [f"🌙 Tomorrow's plan — {day_str}", ""]
-
-            # Tomorrow's calendar events (skip all-day)
-            if timed_events:
-                lines.append("📅 Your day:")
-                for ev in timed_events:
-                    t = format_event_time(ev["start"])
-                    dur = event_duration_min(ev)
-                    dur_str = f"{dur}min" if dur else ""
-                    summary = ev.get("summary", "(No title)")
-                    lines.append(f"• {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
-            else:
-                lines.append("📅 Your day: No meetings tomorrow")
-            lines.append("")
-
-            # Study windows for tomorrow (no after_time filter — all windows are in the future)
-            free_windows = _gap_finder.find_free_windows(events, target_date, config)
-            prebooked = get_prebooked_topics(timed_events, due_topics)
-            available_topics = [t for t in due_topics if t["name"] not in prebooked]
             topics_config = _load_topics()
-
-            if free_windows:
-                lines.append("🧠 Study windows:")
-                for i, win in enumerate(free_windows):
-                    topic = available_topics[i] if i < len(available_topics) else None
-                    if topic is None:
-                        break
-                    topic_cfg = get_topic_config(topic["name"], topics_config)
-                    default_duration = topic_cfg.get("default_duration_minutes", 60)
-                    duration = min(default_duration, win["duration_min"])
-                    t_start = format_time(win["start"])
-                    start_dt = datetime.combine(target_date, win["start"])
-                    end_dt = start_dt + timedelta(minutes=duration)
-                    t_end = format_time(end_dt.time())
-                    lines.append(f"• {t_start}–{t_end} → {topic['name']} ({duration}min)")
-            else:
-                lines.append("🧠 Study windows: None found for tomorrow")
-            lines.append("")
-
-            # SM-2 picks for tomorrow — all due topics with EF values
-            if due_topics:
-                lines.append("📌 SM-2 picks tomorrow:")
-                for i, topic in enumerate(due_topics, 1):
-                    label = topic_due_label(topic)
-                    ef = topic["easiness_factor"]
-                    lines.append(f"• {i}. {topic['name']} — {label} (EF: {ef})")
-                lines.append("")
-
-            lines.append("No confirmation needed — this is your preview for tomorrow.")
-
-            return {
-                "preview_only": True,
-                "has_study_plan": False,
-                "messages": ["\n".join(lines)],
-            }
+            return build_evening_preview_state(
+                target_date,
+                events,
+                timed_events,
+                due_topics,
+                config,
+                topics_config,
+            )
 
         # --- Morning briefing: full interactive plan for today ---
         _TZ = pytz.timezone(config["timezone"])
@@ -252,80 +207,21 @@ def daily_planning(state: AgentState) -> AgentState:
         )
         prebooked = get_prebooked_topics(timed_events, due_topics)
 
-        # --- Build message ---
         day_str = target_date.strftime("%A %B %-d")
         lines = [f"☀️ Good morning Diego — {day_str}", ""]
-
-        # Today's calendar events (skip all-day)
-        if timed_events:
-            lines.append("📅 Your day:")
-            for ev in timed_events:
-                t = format_event_time(ev["start"])
-                dur = event_duration_min(ev)
-                dur_str = f"{dur}min" if dur else ""
-                summary = ev.get("summary", "(No title)")
-                lines.append(f"• {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
-        else:
-            lines.append("📅 Your day: No meetings today")
-        lines.append("")
-
-        # Study windows → assign topics, build proposed_slots list
-
-        proposed_topic = None
-        proposed_slot = None
-        proposed_slots: list[dict] = []
+        append_calendar_lines(lines, timed_events, "📅 Your day: No meetings today")
 
         available_topics = [t for t in due_topics if t["name"] not in prebooked]
         topics_config = _load_topics()
-
-        MAX_SLOTS = 6
         min_window_minutes = config.get("min_window_minutes", 25)
-
-        if free_windows:
-            lines.append("🎯 Today's mock interview(s):")
-
-            if free_windows:
-                remaining_topics = list(available_topics)
-                for win in free_windows:
-                    if not remaining_topics or len(proposed_slots) >= MAX_SLOTS:
-                        break
-                    cursor = datetime.combine(target_date, win["start"])
-                    win_end = datetime.combine(target_date, win["end"])
-                    while remaining_topics and len(proposed_slots) < MAX_SLOTS:
-                        remaining_min = int((win_end - cursor).total_seconds() // 60)
-                        if remaining_min < min_window_minutes:
-                            break  # not enough time left in this window for anything useful
-                        topic = remaining_topics[0]
-                        topic_cfg = get_topic_config(topic["name"], topics_config)
-                        default_duration = topic_cfg.get("default_duration_minutes", 60)
-                        duration = min(default_duration, remaining_min)
-                        end_dt = cursor + timedelta(minutes=duration)
-                        t_start = format_time(cursor.time())
-                        t_end = format_time(end_dt.time())
-                        lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
-                        if topic.get("weak_areas"):
-                            lines.append(f" ⚠️ Focus on: {topic['weak_areas']}")
-                        lines.append("")  # blank line after each slot
-
-                        slot = {
-                            "topic": topic["name"],
-                            "start": t_start,
-                            "end": t_end,
-                            "duration_min": duration,
-                        }
-                        proposed_slots.append(slot)
-
-                        # Keep single-slot fields pointing at the first block (backwards compatible)
-                        if proposed_topic is None:
-                            proposed_topic = topic["name"]
-                            proposed_slot = slot
-
-                        cursor = end_dt
-                        remaining_topics.pop(0)
-
-        else:
-            lines.append("🎯 Mock interview blocks: None found today")
-            lines.append("")
+        proposed_topic, proposed_slot, proposed_slots = pack_mock_slots(
+            target_date,
+            free_windows,
+            available_topics,
+            topics_config,
+            min_window_minutes,
+            lines,
+        )
 
         in_progress_study_slots = build_in_progress_study_slots(in_progress_topics, timed_events, target_date)
 
