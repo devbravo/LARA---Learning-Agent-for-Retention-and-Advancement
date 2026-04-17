@@ -194,16 +194,16 @@ if __name__ == "__main__":
         print("\n--- Morning Briefing ---\n")
         print(briefing)
         print("\n--- State ---")
-        from src.agent.nodes import _fmt_time
+        from src.agent.formatting import format_time
         slots = final_state.get("proposed_slots")
         if slots:
             for i, slot in enumerate(slots, 1):
-                t = f"{_fmt_time(slot['start'])}–{_fmt_time(slot['end'])} ({slot['duration_min']}min)"
+                t = f"{format_time(slot['start'])}–{format_time(slot['end'])} ({slot['duration_min']}min)"
                 print(f"  proposed_slots[{i}] : {slot['topic']} @ {t}")
         else:
             # on_demand fallback
             print(f"  proposed_topic : {final_state.get('proposed_topic')}")
             slot = final_state.get("proposed_slot")
             if slot:
-                print(f"  proposed_slot  : {_fmt_time(slot['start'])}–{_fmt_time(slot['end'])} ({slot['duration_min']}min)")
+                print(f"  proposed_slot  : {format_time(slot['start'])}–{format_time(slot['end'])} ({slot['duration_min']}min)")
         print("=" * 60)
