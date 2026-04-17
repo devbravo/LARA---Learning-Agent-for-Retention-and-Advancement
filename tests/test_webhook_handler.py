@@ -159,11 +159,11 @@ def test_study_message_triggers_on_demand():
 
 
 # ---------------------------------------------------------------------------
-# 6. /briefing → trigger "daily"
+# 6. /plan → trigger "daily"
 # ---------------------------------------------------------------------------
 
-def test_briefing_message_triggers_daily():
-    """/briefing text triggers the 'daily' trigger."""
+def test_plan_message_triggers_daily():
+    """/plan text triggers the 'daily' trigger."""
     update = _msg(update_id=4, chat_id=111, text="/plan")
 
     with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:

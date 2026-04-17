@@ -78,15 +78,15 @@ def parse_message(message_text: str, chat_id: int) -> ParseResult:
 
     text_lower = message_text.strip().lower()
 
-    if text_lower in "/done": # Log completed study sessions and rate how they went
+    if text_lower == "/done": # Log completed study sessions and rate how they went
         return message_handlers.handle_done(chat_id)
     elif text_lower == "/study": # Generate a study brief for the highest-priority due topic
         return message_handlers.handle_study(chat_id)
-    elif text_lower in "/plan": # Generate today's study plan
+    elif text_lower == "/plan": # Generate today's study plan
         return message_handlers.handle_briefing(chat_id)
-    elif text_lower in "/pick": # Choose a specific topic to start studying
+    elif text_lower == "/pick": # Choose a specific topic to start studying
         return message_handlers.handle_study_topic(chat_id)
-    elif text_lower in "/activate": # Show in-progress topics and move one into active review
+    elif text_lower == "/activate": # Show in-progress topics and move one into active review
         return message_handlers.handle_studied_command(chat_id)
     elif text_lower == "/help": # Show the command guide
         return message_handlers.handle_help_command(chat_id)

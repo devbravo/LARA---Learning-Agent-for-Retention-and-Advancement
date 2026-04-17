@@ -52,8 +52,8 @@ def handle_study(chat_id: int) -> Intent:
     return Intent(trigger="on_demand", chat_id=chat_id, message_id=None, extra={})
 
 
-def handle_briefing(chat_id: int) -> Intent:
-    """Build an intent for the ``/briefing`` command.
+def handle_daily(chat_id: int) -> Intent:
+    """Build an intent for the ``/plan`` command.
     Args:
         chat_id: Telegram chat identifier used as LangGraph thread id.
     Returns:
@@ -63,7 +63,7 @@ def handle_briefing(chat_id: int) -> Intent:
 
 
 def handle_study_topic(chat_id: int) -> Intent:
-    """Build an intent for the ``/study_topic`` command.
+    """Build an intent for the ``/pick`` command.
     Args:
         chat_id: Telegram chat identifier used as LangGraph thread id.
     Returns:
@@ -73,7 +73,7 @@ def handle_study_topic(chat_id: int) -> Intent:
 
 
 def handle_studied_command(chat_id: int) -> JSONResponse:
-    """Handle ``/studied`` by listing in-progress topics as inline buttons.
+    """Handle ``/activate`` by listing in-progress topics as inline buttons.
     This command is handled directly from the webhook path without graph
     invocation.
     Args:
