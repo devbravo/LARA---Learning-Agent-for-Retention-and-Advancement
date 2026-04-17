@@ -241,7 +241,7 @@ def daily_planning(state: AgentState) -> AgentState:
         )
         prebooked = get_prebooked_topics(timed_events, due_topics)
 
-        day_str = target_date.strftime("%A %B %-d")
+        day_str = f"{target_date.strftime('%A %B')} {target_date.day}"
         lines = [f"☀️ Good morning Diego — {day_str}", ""]
         append_calendar_lines(lines, timed_events, "📅 Your day: No meetings today")
 
@@ -288,17 +288,21 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("No mock interview windows available today — calendar fully booked.")
 
         message = "\n".join(lines)
-        return cast(AgentState, {
+        morning_payload: object = {
             "proposed_topic": proposed_topic,
             "proposed_slot": proposed_slot,
             "proposed_slots": proposed_slots if proposed_slots else None,
             "has_study_plan": has_study_plan,
             "preview_only": False,
             "messages": [message],
-        })
+        }
+        morning_state = cast(AgentState, morning_payload)
+        return morning_state
 
     except Exception as e:
-        return cast(AgentState, {"messages": [f"⚠️ Daily briefing failed: {e}"]})
+        error_payload: object = {"messages": [f"⚠️ Daily briefing failed: {e}"]}
+        error_state = cast(AgentState, error_payload)
+        return error_state
 
 
 # ---------------------------------------------------------------------------

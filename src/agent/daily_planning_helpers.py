@@ -190,7 +190,7 @@ def build_evening_preview_state(
     Returns:
         A partial ``AgentState`` with preview flags and a single composed message.
     """
-    day_str = target_date.strftime("%A %B %-d")
+    day_str = f"{target_date.strftime('%A %B')} {target_date.day}"
     lines = [f"🌙 Tomorrow's plan — {day_str}", ""]
     append_calendar_lines(lines, timed_events, "📅 Your day: No meetings tomorrow")
     append_evening_study_window_lines(
