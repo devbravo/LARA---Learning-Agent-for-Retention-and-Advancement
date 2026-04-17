@@ -5,7 +5,7 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 
-from src.core import db as core_db
+from src.infrastructure import db as core_db
 from src.repositories import session_repository, sm2_repository, topic_repository
 
 

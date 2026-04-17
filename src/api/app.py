@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from src.api.routes import health, scheduler_status, webhook
-from src.scheduler import build_scheduler
+from src.infrastructure.scheduler import build_scheduler
 
 
 @asynccontextmanager

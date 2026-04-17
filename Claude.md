@@ -63,6 +63,23 @@ START → router → daily_planning → confirm → END
 
 ---
 
+## Agent module structure (`src/agent/`)
+
+```
+src/
+  agent/
+    graph.py                 # LangGraph wiring + checkpointer
+    nodes.py                 # Node orchestration and state transitions
+    planning_helpers.py      # Study-event matching, synthetic busy blocks, rebooking
+    daily_planning_helpers.py  # Daily/evening message sections + mock slot packing
+    formatting.py            # Shared time/date formatting helpers
+```
+
+`daily_planning` in `nodes.py` should stay orchestration-focused and use helper
+modules for section assembly and slot packing logic.
+
+---
+
 ## Done flow — session logging
 
 Triggered by `/done`. No structured paste required.

@@ -90,7 +90,10 @@ lara/
 │   │       └── telegram.py  # Pydantic models for Telegram payloads
 │   ├── agent/
 │   │   ├── graph.py         # LangGraph graph + SqliteSaver checkpointer
-│   │   ├── nodes.py         # Node implementations + AgentState
+│   │   ├── nodes.py         # Node orchestration + AgentState
+│   │   ├── planning_helpers.py        # Study-event matching + rebooking helpers
+│   │   ├── daily_planning_helpers.py  # Daily/evening section builders + slot packing
+│   │   ├── formatting.py              # Shared time/date formatting helpers
 │   │   └── tools.py         # LangGraph tools
 │   ├── core/
 │   │   ├── db.py            # Schema init, seed, connection helper

@@ -1,6 +1,6 @@
 """Session repository SQL helpers."""
 
-from src.core.db import get_connection
+from src.infrastructure.db import get_connection
 
 
 def get_logged_topic_names_for_today() -> set[str]:

@@ -8,7 +8,7 @@ All exceptions are caught and surfaced as user-friendly messages in state.
 import pytz
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import TypedDict
+from typing import cast, TypedDict
 
 import logging
 from src.core import sm2 as _sm2_mod
@@ -16,17 +16,18 @@ from src.core import sm2 as _sm2_mod
 import yaml
 
 from src.agent.formatting import (
-    event_duration_min,
-    format_event_time,
     format_time,
     local_datetime_str,
-    topic_due_label,
+)
+from src.agent.daily_planning_helpers import (
+    append_calendar_lines,
+    build_evening_preview_state,
+    pack_mock_slots,
 )
 from src.agent.planning_helpers import (
     build_in_progress_study_slots,
     build_missing_study_events,
     get_prebooked_topics,
-    get_topic_config,
     rebook_study_events,
 )
 from src.core import gap_finder as _gap_finder
@@ -76,9 +77,13 @@ class AgentState(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 
 def router(state: AgentState) -> AgentState:
-    """
-    Entry point. Validates trigger is set.
-    Routing is handled by conditional edges — this node just passes through.
+    """Validate the incoming trigger before graph routing.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Empty update when trigger is present, otherwise an error message payload.
     """
     trigger = state.get("trigger", "")
     if not trigger:
@@ -87,7 +92,14 @@ def router(state: AgentState) -> AgentState:
 
 
 def route_from_router(state: AgentState) -> str:
-    """Conditional edge: maps trigger → next node name."""
+    """Map a trigger string to the next graph node name.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Graph node key used by conditional edges.
+    """
     trigger = state.get("trigger", "")
     mapping = {
         "daily":                "daily_planning",
@@ -105,7 +117,14 @@ def route_from_router(state: AgentState) -> str:
 
 
 def route_from_daily_planning(state: AgentState) -> str:
-    """Conditional edge: skip confirm for evening briefings or when there's nothing to book."""
+    """Pick the next node after ``daily_planning``.
+
+    Args:
+        state: State returned by ``daily_planning``.
+
+    Returns:
+        ``output`` for preview/no-plan flows, otherwise ``confirm``.
+    """
     if state.get("preview_only"):
         return "output"
     return "confirm" if state.get("has_study_plan") else "output"
@@ -116,7 +135,14 @@ def route_from_daily_planning(state: AgentState) -> str:
 # ---------------------------------------------------------------------------
 
 def calendar_reader(state: AgentState) -> AgentState:
-    """Read-only GCal fetch for today. Returns structured event list in messages."""
+    """Fetch today's calendar events and report count.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update with a status message.
+    """
     try:
         events = _gcal.get_events(date.today())
         return {"messages": state.get("messages", []) + [f"📅 Fetched {len(events)} events"]}
@@ -129,7 +155,14 @@ def calendar_reader(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def sm2_engine(state: AgentState) -> AgentState:
-    """Returns due topics ranked by tier + easiness factor."""
+    """Fetch due topics from SM-2 and report count.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update with a status message.
+    """
     try:
         topics = _sm2.get_due_topics()
         return {"messages": state.get("messages", []) + [f"🧠 {len(topics)} topics due"]}
@@ -142,7 +175,14 @@ def sm2_engine(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def gap_finder(state: AgentState) -> AgentState:
-    """Computes free windows respecting protected blocks."""
+    """Compute today's free windows and report count.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update with a status message.
+    """
     try:
         config = _load_config()
         events = _gcal.get_events(date.today())
@@ -157,12 +197,13 @@ def gap_finder(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def daily_planning(state: AgentState) -> AgentState:
-    """
-    Assembles the morning plan (trigger="daily") or evening preview (trigger="evening")
-    from calendar + SM-2 + gap finder.
+    """Build either the morning plan or evening preview payload.
 
-    Evening flow: reads tomorrow's calendar and SM-2 due topics, sets preview_only=True,
-    and routes straight to output without confirmation buttons or calendar writes.
+    Args:
+        state: Current partial agent state containing the trigger.
+
+    Returns:
+        Partial ``AgentState`` containing generated messages and planning fields.
     """
     try:
         trigger = state.get("trigger", "daily")
@@ -176,64 +217,12 @@ def daily_planning(state: AgentState) -> AgentState:
         due_topics = _sm2.get_due_topics(target_date=target_date)
         timed_events = [e for e in events if "dateTime" in e.get("start", {})]
 
-        # --- Evening briefing: read-only preview for tomorrow ---
         if is_evening:
-            day_str = target_date.strftime("%A %B %-d")
-            lines = [f"🌙 Tomorrow's plan — {day_str}", ""]
-
-            # Tomorrow's calendar events (skip all-day)
-            if timed_events:
-                lines.append("📅 Your day:")
-                for ev in timed_events:
-                    t = format_event_time(ev["start"])
-                    dur = event_duration_min(ev)
-                    dur_str = f"{dur}min" if dur else ""
-                    summary = ev.get("summary", "(No title)")
-                    lines.append(f"• {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
-            else:
-                lines.append("📅 Your day: No meetings tomorrow")
-            lines.append("")
-
-            # Study windows for tomorrow (no after_time filter — all windows are in the future)
-            free_windows = _gap_finder.find_free_windows(events, target_date, config)
-            prebooked = get_prebooked_topics(timed_events, due_topics)
-            available_topics = [t for t in due_topics if t["name"] not in prebooked]
             topics_config = _load_topics()
-
-            if free_windows:
-                lines.append("🧠 Study windows:")
-                for i, win in enumerate(free_windows):
-                    topic = available_topics[i] if i < len(available_topics) else None
-                    if topic is None:
-                        break
-                    topic_cfg = get_topic_config(topic["name"], topics_config)
-                    default_duration = topic_cfg.get("default_duration_minutes", 60)
-                    duration = min(default_duration, win["duration_min"])
-                    t_start = format_time(win["start"])
-                    start_dt = datetime.combine(target_date, win["start"])
-                    end_dt = start_dt + timedelta(minutes=duration)
-                    t_end = format_time(end_dt.time())
-                    lines.append(f"• {t_start}–{t_end} → {topic['name']} ({duration}min)")
-            else:
-                lines.append("🧠 Study windows: None found for tomorrow")
-            lines.append("")
-
-            # SM-2 picks for tomorrow — all due topics with EF values
-            if due_topics:
-                lines.append("📌 SM-2 picks tomorrow:")
-                for i, topic in enumerate(due_topics, 1):
-                    label = topic_due_label(topic)
-                    ef = topic["easiness_factor"]
-                    lines.append(f"• {i}. {topic['name']} — {label} (EF: {ef})")
-                lines.append("")
-
-            lines.append("No confirmation needed — this is your preview for tomorrow.")
-
-            return {
-                "preview_only": True,
-                "has_study_plan": False,
-                "messages": ["\n".join(lines)],
-            }
+            evening_state = build_evening_preview_state(
+                target_date, events, timed_events, due_topics, config, topics_config
+            )
+            return cast(AgentState, evening_state)
 
         # --- Morning briefing: full interactive plan for today ---
         _TZ = pytz.timezone(config["timezone"])
@@ -252,80 +241,21 @@ def daily_planning(state: AgentState) -> AgentState:
         )
         prebooked = get_prebooked_topics(timed_events, due_topics)
 
-        # --- Build message ---
-        day_str = target_date.strftime("%A %B %-d")
+        day_str = f"{target_date.strftime('%A %B')} {target_date.day}"
         lines = [f"☀️ Good morning Diego — {day_str}", ""]
-
-        # Today's calendar events (skip all-day)
-        if timed_events:
-            lines.append("📅 Your day:")
-            for ev in timed_events:
-                t = format_event_time(ev["start"])
-                dur = event_duration_min(ev)
-                dur_str = f"{dur}min" if dur else ""
-                summary = ev.get("summary", "(No title)")
-                lines.append(f"• {t} {summary}{' (' + dur_str + ')' if dur_str else ''}")
-        else:
-            lines.append("📅 Your day: No meetings today")
-        lines.append("")
-
-        # Study windows → assign topics, build proposed_slots list
-
-        proposed_topic = None
-        proposed_slot = None
-        proposed_slots: list[dict] = []
+        append_calendar_lines(lines, timed_events, "📅 Your day: No meetings today")
 
         available_topics = [t for t in due_topics if t["name"] not in prebooked]
         topics_config = _load_topics()
-
-        MAX_SLOTS = 6
         min_window_minutes = config.get("min_window_minutes", 25)
-
-        if free_windows:
-            lines.append("🎯 Today's mock interview(s):")
-
-            if free_windows:
-                remaining_topics = list(available_topics)
-                for win in free_windows:
-                    if not remaining_topics or len(proposed_slots) >= MAX_SLOTS:
-                        break
-                    cursor = datetime.combine(target_date, win["start"])
-                    win_end = datetime.combine(target_date, win["end"])
-                    while remaining_topics and len(proposed_slots) < MAX_SLOTS:
-                        remaining_min = int((win_end - cursor).total_seconds() // 60)
-                        if remaining_min < min_window_minutes:
-                            break  # not enough time left in this window for anything useful
-                        topic = remaining_topics[0]
-                        topic_cfg = get_topic_config(topic["name"], topics_config)
-                        default_duration = topic_cfg.get("default_duration_minutes", 60)
-                        duration = min(default_duration, remaining_min)
-                        end_dt = cursor + timedelta(minutes=duration)
-                        t_start = format_time(cursor.time())
-                        t_end = format_time(end_dt.time())
-                        lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
-                        if topic.get("weak_areas"):
-                            lines.append(f" ⚠️ Focus on: {topic['weak_areas']}")
-                        lines.append("")  # blank line after each slot
-
-                        slot = {
-                            "topic": topic["name"],
-                            "start": t_start,
-                            "end": t_end,
-                            "duration_min": duration,
-                        }
-                        proposed_slots.append(slot)
-
-                        # Keep single-slot fields pointing at the first block (backwards compatible)
-                        if proposed_topic is None:
-                            proposed_topic = topic["name"]
-                            proposed_slot = slot
-
-                        cursor = end_dt
-                        remaining_topics.pop(0)
-
-        else:
-            lines.append("🎯 Mock interview blocks: None found today")
-            lines.append("")
+        proposed_topic, proposed_slot, proposed_slots = pack_mock_slots(
+            target_date,
+            free_windows,
+            available_topics,
+            topics_config,
+            min_window_minutes,
+            lines,
+        )
 
         in_progress_study_slots = build_in_progress_study_slots(in_progress_topics, timed_events, target_date)
 
@@ -358,7 +288,7 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("No mock interview windows available today — calendar fully booked.")
 
         message = "\n".join(lines)
-        return {
+        morning_payload: object = {
             "proposed_topic": proposed_topic,
             "proposed_slot": proposed_slot,
             "proposed_slots": proposed_slots if proposed_slots else None,
@@ -366,9 +296,13 @@ def daily_planning(state: AgentState) -> AgentState:
             "preview_only": False,
             "messages": [message],
         }
+        morning_state = cast(AgentState, morning_payload)
+        return morning_state
 
     except Exception as e:
-        return {"messages": [f"⚠️ Daily briefing failed: {e}"]}
+        error_payload: object = {"messages": [f"⚠️ Daily briefing failed: {e}"]}
+        error_state = cast(AgentState, error_payload)
+        return error_state
 
 
 # ---------------------------------------------------------------------------
@@ -376,9 +310,13 @@ def daily_planning(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def on_demand(state: AgentState) -> AgentState:
-    """
-    Handles 'I have X min' flow.
-    Validates the requested duration fits a free window, sets proposed_topic/slot.
+    """Prepare the on-demand study flow state.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Partial state with selected topic and a status/brief-generation message.
     """
     try:
         due_topics = _sm2.get_due_topics()
@@ -403,9 +341,14 @@ def on_demand(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def done_parser(state: AgentState) -> AgentState:
-    """
-    Find the first unlogged slot from proposed_slots and send rating buttons.
-    Sets current_topic_id and current_topic_name in state.
+    """Start the done-flow by prompting a rating for the next unlogged topic.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update with ``current_topic_id`` and ``current_topic_name`` when
+        a loggable topic is found, otherwise an empty update.
     """
     logger.info("done_parser: entered")
 
@@ -451,7 +394,14 @@ def done_parser(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def generate_brief(state: AgentState) -> AgentState:
-    """Calls Claude API to generate a study brief. Only node that calls an LLM."""
+    """Generate a study brief through Claude for the selected topic.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update containing the generated brief or a fallback message.
+    """
     try:
         topic = state.get("proposed_topic") or "General Study"
         duration_min = state.get("duration_min") or 30
@@ -483,11 +433,13 @@ def generate_brief(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def confirm(state: AgentState) -> AgentState:
-    """
-    Sends the assembled plan to Telegram.
-    Daily briefing flow: sends inline buttons (Yes, book them / Skip).
-    On-demand flow: sends the study brief as a plain message (no booking needed).
-    Does NOT advance state — next trigger arrives via webhook.
+    """Send the assembled plan/brief to Telegram and wait for user action.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Always an empty state update; follow-up happens on next webhook trigger.
     """
     messages = state.get("messages") or []
     fallback_text = messages[-1] if messages else ""
@@ -513,7 +465,15 @@ def confirm(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def log_session(state: AgentState) -> AgentState:
-    """Logs session row with quality_score and prompts for weak areas."""
+    """Persist today's session rating and prompt for weak areas.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update toggling ``awaiting_weak_areas`` on success, otherwise an
+        error message payload.
+    """
     try:
         topic_id = state.get("current_topic_id")
         topic_name = state.get("current_topic_name") or "topic"
@@ -554,7 +514,15 @@ def log_session(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def log_weak_areas(state: AgentState) -> AgentState:
-    """Saves weak areas (or marks resolved on Skip), then prompts for next unlogged slot."""
+    """Persist weak-area notes and continue or close the done-flow loop.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        State update clearing ``awaiting_weak_areas`` and optionally pointing to
+        the next topic to rate.
+    """
     try:
         messages = state.get("messages") or []
         text = messages[0].strip() if messages else ""
@@ -607,9 +575,13 @@ def log_weak_areas(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def output(state: AgentState) -> AgentState:
-    """
-    Sends final message via Telegram.
-    If a confirmed slot exists, books it on Google Calendar.
+    """Send final outbound messages and book confirmed calendar events.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Always an empty update after side effects complete.
     """
     trigger = state.get("trigger", "")
 
@@ -697,7 +669,14 @@ def output(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def study_topic(state: AgentState) -> AgentState:
-    """Entry point: query inactive tier 1 (or tier 2 fallback) topics, send category picker."""
+    """Start the topic-picking flow by sending category buttons.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Empty state update; interaction continues through callback triggers.
+    """
     try:
         rows = topic_repository.get_inactive_topics_tier1_or2()
 
@@ -731,7 +710,14 @@ def study_topic(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def study_topic_category(state: AgentState) -> AgentState:
-    """Received category selection: filter subtopics for that category, send subtopic buttons."""
+    """Handle category selection and send matching topic buttons.
+
+    Args:
+        state: Current partial agent state containing ``study_topic_category``.
+
+    Returns:
+        Empty state update; interaction continues through callback triggers.
+    """
     try:
         category = state.get("study_topic_category")
         if not category:
@@ -770,7 +756,14 @@ def study_topic_category(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def study_topic_confirm(state: AgentState) -> AgentState:
-    """Received subtopic selection: set status=in_progress in DB, confirm to user."""
+    """Mark the selected topic as ``in_progress`` and notify the user.
+
+    Args:
+        state: Current partial agent state containing ``proposed_topic``.
+
+    Returns:
+        Empty state update after DB write + Telegram side effects.
+    """
     try:
         topic_name = state.get("proposed_topic")
         if not topic_name:
