@@ -18,6 +18,19 @@ from src.services import topic_service
 
 logger = logging.getLogger(__name__)
 
+HELP_TEXT = (
+    "🤖 Here is what I can do:\n\n"
+    "/study - Generate a study brief for the highest-priority due topic\n"
+    "/done - Log completed study sessions and rate how they went\n"
+    "/plan - Generate today's study plan\n"
+    "/pick - Choose a specific topic to start studying\n"
+    "/activate - Show in-progress topics and move one into active review\n"
+    "/help - Show this command guide\n\n"
+    "Notes:\n"
+    "- After /done, your next text reply is treated as weak areas notes\n"
+    "- Booking mock sessions always requires confirmation"
+)
+
 
 def handle_done(chat_id: int) -> Intent:
     """Build an intent for the ``/done`` command.
@@ -75,14 +88,35 @@ def handle_studied_command(chat_id: int) -> JSONResponse:
     if not topics:
         loop.run_in_executor(
             None,
-            lambda: send_message("No topics are currently in progress."),
+            send_message,
+            "No topics are currently in progress.",
         )
     else:
         buttons = [(t["name"], f"studied:{t['id']}") for t in topics]
         loop.run_in_executor(
             None,
-            lambda: send_inline_buttons("Which topic did you just study?", buttons),
+            send_inline_buttons,
+            "Which topic did you just study?",
+            buttons,
         )
+    return JSONResponse({"ok": True})
+
+
+def handle_help_command(chat_id: int) -> JSONResponse:
+    """Handle ``/help`` by sending a concise command guide.
+
+    This command is handled directly from the webhook path without graph
+    invocation.
+
+    Args:
+        chat_id: Telegram chat identifier (unused, kept for handler consistency).
+
+    Returns:
+        ``JSONResponse({'ok': True})`` after scheduling the help message send.
+    """
+    _ = chat_id
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, send_message, HELP_TEXT)
     return JSONResponse({"ok": True})
 
 

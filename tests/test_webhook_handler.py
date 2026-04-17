@@ -164,7 +164,7 @@ def test_study_message_triggers_on_demand():
 
 def test_briefing_message_triggers_daily():
     """/briefing text triggers the 'daily' trigger."""
-    update = _msg(update_id=4, chat_id=111, text="/briefing")
+    update = _msg(update_id=4, chat_id=111, text="/plan")
 
     with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
@@ -330,3 +330,71 @@ def test_in_flight_message_id_blocks_repeat_tap():
 
     assert result.body == b'{"ok":true}'
     mock_invoke.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 16. /plan alias -> trigger "daily"
+# ---------------------------------------------------------------------------
+
+def test_plan_message_triggers_daily():
+    """/plan text triggers the 'daily' trigger."""
+    update = _msg(update_id=14, chat_id=111, text="/plan")
+
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
+        _run(handle_update(update))
+
+    mock_invoke.assert_called_once()
+    assert mock_invoke.call_args[0][0] == "daily"
+
+
+# ---------------------------------------------------------------------------
+# 17. /pick alias -> trigger "study_topic"
+# ---------------------------------------------------------------------------
+
+def test_pick_message_triggers_study_topic():
+    """/pick text triggers the 'study_topic' trigger."""
+    update = _msg(update_id=15, chat_id=111, text="/pick")
+
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
+        _run(handle_update(update))
+
+    mock_invoke.assert_called_once()
+    assert mock_invoke.call_args[0][0] == "study_topic"
+
+
+# ---------------------------------------------------------------------------
+# 18. /activate alias -> direct command path
+# ---------------------------------------------------------------------------
+
+def test_activate_message_returns_direct_response_without_graph():
+    """/activate is handled directly and does not invoke the graph."""
+    update = _msg(update_id=16, chat_id=111, text="/activate")
+
+    with patch("src.services.topic_service.get_in_progress_topics", return_value=[]), \
+         patch("src.api.telegram.message_handlers.send_message") as mock_send, \
+         patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
+        result = _run(handle_update(update))
+
+    assert result.body == b'{"ok":true}'
+    mock_send.assert_called_once()
+    mock_invoke.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 19. /help -> direct help message
+# ---------------------------------------------------------------------------
+
+def test_help_message_returns_direct_response_without_graph():
+    """/help is handled directly, sends help text, and does not invoke graph."""
+    update = _msg(update_id=17, chat_id=111, text="/help")
+
+    with patch("src.api.telegram.message_handlers.send_message") as mock_send, \
+         patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
+        result = _run(handle_update(update))
+
+    assert result.body == b'{"ok":true}'
+    mock_send.assert_called_once()
+    assert "/study" in mock_send.call_args[0][0]
+    assert "/help" in mock_send.call_args[0][0]
+    mock_invoke.assert_not_called()
+
