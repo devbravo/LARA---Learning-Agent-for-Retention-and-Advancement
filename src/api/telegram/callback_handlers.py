@@ -19,7 +19,7 @@ from src.agent import graph as _graph
 from src.integrations.telegram_client import remove_buttons, send_message
 from src.api.telegram import dispatcher
 from src.services import topic_service
-from src.api.telegram.intent_parser import Intent
+from src.api.telegram.types import Intent
 
 logger = logging.getLogger(__name__)
 
@@ -137,22 +137,28 @@ def handle_rating(cb: str, chat_id: int, message_id: int | None) -> Intent | Non
     return Intent(trigger="rate", chat_id=chat_id, message_id=message_id, extra=extra)
 
 
-def handle_category(callback_data: str, chat_id: int) -> Intent:
+def handle_category(callback_data: str, chat_id: int, message_id: int | None) -> Intent | None:
     """Convert ``category:<name>`` callback data into a category intent.
     Args:
         callback_data: Raw callback payload with ``category:`` prefix.
         chat_id: Telegram chat identifier used as LangGraph thread id.
+        message_id: Source Telegram message id used for idempotency + button removal.
     Returns:
         Intent for ``trigger="study_topic_category"`` preserving original
-        category text casing.
+        category text casing. Returns ``None`` for duplicate taps.
     """
+    if message_id is not None:
+        if not dispatcher.try_mark_in_flight(message_id):
+            logger.info("message_id=%s already processed for category — ignoring repeat tap", message_id)
+            return None
+
 
     category = callback_data[len("category:"):]  # preserve original case
     return Intent(
         trigger="study_topic_category",
         chat_id=chat_id,
-        message_id=None,
-        extra={"study_topic_category": category},
+        message_id=message_id,
+        extra={"study_topic_category": category, "message_id": message_id},
     )
 
 

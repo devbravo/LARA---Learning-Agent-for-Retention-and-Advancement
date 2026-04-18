@@ -71,6 +71,7 @@ class AgentState(TypedDict, total=False):
     current_topic_id: int | None
     current_topic_name: str | None
     study_topic_category: str | None    # selected category in /study_topic flow, e.g. "DSA"
+    pending_subtopic_message_id: int | None  # message_id of the last sent subtopic list (for cleanup)
 
 # ---------------------------------------------------------------------------
 # Node: router
@@ -374,6 +375,16 @@ def done_parser(state: AgentState) -> AgentState:
             _telegram.send_message(f"⚠️ Topic '{topic_name}' not found in database.")
             return {}
 
+        # Detect mid-flow: buttons already sent for this topic but not yet tapped.
+        # Avoid sending duplicate buttons — just remind the user.
+        pending_name = state.get("current_topic_name")
+        if pending_name == topic_name and not state.get("awaiting_weak_areas"):
+            logger.info("done_parser: rating already pending for %s — sending reminder", topic_name)
+            _telegram.send_message(
+                f"⏳ Still waiting for your rating on <b>{topic_name}</b> — tap a button above."
+            )
+            return {}
+
         logger.info("done_parser: sending rating buttons for %s", topic_name)
         _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
         return {
@@ -671,6 +682,9 @@ def output(state: AgentState) -> AgentState:
 def study_topic(state: AgentState) -> AgentState:
     """Start the topic-picking flow by sending category buttons.
 
+    Cleans up any previously pending subtopic list before presenting
+    fresh category buttons, so abandoned /pick flows don't accumulate.
+
     Args:
         state: Current partial agent state.
 
@@ -678,6 +692,14 @@ def study_topic(state: AgentState) -> AgentState:
         Empty state update; interaction continues through callback triggers.
     """
     try:
+        # Clean up any leftover subtopic list from a previous abandoned /pick
+        old_msg_id = state.get("pending_subtopic_message_id")
+        if old_msg_id is not None:
+            chat_id = state.get("chat_id")
+            try:
+                _telegram.remove_buttons(chat_id, old_msg_id)
+            except Exception:
+                pass  # already removed or expired — ignore
         rows = topic_repository.get_inactive_topics_tier1_or2()
 
         tier1 = [r for r in rows if r["tier"] == 1]
@@ -694,7 +716,7 @@ def study_topic(state: AgentState) -> AgentState:
 
         buttons = [(c, f"category:{c}") for c in categories]
         _telegram.send_inline_buttons("Which category?", buttons)
-        return {}
+        return {"pending_subtopic_message_id": None}
 
     except Exception as e:
         logger.error("study_topic failed: %s", e, exc_info=True)
@@ -702,7 +724,7 @@ def study_topic(state: AgentState) -> AgentState:
             _telegram.send_message(f"⚠️ Failed to load topics: {e}")
         except Exception:
             pass
-        return {}
+        return {"pending_subtopic_message_id": None}
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +746,17 @@ def study_topic_category(state: AgentState) -> AgentState:
             _telegram.send_message("⚠️ No category selected.")
             return {}
 
+        # Remove the category buttons now that a selection has been made.
+        # Done here (not in the callback handler) so failures are logged and
+        # don't silently accumulate in a background executor task.
+        chat_id = state.get("chat_id")
+        message_id = state.get("message_id")
+        if chat_id is not None and message_id is not None:
+            try:
+                _telegram.remove_buttons(chat_id, message_id)
+            except Exception as e:
+                logger.warning("study_topic_category: failed to remove category buttons: %s", e)
+
         rows = topic_repository.get_inactive_topics_tier1_or2()
 
         tier1 = [r for r in rows if r["tier"] == 1]
@@ -739,9 +772,22 @@ def study_topic_category(state: AgentState) -> AgentState:
             return {}
 
         buttons = [(r["name"], f"subtopic_id:{r['id']}") for r in subtopic_rows]
-        _telegram.send_inline_buttons("Which topic?", buttons)
-        return {}
-
+        try:
+            sent_msg_id = _telegram.send_inline_buttons("Which topic?", buttons)
+        except RuntimeError as e:
+            if "timed out" in str(e).lower():
+                # Telegram likely delivered the message despite the timeout — log and continue
+                logger.warning(
+                    "send_inline_buttons timed out; not treating subtopic list as delivered: %s",
+                    e,
+                )
+                try:
+                    _telegram.send_message("⚠️ Timed out while sending the topic list. Please retry /pick.")
+                except Exception:
+                    pass
+                return {}
+            raise
+        return {"pending_subtopic_message_id": sent_msg_id}
     except Exception as e:
         logger.error("study_topic_category failed: %s", e, exc_info=True)
         try:
@@ -781,7 +827,7 @@ def study_topic_confirm(state: AgentState) -> AgentState:
             f"✅ {topic_name} added to In Progress. "
             "It will be booked on your calendar tomorrow morning."
         )
-        return {}
+        return {"pending_subtopic_message_id": None}
 
     except Exception as e:
         logger.error("study_topic_confirm failed: %s", e, exc_info=True)

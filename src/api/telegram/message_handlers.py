@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from src.agent import graph as _graph
 from src.integrations.telegram_client import send_inline_buttons, send_message
-from src.api.telegram.intent_parser import Intent
+from src.api.telegram.types import Intent
 from src.services import topic_service
 
 logger = logging.getLogger(__name__)
