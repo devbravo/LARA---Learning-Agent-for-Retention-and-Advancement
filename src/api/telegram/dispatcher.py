@@ -99,11 +99,20 @@ def invoke_safe(trigger: str, chat_id: int, **kwargs: Any) -> None:
     # causing log_session to read a stale current_topic_id.
     # Also prevents double-delivery of weak_areas text messages.
     if trigger in ("done", "rate", "weak_areas", "study_topic", "study_topic_category"):
-        with _chat_lock:
-            if chat_id in _chat_in_flight:
-                logger.info("Dropping concurrent %s invocation for chat_id=%s", trigger, chat_id)
-                return
-            _chat_in_flight.add(chat_id)
+        wait_event = threading.Event()
+        logged_wait = False
+        while True:
+            with _chat_lock:
+                if chat_id not in _chat_in_flight:
+                    _chat_in_flight.add(chat_id)
+                    break
+            if not logged_wait:
+                logger.info(
+                    "Waiting for prior %s invocation to finish for chat_id=%s",
+                    trigger, chat_id,
+                )
+                logged_wait = True
+            wait_event.wait(0.05)
 
     try:
         logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)

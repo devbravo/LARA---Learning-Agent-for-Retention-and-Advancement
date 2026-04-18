@@ -152,17 +152,13 @@ def handle_category(callback_data: str, chat_id: int, message_id: int | None) ->
             logger.info("message_id=%s already processed for category — ignoring repeat tap", message_id)
             return None
 
-    # Remove category buttons so the user can't re-tap them
-    if chat_id is not None and message_id is not None:
-        _cid, _mid = chat_id, message_id
-        asyncio.get_event_loop().run_in_executor(None, lambda: remove_buttons(_cid, _mid))
 
     category = callback_data[len("category:"):]  # preserve original case
     return Intent(
         trigger="study_topic_category",
         chat_id=chat_id,
         message_id=message_id,
-        extra={"study_topic_category": category},
+        extra={"study_topic_category": category, "message_id": message_id},
     )
 
 

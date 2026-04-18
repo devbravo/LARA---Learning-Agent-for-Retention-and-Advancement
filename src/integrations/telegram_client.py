@@ -4,6 +4,7 @@ Async helper functions are wrapped by sync convenience functions so callers can
 invoke Telegram operations from scheduler threads and executor jobs.
 """
 
+import atexit
 import asyncio
 import os
 from pathlib import Path
@@ -15,12 +16,13 @@ from telegram.error import BadRequest
 
 load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
+# ---------------------------------------------------------------------------
+# Singleton Bot — one HTTP session for the lifetime of the process.
+# Avoids recreating the connection pool on every send and prevents session
+# leaks that occurred when async with bot: was removed.
+# ---------------------------------------------------------------------------
 
-def _get_bot() -> tuple[Bot, int]:
-    """Create a configured bot client and resolve default chat id.
-    Returns:
-        Tuple of ``(Bot, chat_id)``.
-    """
+def _build_bot() -> tuple[Bot, int]:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not token:
@@ -28,6 +30,29 @@ def _get_bot() -> tuple[Bot, int]:
     if not chat_id:
         raise EnvironmentError("Missing required env var: TELEGRAM_CHAT_ID")
     return Bot(token=token), int(chat_id)
+
+
+_bot: Bot | None = None
+_default_chat_id: int | None = None
+
+
+def _get_bot() -> tuple[Bot, int]:
+    """Return the shared singleton Bot and default chat id.
+
+    The bot is created lazily on first use and shut down via ``atexit``.
+    """
+    global _bot, _default_chat_id
+    if _bot is None:
+        _bot, _default_chat_id = _build_bot()
+
+        def _shutdown() -> None:
+            try:
+                asyncio.run(_bot.shutdown())  # type: ignore[arg-type]
+            except Exception:
+                pass
+
+        atexit.register(_shutdown)
+    return _bot, _default_chat_id  # type: ignore[return-value]
 
 
 async def _send_message(text: str) -> None:

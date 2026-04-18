@@ -746,6 +746,17 @@ def study_topic_category(state: AgentState) -> AgentState:
             _telegram.send_message("⚠️ No category selected.")
             return {}
 
+        # Remove the category buttons now that a selection has been made.
+        # Done here (not in the callback handler) so failures are logged and
+        # don't silently accumulate in a background executor task.
+        chat_id = state.get("chat_id")
+        message_id = state.get("message_id")
+        if chat_id is not None and message_id is not None:
+            try:
+                _telegram.remove_buttons(chat_id, message_id)
+            except Exception as e:
+                logger.warning("study_topic_category: failed to remove category buttons: %s", e)
+
         rows = topic_repository.get_inactive_topics_tier1_or2()
 
         tier1 = [r for r in rows if r["tier"] == 1]
@@ -766,12 +777,17 @@ def study_topic_category(state: AgentState) -> AgentState:
         except RuntimeError as e:
             if "timed out" in str(e).lower():
                 # Telegram likely delivered the message despite the timeout — log and continue
-                logger.warning("send_inline_buttons timed out but message was likely delivered: %s", e)
-                sent_msg_id = None
-            else:
-                raise
+                logger.warning(
+                    "send_inline_buttons timed out; not treating subtopic list as delivered: %s",
+                    e,
+                )
+                try:
+                    _telegram.send_message("⚠️ Timed out while sending the topic list. Please retry /pick.")
+                except Exception:
+                    pass
+                return {}
+            raise
         return {"pending_subtopic_message_id": sent_msg_id}
-
     except Exception as e:
         logger.error("study_topic_category failed: %s", e, exc_info=True)
         try:
