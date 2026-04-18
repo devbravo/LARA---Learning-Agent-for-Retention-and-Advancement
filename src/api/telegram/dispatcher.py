@@ -25,6 +25,11 @@ _in_flight_message_ids: set[int] = set()
 _MAX_CONFIRMED = 1000
 _confirm_lock = threading.Lock()
 
+# Per-chat in-flight lock — prevents concurrent graph invocations for the same chat_id
+# (e.g. double-delivered weak_areas webhooks)
+_chat_in_flight: set[int] = set()
+_chat_lock = threading.Lock()
+
 
 def is_duplicate(update_id: int) -> bool:
     """Check whether an update id has already been processed.
@@ -88,6 +93,18 @@ def invoke_safe(trigger: str, chat_id: int, **kwargs: Any) -> None:
         On failure, in-flight state is cleared and the exception is logged.
     """
     message_id: int | None = kwargs.get("message_id")
+
+    # Serialize all done-flow triggers per chat to prevent the race condition where
+    # the user taps a rating button before the previous node's checkpoint write completes,
+    # causing log_session to read a stale current_topic_id.
+    # Also prevents double-delivery of weak_areas text messages.
+    if trigger in ("done", "rate", "weak_areas", "study_topic", "study_topic_category"):
+        with _chat_lock:
+            if chat_id in _chat_in_flight:
+                logger.info("Dropping concurrent %s invocation for chat_id=%s", trigger, chat_id)
+                return
+            _chat_in_flight.add(chat_id)
+
     try:
         logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
         _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
@@ -107,3 +124,7 @@ def invoke_safe(trigger: str, chat_id: int, **kwargs: Any) -> None:
         )
         if message_id is not None:
             clear_in_flight(message_id)
+    finally:
+        if trigger in ("done", "rate", "weak_areas", "study_topic", "study_topic_category"):
+            with _chat_lock:
+                _chat_in_flight.discard(chat_id)
