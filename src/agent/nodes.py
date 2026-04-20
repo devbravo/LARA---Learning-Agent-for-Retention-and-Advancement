@@ -108,7 +108,7 @@ def route_from_router(state: AgentState) -> str:
         "weekend":              "weekend_brief",
         "on_demand":            "on_demand",
         "done":                 "done_parser",
-        "confirm":              "output",
+        "confirm":              "book_events",
         "rate":                 "log_session",
         "weak_areas":           "log_weak_areas",
         "study_topic":          "study_topic",
@@ -591,91 +591,96 @@ def log_weak_areas(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def output(state: AgentState) -> AgentState:
-    """Send final outbound messages and book confirmed calendar events.
+    """Send the final Telegram message for non-confirm flows.
+
+    Used by daily_planning (no-plan / evening preview) and weekend_brief.
 
     Args:
         state: Current partial agent state.
 
     Returns:
+        Always an empty update after the side effect completes.
+    """
+    messages = state.get("messages") or []
+    if messages:
+        try:
+            _telegram.send_message(messages[-1])
+        except Exception as e:
+            print(f"[output] Telegram send failed: {e}")
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Node: book_events
+# ---------------------------------------------------------------------------
+
+def book_events(state: AgentState) -> AgentState:
+    """Write GCal mock events for confirmed slots and send booking confirmation.
+
+    Handles both multi-slot (proposed_slots) and single-slot
+    (proposed_topic + proposed_slot) confirmation flows. Each slot is attempted
+    independently so one failure does not block the others.
+
+    Args:
+        state: Current partial agent state after the user confirmed the plan.
+
+    Returns:
         Always an empty update after side effects complete.
     """
-    trigger = state.get("trigger", "")
+    today = date.today()
+    config = _load_config()
+    tz = pytz.timezone(config["timezone"])
 
-    if trigger in ("rate", "weak_areas", "done"):
-        messages = state.get("messages") or []
-        if messages and messages[-1].startswith("⚠"):
+    booked: list[str] = []
+    slots = state.get("proposed_slots")
+
+    if slots:
+        for slot in slots:
             try:
-                _telegram.send_message(messages[-1])
+                t_start = format_time(slot["start"])
+                t_end = format_time(slot["end"])
+                start_hour, start_minute = map(int, t_start.split(":"))
+                end_hour, end_minute = map(int, t_end.split(":"))
+                _gcal.write_event(
+                    topic=slot["topic"],
+                    start=local_datetime_str(today, start_hour, start_minute, tz),
+                    end=local_datetime_str(today, end_hour, end_minute, tz),
+                )
+                booked.append(slot["topic"])
             except Exception as e:
-                print(f"[output] Telegram send failed: {e}")
-        return {}
+                print(f"[book_events] Calendar write failed for {slot.get('topic')}: {e}")
+    else:
+        try:
+            topic = state.get("proposed_topic")
+            slot = state.get("proposed_slot")
+            if topic and slot:
+                t_start = format_time(slot["start"])
+                t_end = format_time(slot["end"])
+                start_hour, start_minute = map(int, t_start.split(":"))
+                end_hour, end_minute = map(int, t_end.split(":"))
+                _gcal.write_event(
+                    topic=topic,
+                    start=local_datetime_str(today, start_hour, start_minute, tz),
+                    end=local_datetime_str(today, end_hour, end_minute, tz),
+                )
+                booked.append(topic)
+        except Exception as e:
+            print(f"[book_events] Calendar write failed: {e}")
 
-    # --- Send final message for non-confirm triggers ---
-    if trigger != "confirm":
-        messages = state.get("messages") or []
-        if messages:
-            try:
-                _telegram.send_message(messages[-1])
-            except Exception as e:
-                print(f"[output] Telegram send failed: {e}")
-        return {}
+    chat_id = state.get("chat_id")
+    message_id = state.get("message_id")
+    if chat_id and message_id:
+        try:
+            _telegram.remove_buttons(chat_id, message_id)
+        except Exception as e:
+            print(f"[book_events] remove_buttons failed: {e}")
 
-    # --- Book calendar events on confirmation ---
-    if trigger == "confirm":
-        today = date.today()
-        config = _load_config()
-        tz = pytz.timezone(config["timezone"])
-
-        booked: list[str] = []
-        slots = state.get("proposed_slots")
-
-        if slots:
-            for slot in slots:
-                try:
-                    t_start = format_time(slot["start"])
-                    t_end = format_time(slot["end"])
-                    start_hour, start_minute = map(int, t_start.split(":"))
-                    end_hour, end_minute = map(int, t_end.split(":"))
-                    _gcal.write_event(
-                        topic=slot["topic"],
-                        start=local_datetime_str(today, start_hour, start_minute, tz),
-                        end=local_datetime_str(today, end_hour, end_minute, tz),
-                    )
-                    booked.append(slot["topic"])
-                except Exception as e:
-                    print(f"[output] Calendar write failed for {slot.get('topic')}: {e}")
-        else:
-            try:
-                topic = state.get("proposed_topic")
-                slot = state.get("proposed_slot")
-                if topic and slot:
-                    t_start = format_time(slot["start"])
-                    t_end = format_time(slot["end"])
-                    start_hour, start_minute = map(int, t_start.split(":"))
-                    end_hour, end_minute = map(int, t_end.split(":"))
-                    _gcal.write_event(
-                        topic=topic,
-                        start=local_datetime_str(today, start_hour, start_minute, tz),
-                        end=local_datetime_str(today, end_hour, end_minute, tz),
-                    )
-                    booked.append(topic)
-            except Exception as e:
-                print(f"[output] Calendar write failed: {e}")
-
-        chat_id = state.get("chat_id")
-        message_id = state.get("message_id")
-        if chat_id and message_id:
-            try:
-                _telegram.remove_buttons(chat_id, message_id)
-            except Exception as e:
-                print(f"[output] remove_buttons failed: {e}")
-
-        if booked:
-            summary = "\n".join(f"  • {t}" for t in booked)
-            try:
-                _telegram.send_message(f"✅ Booked {len(booked)} mock session(s):\n{summary}")
-            except Exception as e:
-                print(f"[output] Confirmation send failed: {e}")
+    if booked:
+        summary = "\n".join(f"  • {t}" for t in booked)
+        try:
+            _telegram.send_message(f"✅ Booked {len(booked)} mock session(s):\n{summary}")
+        except Exception as e:
+            print(f"[book_events] Confirmation send failed: {e}")
 
     return {}
 

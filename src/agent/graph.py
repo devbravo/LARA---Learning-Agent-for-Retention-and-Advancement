@@ -27,6 +27,7 @@ from langgraph.graph import END, START, StateGraph
 
 from src.agent.nodes import (
     AgentState,
+    book_events,
     generate_brief,
     confirm,
     daily_planning,
@@ -68,6 +69,7 @@ def build_graph(checkpointer=None):
     builder.add_node("log_session", log_session)
     builder.add_node("log_weak_areas", log_weak_areas)
     builder.add_node("output", output)
+    builder.add_node("book_events", book_events)
     builder.add_node("study_topic", study_topic)
     builder.add_node("study_topic_category", study_topic_category)
     builder.add_node("study_topic_confirm", study_topic_confirm)
@@ -85,6 +87,7 @@ def build_graph(checkpointer=None):
             "on_demand":            "on_demand",
             "done_parser":          "done_parser",
             "output":               "output",
+            "book_events":          "book_events",
             "log_session":          "log_session",
             "log_weak_areas":       "log_weak_areas",
             "study_topic":          "study_topic",
@@ -107,9 +110,12 @@ def build_graph(checkpointer=None):
 
     # done flow
     builder.add_edge("done_parser", END)
-    builder.add_edge("log_session", "output")
-    builder.add_edge("log_weak_areas", "output")
+    builder.add_edge("log_session", END)
+    builder.add_edge("log_weak_areas", END)
     builder.add_edge("output", END)
+
+    # confirm flow
+    builder.add_edge("book_events", END)
 
     # study_topic flow
     builder.add_edge("study_topic", END)

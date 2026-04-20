@@ -23,7 +23,8 @@ creates or rebooks [Study] events for the in-progress study flow.
 | `log_weak_areas` | Saves weak areas (or clears on Skip). Prompts for next unlogged slot or ends. |
 | `generate_brief` | Calls Claude API. Only node that uses an LLM. |
 | `confirm` | Sends plan to Telegram. Awaits button tap. |
-| `output` | Final Telegram send + GCal write after confirmation. |
+| `output` | Sends final Telegram message for non-confirm flows. |
+| `book_events` | Writes GCal events after user confirms mock slots. |
 | `study_topic` | Starts `/pick` flow. Sends category inline buttons. Cleans up stale subtopic lists. |
 | `study_topic_category` | Handles category tap. Sends matching subtopic inline buttons. |
 | `study_topic_confirm` | Marks selected topic as `in_progress`. Notifies user. |
@@ -40,9 +41,10 @@ creates or rebooks [Study] events for the in-progress study flow.
 | `confirm` tap | `output` → writes GCal events |
 | `skip` tap | `output` → END (no calendar write) |
 | `/done` | `done_parser` → END (waits for rating tap) |
-| Rating tap (😕 😐 😊) | `log_session` → `output` → END (waits for weak areas reply) |
-| Weak areas reply or Skip | `log_weak_areas` → `output` → END |
-| `/plan` | `daily_planning` (manual trigger for testing) |
+| Rating tap (😕 😐 😊) | `log_session` → END |
+| Weak areas reply or Skip | `log_weak_areas` → END |
+| `confirm` tap | `book_events` → writes GCal events → END |
+| `/plan` | `daily_planning` Regenerate today's plan (recovery only)" |
 | `/view` | Handled directly by the webhook path to show the view response; does not route through LangGraph ||
 | `/pick` | `study_topic` → END (awaits category tap) |
 | `category:<name>` tap | `study_topic_category` → END (awaits subtopic tap) |
@@ -60,9 +62,11 @@ START → router → daily_planning → confirm → END
 
                → done_parser → END (sends rating buttons, waits)
 
-               → log_session → output → END (sends weak areas prompt, waits)
+               → log_session → END (sends weak areas prompt, waits)
 
-               → log_weak_areas → output → END
+               → log_weak_areas → END
+               
+               → confirm → book_events → END
 
                → study_topic → END (sends category buttons, waits)
 
