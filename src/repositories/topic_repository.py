@@ -131,6 +131,62 @@ def get_inactive_topics_tier1_or2() -> list[dict[str, Any]]:
     return [{"id": row["id"], "name": row["name"], "tier": row["tier"]} for row in rows]
 
 
+def fetch_overdue_topics(today_str: str) -> list[dict[str, Any]]:
+    """Fetch active topics whose next review date is before today.
+
+    Args:
+        today_str: ISO date string (``YYYY-MM-DD``) for the cutoff.
+
+    Returns:
+        List of dicts with ``name``, ``next_review``, and ``weak_areas``,
+        ordered most-overdue first.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT name, next_review, weak_areas FROM topics
+               WHERE status = 'active' AND next_review < ?
+               ORDER BY next_review ASC""",
+            (today_str,),
+        ).fetchall()
+    return [{"name": r["name"], "next_review": r["next_review"], "weak_areas": r["weak_areas"]} for r in rows]
+
+
+def fetch_due_today_topics(today_str: str) -> list[dict[str, Any]]:
+    """Fetch active topics due for review today.
+
+    Args:
+        today_str: ISO date string (``YYYY-MM-DD``) for today.
+
+    Returns:
+        List of dicts with ``name`` and ``weak_areas``, ordered by
+        tier then easiness factor.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT name, weak_areas FROM topics
+               WHERE status = 'active' AND next_review = ?
+               ORDER BY tier ASC, easiness_factor ASC""",
+            (today_str,),
+        ).fetchall()
+    return [{"name": r["name"], "weak_areas": r["weak_areas"]} for r in rows]
+
+
+def fetch_in_progress_topics_with_weak_areas() -> list[dict[str, Any]]:
+    """Fetch in-progress topics with their weak areas.
+
+    Returns:
+        List of dicts with ``name`` and ``weak_areas``, ordered by tier
+        then name.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT name, weak_areas FROM topics
+               WHERE status = 'in_progress'
+               ORDER BY tier ASC, name ASC""",
+        ).fetchall()
+    return [{"name": r["name"], "weak_areas": r["weak_areas"]} for r in rows]
+
+
 def set_topic_in_progress(topic_name: str) -> bool:
     """Set topic status to in_progress for an inactive topic name.
 
