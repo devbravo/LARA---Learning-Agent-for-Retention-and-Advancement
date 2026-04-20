@@ -1,12 +1,12 @@
 schedule:
-  daily_planning:
-    hour: 8
+  weekday_planning:
+    hour: 7
     minute: 0
     misfire_grace_time: 3600
-  sunday_planning:
-    hour: 9
+  weekend_planning:
+    hour: 10
     minute: 0
-    misfire_grace_time: 300
+    misfire_grace_time: 600
   evening_briefing:
     hour: 20
     minute: 0
