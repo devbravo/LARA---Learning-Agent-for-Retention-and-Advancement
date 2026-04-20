@@ -302,6 +302,9 @@ def weekend_brief(state: AgentState) -> AgentState:
             "messages": ["\n".join(lines)],
             "has_study_plan": False,
             "preview_only": True,
+            "proposed_slots": None,
+            "proposed_slot": None,
+            "proposed_topic": None,
         }
 
     except Exception as e:
@@ -331,6 +334,7 @@ def on_demand(state: AgentState) -> AgentState:
         duration_min = state.get("duration_min") or 30
         return {
             "proposed_topic": topic["name"],
+            "has_study_plan": False,  # prevents confirm from treating stale proposed_slots as a booking flow
             "messages": [f"📚 Generating a {duration_min} min brief for {topic['name']}…"],
         }
 
@@ -360,6 +364,18 @@ def done_parser(state: AgentState) -> AgentState:
             _telegram.send_message("No study sessions were planned today.")
             return {}
 
+        # Detect mid-flow: a weak-areas prompt is still open.
+        # Check this BEFORE computing unlogged — the current topic may already be
+        # marked as logged (upsert_today_session ran in log_session), so unlogged[0]
+        # could be the next topic, not the one actually awaiting weak-area input.
+        if state.get("awaiting_weak_areas"):
+            pending_topic = state.get("current_topic_name") or topic_name
+            logger.info("done_parser: awaiting_weak_areas — sending reminder for %s", pending_topic)
+            _telegram.send_message(
+                f"⏳ Still waiting for your weak-areas reply on <b>{pending_topic}</b> — tap Skip or reply with text."
+            )
+            return {}
+
         # Find topics already logged today
         logged_names = session_repository.get_logged_topic_names_for_today()
 
@@ -374,14 +390,6 @@ def done_parser(state: AgentState) -> AgentState:
         topic_id = topic_repository.get_topic_id_by_name(topic_name)
         if topic_id is None:
             _telegram.send_message(f"⚠️ Topic '{topic_name}' not found in database.")
-            return {}
-
-        # Detect mid-flow: a weak-areas prompt or rating buttons are still open.
-        if state.get("awaiting_weak_areas"):
-            logger.info("done_parser: awaiting_weak_areas — sending reminder for %s", topic_name)
-            _telegram.send_message(
-                f"⏳ Still waiting for your weak-areas reply on <b>{topic_name}</b> — tap Skip or reply with text."
-            )
             return {}
 
         pending_name = state.get("current_topic_name")
@@ -464,7 +472,7 @@ def confirm(state: AgentState) -> AgentState:
     try:
         text = fallback_text or "Ready to study?"
 
-        if state.get("proposed_slots"):
+        if state.get("has_study_plan"):
             # Daily briefing flow, needs confirmation before booking
             _telegram.send_buttons(text, ["Yes, book them", "Skip"])
         else:
