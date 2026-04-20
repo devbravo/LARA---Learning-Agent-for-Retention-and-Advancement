@@ -2,12 +2,12 @@
 APScheduler setup for the Learning Manager agent.
 
 Jobs:
-  - Mon–Fri 07:00  → trigger="daily"   (weekday morning briefing)
-  - Sat–Sun 10:00  → trigger="weekend" (weekend briefing)
-  - Mon–Fri 20:00  → trigger="evening" (tomorrow's preview)
+  - Mon–Fri 07:00  → trigger="daily"   (weekday morning planning)
+  - Sat–Sun 10:00  → trigger="weekend" (weekend brief)
+  - Mon–Fri 20:00  → trigger="evening" (evening brief)
 
 Timezone: America/Paramaribo
-Guard:    never invoke weekday briefing during the 15:00–19:00 protected block.
+Guard:    never invoke weekday planning during the 15:00–19:00 protected block.
 """
 
 import os

@@ -28,19 +28,16 @@ from langgraph.graph import END, START, StateGraph
 from src.agent.nodes import (
     AgentState,
     generate_brief,
-    calendar_reader,
     confirm,
     daily_planning,
     weekend_brief,
     done_parser,
-    gap_finder,
     log_session,
     log_weak_areas,
     output,
     route_from_daily_planning,
     route_from_router,
     router,
-    sm2_engine,
     on_demand,
     study_topic,
     study_topic_category,
@@ -66,9 +63,6 @@ def build_graph(checkpointer=None):
     builder.add_node("weekend_brief", weekend_brief)
     builder.add_node("on_demand", on_demand)
     builder.add_node("done_parser", done_parser)
-    builder.add_node("calendar_reader", calendar_reader)
-    builder.add_node("sm2_engine", sm2_engine)
-    builder.add_node("gap_finder", gap_finder)
     builder.add_node("generate_brief", generate_brief)
     builder.add_node("confirm", confirm)
     builder.add_node("log_session", log_session)

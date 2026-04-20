@@ -56,7 +56,7 @@ def _load_topics() -> dict:
 # ---------------------------------------------------------------------------
 
 class AgentState(TypedDict, total=False):
-    trigger: str               # "daily" | "evening" | "on_demand" | "done" | "confirm" | "rate" | "weak_areas"
+    trigger: str               # "daily" | "evening" | "on_demand" | "done" | "confirm" | "rate" | "weak_areas | weekend"
     chat_id: int
     message_id: int | None              # Telegram message_id of the confirm keyboard
     duration_min: int | None
@@ -131,67 +131,6 @@ def route_from_daily_planning(state: AgentState) -> str:
         return "output"
     return "confirm" if state.get("has_study_plan") else "output"
 
-
-# ---------------------------------------------------------------------------
-# Node: calendar_reader
-# ---------------------------------------------------------------------------
-
-def calendar_reader(state: AgentState) -> AgentState:
-    """Fetch today's calendar events and report count.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        State update with a status message.
-    """
-    try:
-        events = _gcal.get_events(date.today())
-        return {"messages": state.get("messages", []) + [f"📅 Fetched {len(events)} events"]}
-    except Exception as e:
-        return {"messages": state.get("messages", []) + [f"⚠️ Calendar read failed: {e}"]}
-
-
-# ---------------------------------------------------------------------------
-# Node: sm2_engine
-# ---------------------------------------------------------------------------
-
-def sm2_engine(state: AgentState) -> AgentState:
-    """Fetch due topics from SM-2 and report count.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        State update with a status message.
-    """
-    try:
-        topics = _sm2.get_due_topics()
-        return {"messages": state.get("messages", []) + [f"🧠 {len(topics)} topics due"]}
-    except Exception as e:
-        return {"messages": state.get("messages", []) + [f"⚠️ SM-2 fetch failed: {e}"]}
-
-
-# ---------------------------------------------------------------------------
-# Node: gap_finder
-# ---------------------------------------------------------------------------
-
-def gap_finder(state: AgentState) -> AgentState:
-    """Compute today's free windows and report count.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        State update with a status message.
-    """
-    try:
-        config = _load_config()
-        events = _gcal.get_events(date.today())
-        windows = _gap_finder.find_free_windows(events, date.today(), config)
-        return {"messages": state.get("messages", []) + [f"🕐 {len(windows)} free windows found"]}
-    except Exception as e:
-        return {"messages": state.get("messages", []) + [f"⚠️ Gap finder failed: {e}"]}
 
 
 # ---------------------------------------------------------------------------
