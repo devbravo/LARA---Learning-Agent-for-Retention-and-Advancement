@@ -2,13 +2,21 @@
 LangGraph graph definition for the Learning Manager agent.
 
 Flow:
-  START → router → (conditional) → daily_planning | on_demand | done_parser | output
-  daily_planning  → confirm → END
-  on_demand       → generate_brief → confirm → END
-  done_parser     → END  (sends rating buttons directly, waits for tap via webhook)
-  rate trigger    → log_session → output → END  (log_session sends weak-areas prompt)
-  weak_areas      → log_weak_areas → output → END
-  output          → END
+  START → router → (conditional) → daily_planning | weekend_brief | on_demand
+                                  | done_parser | book_events | log_session
+                                  | log_weak_areas | output | study_topic*
+
+  daily_planning (morning)  → confirm → END
+  daily_planning (evening)  → output  → END
+  daily_planning (no plan)  → output  → END
+  weekend_brief             → output  → END
+  on_demand                 → generate_brief → confirm → END
+  done_parser               → END  (sends rating buttons, waits for tap)
+  rate trigger              → log_session → END  (sends weak-areas prompt, waits)
+  weak_areas trigger        → log_weak_areas → END
+  confirm trigger           → book_events → END
+  skip trigger              → output (no-op) → END
+  study_topic*              → END  (each step waits for next callback)
 
 Checkpointer: SqliteSaver backed by db/state.db.
 Thread ID: chat_id from state (one thread per user).
@@ -152,7 +160,9 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
     Convenience wrapper to invoke the graph.
 
     Args:
-        trigger:  'daily' | 'on_demand' | 'done' | 'confirm'
+        trigger:  'daily' | 'evening' | 'weekend' | 'on_demand' | 'done' |
+                  'confirm' | 'skip' | 'rate' | 'weak_areas' |
+                  'study_topic' | 'study_topic_category' | 'study_topic_confirm'
         chat_id:  Telegram chat ID (used as LangGraph thread_id)
         **kwargs: Additional state fields (duration_min, messages, etc.)
 

@@ -4,7 +4,7 @@ APScheduler setup for the Learning Manager agent.
 Jobs:
   - Mon–Fri 07:00  → trigger="daily"   (weekday morning planning)
   - Sat–Sun 10:00  → trigger="weekend" (weekend brief)
-  - Mon–Fri 20:00  → trigger="evening" (evening brief)
+  - Sun–Thu 20:00  → trigger="evening" (evening brief - preview of next day)
 
 Timezone: America/Paramaribo
 Guard:    never invoke weekday planning during the 15:00–19:00 protected block.
@@ -149,9 +149,9 @@ def build_scheduler() -> AsyncIOScheduler:
     # Mon-Fri at 20:00
     scheduler.add_job(
         _run_evening_brief,
-        trigger=CronTrigger(day_of_week="mon-fri", hour=evening["hour"], minute=evening["minute"], timezone=_TZ),
+        trigger=CronTrigger(day_of_week="sun,mon,tue,wed,thu", hour=evening["hour"], minute=evening["minute"], timezone=_TZ),
         id="evening_brief",
-        name=f"Evening Briefing — Tomorrow's Preview (Mon–Fri {evening['hour']:02d}:{evening['minute']:02d})",
+        name=f"Evening Briefing — Tomorrow's Preview (Sun–Thu {evening['hour']:02d}:{evening['minute']:02d})",
         replace_existing=True,
         misfire_grace_time=evening["misfire_grace_time"],
     )
