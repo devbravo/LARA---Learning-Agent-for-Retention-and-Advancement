@@ -38,13 +38,12 @@ creates or rebooks [Study] events for the in-progress study flow.
 | APScheduler Mon–Fri 20:00 | `daily_planning` (evening preview) → `output` |
 | `/study` | `on_demand` → `generate_brief` → `confirm` |
 | Duration tap (`30/45/60 min`) | `on_demand` → `generate_brief` → `confirm` |
-| `confirm` tap | `output` → writes GCal events |
+| `confirm` tap | `book_events` → writes GCal events → END |
 | `skip` tap | `output` → END (no calendar write) |
 | `/done` | `done_parser` → END (waits for rating tap) |
 | Rating tap (😕 😐 😊) | `log_session` → END |
 | Weak areas reply or Skip | `log_weak_areas` → END |
-| `confirm` tap | `book_events` → writes GCal events → END |
-| `/plan` | `daily_planning` Regenerate today's plan (recovery only)" |
+| `/plan` | `daily_planning` Regenerate today's plan (recovery only) |
 | `/view` | Handled directly by the webhook path to show the view response; does not route through LangGraph ||
 | `/pick` | `study_topic` → END (awaits category tap) |
 | `category:<name>` tap | `study_topic_category` → END (awaits subtopic tap) |

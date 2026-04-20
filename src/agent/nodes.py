@@ -109,6 +109,7 @@ def route_from_router(state: AgentState) -> str:
         "on_demand":            "on_demand",
         "done":                 "done_parser",
         "confirm":              "book_events",
+        "skip":                 "output",
         "rate":                 "log_session",
         "weak_areas":           "log_weak_areas",
         "study_topic":          "study_topic",
@@ -594,6 +595,8 @@ def output(state: AgentState) -> AgentState:
     """Send the final Telegram message for non-confirm flows.
 
     Used by daily_planning (no-plan / evening preview) and weekend_brief.
+    No-ops for ``skip`` — the callback handler already sent the user-facing
+    message before invoking the graph.
 
     Args:
         state: Current partial agent state.
@@ -601,12 +604,15 @@ def output(state: AgentState) -> AgentState:
     Returns:
         Always an empty update after the side effect completes.
     """
+    if state.get("trigger") == "skip":
+        return {}
+
     messages = state.get("messages") or []
     if messages:
         try:
             _telegram.send_message(messages[-1])
         except Exception as e:
-            print(f"[output] Telegram send failed: {e}")
+            logger.warning("[output] Telegram send failed: %s", e, exc_info=True)
     return {}
 
 
@@ -648,7 +654,7 @@ def book_events(state: AgentState) -> AgentState:
                 )
                 booked.append(slot["topic"])
             except Exception as e:
-                print(f"[book_events] Calendar write failed for {slot.get('topic')}: {e}")
+                logger.warning("[book_events] Calendar write failed for %s: %s", slot.get("topic"), e, exc_info=True)
     else:
         try:
             topic = state.get("proposed_topic")
@@ -665,7 +671,7 @@ def book_events(state: AgentState) -> AgentState:
                 )
                 booked.append(topic)
         except Exception as e:
-            print(f"[book_events] Calendar write failed: {e}")
+            logger.warning("[book_events] Calendar write failed: %s", e, exc_info=True)
 
     chat_id = state.get("chat_id")
     message_id = state.get("message_id")
@@ -673,14 +679,23 @@ def book_events(state: AgentState) -> AgentState:
         try:
             _telegram.remove_buttons(chat_id, message_id)
         except Exception as e:
-            print(f"[book_events] remove_buttons failed: {e}")
+            logger.warning("[book_events] remove_buttons failed: %s", e, exc_info=True)
 
     if booked:
         summary = "\n".join(f"  • {t}" for t in booked)
         try:
             _telegram.send_message(f"✅ Booked {len(booked)} mock session(s):\n{summary}")
         except Exception as e:
-            print(f"[book_events] Confirmation send failed: {e}")
+            logger.warning("[book_events] Confirmation send failed: %s", e, exc_info=True)
+    else:
+        # All calendar writes failed — tell the user so they can retry
+        try:
+            _telegram.send_message(
+                "⚠️ Could not book any sessions — Google Calendar may be unavailable. "
+                "Please try confirming again."
+            )
+        except Exception as e:
+            logger.warning("[book_events] Failed to send booking-failure notice: %s", e, exc_info=True)
 
     return {}
 

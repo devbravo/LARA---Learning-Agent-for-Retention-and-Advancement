@@ -17,26 +17,6 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# Stub native packages absent in the test environment so that nodes.py can be
-# imported without google-auth, python-telegram-bot, or anthropic installed.
-for _name in [
-    "google",
-    "google.auth",
-    "google.auth.transport",
-    "google.auth.transport.requests",
-    "google.oauth2",
-    "google.oauth2.credentials",
-    "google.oauth2.service_account",
-    "google_auth_oauthlib",
-    "google_auth_oauthlib.flow",
-    "googleapiclient",
-    "googleapiclient.discovery",
-    "googleapiclient.errors",
-    "anthropic",
-    "telegram",
-    "telegram.error",
-]:
-    sys.modules.setdefault(_name, MagicMock())
 
 from src.agent import nodes as _nodes
 from src.agent.nodes import book_events, output, route_from_router
@@ -248,3 +228,27 @@ def test_log_weak_areas_edge_goes_to_end_not_output():
     src = (Path(__file__).parents[1] / "src" / "agent" / "graph.py").read_text()
     assert 'add_edge("log_weak_areas", END)' in src
     assert 'add_edge("log_weak_areas", "output")' not in src
+
+
+# ---------------------------------------------------------------------------
+# 11. output no-ops on skip trigger (no re-send of stale plan)
+# ---------------------------------------------------------------------------
+
+def test_output_noop_on_skip_trigger():
+    """output does not send any Telegram message when trigger is 'skip'."""
+    state = {"trigger": "skip", "messages": ["☀️ Good morning Diego — old plan from checkpoint"]}
+    mock_send = MagicMock()
+    with patch.object(_nodes._telegram, "send_message", mock_send):
+        result = output(state)
+    mock_send.assert_not_called()
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# 12. route_from_router maps "skip" to "output"
+# ---------------------------------------------------------------------------
+
+def test_route_from_router_maps_skip_to_output():
+    """route_from_router returns 'output' for trigger='skip'."""
+    assert route_from_router({"trigger": "skip"}) == "output"
+
