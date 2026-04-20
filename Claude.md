@@ -6,7 +6,39 @@ Calendar to plan around real schedule, generates study briefs via Claude API,
 books [Mock] events on Google Calendar after user confirmation, and 
 creates or rebooks [Study] events for the in-progress study flow.
 
-**Stack:** Python 3.11+, LangGraph, FastAPI, APScheduler, SQLite, Telegram Bot API
+**Stack:** Python 3.11+, LangGraph 1.1.6, FastAPI, APScheduler, SQLite, Telegram Bot API
+
+---
+
+## Architecture — HITL Pattern
+
+Every Telegram interaction either **starts a fresh flow** or **resumes a paused one**.
+The webhook does not decide which node to run. The graph decides.
+
+```
+Telegram → FastAPI /webhook → dispatcher.py
+                                  │
+                    ┌─────────────┴──────────────┐
+                    │                            │
+             has pending interrupt?         no interrupt
+                    │                            │
+        graph.invoke(Command(resume=payload))   graph.invoke({trigger, chat_id})
+                    │                            │
+                    └─────────────┬──────────────┘
+                                  │
+                            LangGraph graph
+                                  │
+                    ┌─────────────┼─────────────┐
+                    │             │             │
+               Google Calendar  SQLite      Claude API
+               (read + write)  (SM-2 state,  (study briefs
+                                sessions,     only)
+                                checkpoints)
+```
+
+**Key principle:** `dispatcher.py` is the only place in the HTTP layer that reads
+graph state — solely to check `has_pending_interrupt()`. All routing decisions
+live in `route_from_router`.
 
 ---
 
@@ -14,82 +46,136 @@ creates or rebooks [Study] events for the in-progress study flow.
 
 | Node | Responsibility |
 |---|---|
-| `router` | Entry point. Reads checkpointed state. Routes by trigger. |
-| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder. Sets proposed_slots. |
-| `weekend_brief` | Sat/Sun brief. Shows SM-2 due topics with weak areas + overdue indicators. No slot packing. |
-| `on_demand` | Handles `/study` flow. Picks highest-priority due topic. |
-| `done_parser` | Finds first unlogged slot from proposed_slots. Sends rating buttons. |
-| `log_session` | Logs session row with quality score. Prompts for weak areas. |
-| `log_weak_areas` | Saves weak areas (or clears on Skip). Prompts for next unlogged slot or ends. |
+| `router` | Entry point. Routes fresh triggers only. 7 targets. |
+| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder. Sets proposed_slots. Calls interrupt(). |
+| `weekend_brief` | Sat/Sun brief. Shows SM-2 due topics with weak areas + overdue indicators. No interrupt. |
+| `send_duration_picker` | Sends "How long do you have?" buttons. Cleans up stale picker. Calls interrupt(). |
+| `on_demand` | Picks highest-priority due topic for requested duration. |
 | `generate_brief` | Calls Claude API. Only node that uses an LLM. |
-| `confirm` | Sends plan to Telegram. Awaits button tap. |
-| `output` | Sends final Telegram message for non-confirm flows. |
-| `book_events` | Writes GCal events after user confirms mock slots. |
-| `study_topic` | Starts `/pick` flow. Sends category inline buttons. Cleans up stale subtopic lists. |
-| `study_topic_category` | Handles category tap. Sends matching subtopic inline buttons. |
-| `study_topic_confirm` | Marks selected topic as `in_progress`. Notifies user. |
+| `book_events` | Writes GCal events after user confirms. Handles both single and multi-slot flows. |
+| `done_parser` | Finds first unlogged slot from proposed_slots. Sends rating buttons. Calls interrupt(). |
+| `log_session` | Logs session row with quality score. Updates SM-2. Sends weak areas prompt. Calls interrupt(). |
+| `log_weak_areas` | Saves weak areas (or clears on Skip). Prompts for next unlogged slot or ends. |
+| `study_topic` | Starts /pick flow. Sends category inline buttons. Cleans up stale subtopic lists. Calls interrupt(). |
+| `study_topic_category` | Handles category resume. Sends matching subtopic inline buttons. Calls interrupt(). |
+| `study_topic_confirm` | Marks selected topic as in_progress. Sets confirmation message. |
+| `activate_topic` | Lists in-progress topics as inline buttons. Calls interrupt(). |
+| `graduate_topic` | Graduates selected topic to active SM-2. Sets confirmation message. |
+| `output` | Shared terminal node. Sends state["messages"][-1] via Telegram and ends. |
 
-## Triggers
+---
 
-| Trigger                       | What it starts |
-|-------------------------------|---|
-| APScheduler Mon–Fri 07:00     | `daily_planning` → `confirm` → END |
-| APScheduler Sat–Sun 10:00     | `weekend_brief` → `output` → END |
-| APScheduler Sun–Thu 20:00     | `daily_planning` (evening preview) → `output` → END |
-| `/study`                      | `on_demand` → `generate_brief` → `confirm` |
-| Duration tap (`30/45/60 min`) | `on_demand` → `generate_brief` → `confirm` |
-| `confirm` tap                 | `book_events` → writes GCal events → END |
-| `skip` tap                    | `output` → END (no calendar write) |
-| `/done`                       | `done_parser` → END (waits for rating tap) |
-| Rating tap (😕 😐 😊)         | `log_session` → END |
-| Weak areas reply or Skip      | `log_weak_areas` → END |
-| `/plan`                       | `daily_planning` Regenerate today's plan (recovery only) |
-| `/view`                       | Handled directly by the webhook path to show the view response; does not route through LangGraph ||
-| `/pick`                       | `study_topic` → END (awaits category tap) |
-| `category:<name>` tap         | `study_topic_category` → END (awaits subtopic tap) |
-| `subtopic_id:<id>` tap        | `study_topic_confirm` → END |
+## Graph flows
 
-## Graph flow
-
+**Morning / Evening briefing:**
 ```
-START → router → daily_planning → confirm → END
-                               └→ output → END (no plan or evening preview)
+START → router → daily_planning → interrupt() →
+[resume: "yes, book them"] → book_events → output → END
+[resume: "skip"] → output → END
+```
 
-               → weekend_brief → output → END
+**Weekend brief:**
+```
+START → router → weekend_brief → output → END
+```
 
-               → on_demand → generate_brief → confirm → END
+**On-demand study (/study):**
+```
+START → router → send_duration_picker → interrupt() →
+[resume: "30 min" | "45 min" | "60 min"] → on_demand → generate_brief → interrupt() →
+[resume: "yes, book them"] → book_events → output → END
+[resume: "skip"] → output → END
+```
 
-               → done_parser → END (sends rating buttons, waits)
+**Done / logging (/done):**
+```
+START → router → done_parser → interrupt() →
+[resume: "😕 hard" | "😐 ok" | "😊 easy"] → log_session → interrupt() →
+[resume: <text> | "skip"] → log_weak_areas →
+  if more unlogged slots → interrupt() → [repeat from log_session]
+  else → output → END
+```
 
-               → log_session → END (sends weak areas prompt, waits)
+**Pick a topic (/pick):**
+```
+START → router → study_topic → interrupt() →
+[resume: "category:DSA" | ...] → study_topic_category → interrupt() →
+[resume: "subtopic_id:14" | ...] → study_topic_confirm → output → END
+```
 
-               → log_weak_areas → END
-               
-               → confirm → book_events → END
-
-               → study_topic → END (sends category buttons, waits)
-
-               → study_topic_category → END (sends subtopic buttons, waits)
-
-               → study_topic_confirm → END
+**Activate a topic (/activate):**
+```
+START → router → activate_topic → interrupt() →
+[resume: "studied:14" | ...] → graduate_topic → output → END
 ```
 
 ---
 
-## Agent module structure (`src/agent/`)
+## Router — fresh entry points only
 
-```
-src/
-  agent/
-    graph.py                 # LangGraph wiring + checkpointer
-    nodes.py                 # Node orchestration and state transitions
-    planning_helpers.py      # Study-event matching, synthetic busy blocks, rebooking
-    daily_planning_helpers.py  # Daily/evening message sections + mock slot packing
-    formatting.py            # Shared time/date formatting helpers
+```python
+mapping = {
+    "daily":    "daily_planning",
+    "evening":  "daily_planning",
+    "weekend":  "weekend_brief",
+    "study":    "send_duration_picker",
+    "done":     "done_parser",
+    "pick":     "study_topic",
+    "activate": "activate_topic",
+}
 ```
 
-`daily_planning` in `nodes.py` should stay orchestration-focused and use helper
-modules for section assembly and slot packing logic.
+These are the only valid fresh triggers. Everything else is a resume value.
+
+---
+
+## Dispatcher bifurcation (`dispatcher.py`)
+
+```python
+def invoke_safe(chat_id: int, payload: str) -> None:
+    state = graph.get_state(chat_id)
+    if has_pending_interrupt(state):
+        graph.invoke(Command(resume=payload), config=...)
+    else:
+        trigger = resolve_trigger(payload)  # "/done" → "done", "/pick" → "pick"
+        graph.invoke({"trigger": trigger, "chat_id": chat_id}, config=...)
+
+def has_pending_interrupt(state) -> bool:
+    tasks = getattr(state, "tasks", [])
+    return any(getattr(t, "interrupts", None) for t in tasks)
+```
+
+---
+
+## Telegram layer — responsibilities
+
+**`handler.py`** — thin orchestrator only:
+- Deduplicates updates
+- Extracts `chat_id` + `payload` from callback or message text
+- Calls `dispatcher.invoke_safe(chat_id, payload)`
+- Returns direct response for `/help` and `/view` only
+
+**`dispatcher.py`** — owns:
+- Dedup sets (`_processed_updates`, `_in_flight_message_ids`, `_confirmed_message_ids`)
+- `has_pending_interrupt()` check
+- Bifurcation between `Command(resume=...)` and fresh `invoke`
+- `invoke_safe()` thread safety
+
+**`callback_handlers.py`** — Telegram mechanics only:
+- Idempotency guards (dedup repeat taps)
+- `remove_buttons()` calls
+- No routing decisions
+- No graph state reads
+
+**`message_handlers.py`** — command normalization + static responses:
+- Maps command text to payload string
+- `/help` → direct response (no graph)
+- `/view` → direct response (no graph)
+- All other commands → payload passed to dispatcher
+
+**`intent_parser.py`** — payload normalization only:
+- Extracts and normalizes callback data or message text
+- No routing decisions
 
 ---
 
@@ -99,9 +185,9 @@ Triggered by `/done`. No structured paste required.
 
 1. `/done` → `done_parser` finds first unlogged slot from `proposed_slots`
 2. Sends rating buttons: "How did {topic} go?" `[😕 Hard] [😐 OK] [😊 Easy]`
-3. Rating tap → `log_session` logs session row, updates SM-2, sends weak areas prompt
-4. Text reply → saved to `sessions.weak_areas` + overwrites `topics.weak_areas`
-5. Skip tap → clears `topics.weak_areas` to NULL (historical record in sessions preserved)
+3. Rating resume → `log_session` logs session row, updates SM-2, sends weak areas prompt
+4. Text resume → saved to `sessions.weak_areas` + overwrites `topics.weak_areas`
+5. Skip resume → clears `topics.weak_areas` to NULL (historical record in sessions preserved)
 6. If more unlogged slots → repeat from step 2 for next topic
 7. All logged → "All sessions logged for today. Great work! 💪"
 
@@ -113,9 +199,35 @@ Triggered by `/done`. No structured paste required.
 
 **Weak areas design:**
 - `topics.weak_areas` = operational field, drives brief generation context
-- `sessions.weak_areas` = immutable historical record per session (future dashboard)
+- `sessions.weak_areas` = immutable historical record per session
 - Cleared on Skip = "no unresolved weak areas for next brief"
 - Overwritten on new text = fresh unresolved issues
+
+---
+
+## State fields (AgentState)
+
+| Field | Type | Purpose |
+|---|---|---|
+| `trigger` | str | Fresh flow routing signal |
+| `chat_id` | int | Telegram chat ID / LangGraph thread_id |
+| `message_id` | int | Telegram message_id for button removal |
+| `duration_min` | int | Requested session duration |
+| `proposed_topic` | str | Single-slot flow (on_demand) |
+| `proposed_slot` | dict | Single-slot flow (on_demand) |
+| `proposed_slots` | list[dict] | Multi-slot flow (daily_planning) |
+| `has_study_plan` | bool | False → skip confirm, go to output |
+| `preview_only` | bool | True for evening preview |
+| `current_topic_id` | int | Topic currently being rated/logged |
+| `current_topic_name` | str | Topic name for display |
+| `quality_score` | int | SM-2 rating: 2, 3, or 5 |
+| `messages` | list[str] | Outbound Telegram messages |
+| `study_topic_category` | str | Selected category in /pick flow |
+| `pending_subtopic_message_id` | int | message_id of last sent subtopic list |
+| `pending_picker_message_id` | int | message_id of last sent duration picker |
+
+**Removed from state:**
+- `awaiting_weak_areas` — no longer needed; HITL interrupt() replaces this flag
 
 ---
 
@@ -125,7 +237,6 @@ Never modify a Google Calendar event unless `creator.self == True`.
 The agent reads all events to plan around them but only writes events it created.
 All agent-created events are prefixed `[Mock]`.
 
-Enforce this in the calendar write path (tool/integration boundary):
 ```python
 if not event.get("creator", {}).get("self", False):
     raise PermissionError("Cannot modify event not created by this agent")
@@ -133,60 +244,17 @@ if not event.get("creator", {}).get("self", False):
 
 ---
 
-## Telegram UX
+## Agent module structure (`src/agent/`)
 
-**Morning briefing:**
 ```
-☀️ Good morning Diego — <Day> <Date>
-
-📅 Your day:
-  <time> Event name (duration)
-
-🧠 Today's mock interview(s) plan:
-  <time>–<time> [Mock] <topic> (<duration>min)
-
-Confirm these mock interview blocks?
-[Yes, book them] [Skip]
+src/
+  agent/
+    graph.py                   # LangGraph wiring + checkpointer
+    nodes.py                   # All node implementations + AgentState
+    planning_helpers.py        # Study-event matching, rebooking helpers
+    daily_planning_helpers.py  # Daily/evening message sections + slot packing
+    formatting.py              # Shared time/date formatting helpers
 ```
-
-**On-demand study:** `/study` triggers a default on-demand brief (currently 30min unless a duration is provided via callback).
-
-**Done flow:** `/done` → rating buttons → weak areas prompt → next topic or done
-
-**Never message during:** protected block defined in `config.yaml` (current default in repo: `15:00-19:00`).
-
----
-
-## State fields (AgentState)
-
-| Field | Type | Purpose |
-|---|---|---|
-| `trigger` | str | Routing signal |
-| `chat_id` | int | Telegram chat ID / LangGraph thread_id |
-| `message_id` | int | Telegram message_id for button removal |
-| `duration_min` | int | Requested session duration |
-| `proposed_topic` | str | Single-slot flow (on_demand) |
-| `proposed_slot` | dict | Single-slot flow (on_demand) |
-| `proposed_slots` | list[dict] | Multi-slot flow (daily_planning) |
-| `has_study_plan` | bool | False → skip confirm, go to output |
-| `preview_only` | bool | True for evening preview (skip confirm, go to output) |
-| `current_topic_id` | int | Topic currently being rated/logged |
-| `current_topic_name` | str | Topic name for display |
-| `awaiting_weak_areas` | bool | True = next plain text is a weak areas reply |
-| `quality_score` | int | SM-2 rating: 2, 3, or 5 |
-| `messages` | list[str] | Outbound Telegram messages |
-| `study_topic_category` | str | Selected category in `/pick` flow, e.g. `"DSA"` |
-| `pending_subtopic_message_id` | int | message_id of the last sent subtopic list (for cleanup on retry) |
-
----
-
-## HTTP endpoints
-
-| Method | Path | Defined in | Purpose |
-|---|---|---|---|
-| POST | `/webhook` | `src/api/routes/webhook.py` | Telegram webhook receiver |
-| GET | `/health` | `src/api/routes/health.py` | VPS uptime check |
-| GET | `/scheduler-status` | `src/api/routes/scheduler_status.py` | Scheduler running state + job metadata |
 
 ---
 
@@ -198,30 +266,32 @@ src/
     app.py               # FastAPI app factory + lifespan (scheduler start/stop)
     routes/
       health.py          # GET /health
-      webhook.py         # POST /webhook — auth check + parse → delegates to handle_update()
-      scheduler_status.py  # GET /scheduler-status
+      webhook.py         # POST /webhook — auth + parse → handle_update()
+      scheduler_status.py
     telegram/
-      __init__.py
-      handler.py         # handle_update() — dedup + parse + dispatch (thin orchestrator)
-      intent_parser.py   # Intent dataclass; parse_callback / parse_message
-      callback_handlers.py  # one function per callback type (confirm, skip, rating, etc.)
-      message_handlers.py   # one function per command (/done, /study, /briefing, etc.)
-      dispatcher.py      # _invoke_safe, dedup sets, idempotency lock
-  server.py              # Backwards compat: from src.api.app import app
+      handler.py         # Thin orchestrator: dedup + extract payload + dispatch
+      intent_parser.py   # Payload normalization only
+      callback_handlers.py  # Telegram mechanics only (idempotency, remove_buttons)
+      message_handlers.py   # Command normalization + /help + /view direct responses
+      dispatcher.py      # has_pending_interrupt() + bifurcation + invoke_safe()
+      types.py           # Shared type definitions
+  server.py              # Backwards compat re-export
   services/
-    topic_service.py     # graduate_topic(), get_in_progress_topics() — studied: DB logic
+    topic_service.py     # graduate_topic(), get_in_progress_topics()
 ```
 
-**Responsibilities:**
-- `src/api/app.py` — app factory only; registers routers, manages scheduler lifespan
-- `src/api/routes/webhook.py` — validates `X-Telegram-Bot-Api-Secret-Token`, parses raw JSON into `TelegramUpdate`, delegates to `handle_update()`
-- `src/api/telegram/handler.py` — thin orchestrator: dedup via dispatcher, parse via intent_parser, dispatch to invoke_safe or return direct response
-- `src/api/telegram/dispatcher.py` — owns dedup sets (`_processed_updates`, `_in_flight_message_ids`, `_confirmed_message_ids`), idempotency lock, `invoke_safe()`
-- `src/api/telegram/intent_parser.py` — defines `Intent` dataclass; `parse_callback` and `parse_message` delegate to handler modules
-- `src/api/telegram/callback_handlers.py` — one function per callback type; handles idempotency checks; `handle_studied` returns `JSONResponse` directly
-- `src/api/telegram/message_handlers.py` — one function per command; `handle_studied_command` returns `JSONResponse` directly
-- `src/services/topic_service.py` — `graduate_topic()` and `get_in_progress_topics()`; uses `get_connection()` from `src.core.db`
-- `src/server.py` — one-liner re-export (`from src.api.app import app`) to preserve the `from src.server import app` import in `main.py`
+---
+
+## Test pattern for multi-turn flows
+
+```python
+# HITL pattern — one flow, multiple resume steps
+config = {"configurable": {"thread_id": str(chat_id)}}
+
+graph.invoke({"trigger": "pick", "chat_id": chat_id}, config=config)
+graph.invoke(Command(resume="category:DSA"), config=config)
+graph.invoke(Command(resume="subtopic_id:14"), config=config)
+```
 
 ---
 
@@ -241,7 +311,6 @@ WEBHOOK_SECRET=
 ---
 
 ## Database schema
-
 **topics:** id, name, tier, status, easiness_factor, interval_days, repetitions,
 next_review, weak_areas, updated_at
 
@@ -251,18 +320,18 @@ suggestions
 ---
 
 ## Development principles
-
 - POC first — minimum features that solve the real problem
 - No LLM where a formula works — SM-2 and gap_finder are pure Python
 - Claude API only inside `generate_brief` — no other node calls the LLM
 - Calendar safety rule is non-negotiable — enforce it in calendar write boundaries
-- Prefer `get_connection()` from `src.core.db` for SQLite access (legacy direct connections may still exist)
+- Prefer `get_connection()` from `src.core.db` for SQLite access
 - Error handling required in all nodes — catch exceptions, return user-friendly messages
-- Never overwrite checkpointed state with None — only pass kwargs that are explicitly provided
+- Never overwrite checkpointed state with None — only pass kwargs explicitly provided
+- HITL pattern: interrupt() replaces manual awaiting_* flags in state
 
 ## Security
-
 - `.env` is never committed
 - `credentials/` is never committed
 - Validate `X-Telegram-Bot-Api-Secret-Token` header on every webhook request
 - SQLite files are local only — never exposed via HTTP
+```
