@@ -153,11 +153,11 @@ def test_book_events_sends_confirmation_after_booking():
 
 
 # ---------------------------------------------------------------------------
-# 7. book_events removes keyboard buttons when message_id is present
+# 7. book_events does not remove buttons (done inside interrupt nodes now)
 # ---------------------------------------------------------------------------
 
-def test_book_events_removes_buttons_when_message_id_present():
-    """book_events calls remove_buttons(chat_id, message_id) when both are set."""
+def test_book_events_does_not_call_remove_buttons():
+    """book_events no longer removes buttons — that happens inside the HITL interrupt node."""
     state = {
         "chat_id": 999,
         "message_id": 42,
@@ -173,7 +173,7 @@ def test_book_events_removes_buttons_when_message_id_present():
          patch.object(_nodes._telegram, "send_message"), \
          patch.object(_nodes._telegram, "remove_buttons", mock_remove):
         book_events(state)
-    mock_remove.assert_called_once_with(999, 42)
+    mock_remove.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -209,25 +209,25 @@ def test_book_events_continues_when_one_slot_fails():
 
 
 # ---------------------------------------------------------------------------
-# 9. log_session → END edge in graph.py
+# 9. log_session → log_weak_areas edge in graph.py (HITL refactor)
 # ---------------------------------------------------------------------------
 
-def test_log_session_edge_goes_to_end_not_output():
-    """graph.py wires log_session → END, not log_session → output."""
+def test_log_session_edge_goes_to_log_weak_areas():
+    """graph.py wires log_session → log_weak_areas (HITL pattern)."""
     src = (Path(__file__).parents[1] / "src" / "agent" / "graph.py").read_text()
-    assert 'add_edge("log_session", END)' in src
-    assert 'add_edge("log_session", "output")' not in src
+    assert 'add_edge("log_session", "log_weak_areas")' in src
+    assert 'add_edge("log_session", END)' not in src
 
 
 # ---------------------------------------------------------------------------
-# 10. log_weak_areas → END edge in graph.py
+# 10. log_weak_areas → conditional edge (log_session | output) in graph.py
 # ---------------------------------------------------------------------------
 
-def test_log_weak_areas_edge_goes_to_end_not_output():
-    """graph.py wires log_weak_areas → END, not log_weak_areas → output."""
+def test_log_weak_areas_has_conditional_edge():
+    """graph.py wires log_weak_areas with a conditional edge (HITL loop pattern)."""
     src = (Path(__file__).parents[1] / "src" / "agent" / "graph.py").read_text()
-    assert 'add_edge("log_weak_areas", END)' in src
-    assert 'add_edge("log_weak_areas", "output")' not in src
+    assert 'route_from_log_weak_areas' in src
+    assert 'add_edge("log_weak_areas", END)' not in src
 
 
 # ---------------------------------------------------------------------------

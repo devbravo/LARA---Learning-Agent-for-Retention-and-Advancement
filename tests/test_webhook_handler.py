@@ -1,11 +1,12 @@
 """
-Unit tests for the Telegram webhook handler package.
+Unit tests for the Telegram webhook handler package (HITL pattern).
+
+In the HITL refactor, handler.py is a thin coordinator:
+- /help and /view → direct JSONResponse (no graph)
+- Everything else → dispatcher.invoke_safe(chat_id, payload)
+- Callbacks go through idempotency guard in callback_handlers
 
 Pure unit tests — no FastAPI TestClient, no real DB, no Telegram calls.
-All external dependencies (graph, DB, Telegram) are mocked.
-
-asyncio.run() drains the default executor before returning (Python 3.9+), so
-executor-dispatched callables complete before any assertion runs.
 """
 
 import asyncio
@@ -68,7 +69,6 @@ def _run(coro):
 
 @pytest.fixture(autouse=True)
 def _clear_state():
-    """Clear module-level dedup / in-flight sets before and after each test."""
     _processed_updates.clear()
     _confirmed_message_ids.clear()
     _in_flight_message_ids.clear()
@@ -83,7 +83,6 @@ def _clear_state():
 # ---------------------------------------------------------------------------
 
 def test_auth_rejection_returns_403():
-    """Webhook route returns 403 when the secret token does not match."""
     from src.api.routes.webhook import webhook
 
     async def _inner():
@@ -102,233 +101,157 @@ def test_auth_rejection_returns_403():
 # ---------------------------------------------------------------------------
 
 def test_deduplication_skips_second_call():
-    """Second call with the same update_id returns ok without invoking the graph."""
     update = _msg(update_id=55555, chat_id=111, text="/study")
 
     with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
-        first_count = mock_invoke.call_count  # 1 (executor ran synchronously via asyncio.run)
+        first_count = mock_invoke.call_count
 
-        _run(handle_update(update))          # same update_id → deduped
-        assert mock_invoke.call_count == first_count  # no additional invocations
-
-
-# ---------------------------------------------------------------------------
-# 3. Unknown callback ignored
-# ---------------------------------------------------------------------------
-
-def test_unknown_callback_returns_ok_without_graph():
-    """An unrecognised callback_data returns ok and never invokes the graph."""
-    update = _cb(update_id=1, chat_id=111, data="totally_unknown_action")
-
-    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
-        result = _run(handle_update(update))
-
-    assert result.body == b'{"ok":true}'
-    mock_invoke.assert_not_called()
+        _run(handle_update(update))
+        assert mock_invoke.call_count == first_count
 
 
 # ---------------------------------------------------------------------------
-# 4. /done → trigger "done"
+# 3. /done → invoke_safe(chat_id, "/done")
 # ---------------------------------------------------------------------------
 
-def test_done_message_triggers_done():
-    """/done text triggers the 'done' trigger."""
+def test_done_message_calls_invoke_safe_with_slash_done():
     update = _msg(update_id=2, chat_id=111, text="/done")
 
     with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
-    assert mock_invoke.call_args[0][0] == "done"
+    assert mock_invoke.call_args[0] == (111, "/done")
 
 
 # ---------------------------------------------------------------------------
-# 5. /study → send duration picker
+# 4. /study → invoke_safe(chat_id, "/study")
 # ---------------------------------------------------------------------------
 
-def test_study_message_sends_duration_picker():
-    """/study sends the duration picker buttons without invoking the graph."""
+def test_study_message_calls_invoke_safe_with_slash_study():
+    """/study is forwarded to the graph (send_duration_picker node handles it)."""
     update = _msg(update_id=3, chat_id=111, text="/study")
 
-    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke, \
-         patch("src.api.telegram.handler._telegram.send_buttons") as mock_buttons:
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
-    mock_invoke.assert_not_called()
-    mock_buttons.assert_called_once_with(
-        "How long do you have?", ["30 min", "45 min", "60 min"]
-    )
+    mock_invoke.assert_called_once()
+    assert mock_invoke.call_args[0] == (111, "/study")
 
 
 # ---------------------------------------------------------------------------
-# 6. /plan → trigger "daily"
+# 5. /plan → invoke_safe(chat_id, "/plan")
 # ---------------------------------------------------------------------------
 
-def test_plan_message_triggers_daily():
-    """/plan text triggers the 'daily' trigger."""
+def test_plan_message_calls_invoke_safe_with_slash_plan():
     update = _msg(update_id=4, chat_id=111, text="/plan")
 
     with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
-    assert mock_invoke.call_args[0][0] == "daily"
+    assert mock_invoke.call_args[0] == (111, "/plan")
 
 
 # ---------------------------------------------------------------------------
-# 7. "yes, book them" callback → trigger "confirm"
+# 6. "yes, book them" callback → invoke_safe as resume value
 # ---------------------------------------------------------------------------
 
-def test_yes_book_them_callback_triggers_confirm():
-    """\"yes, book them" callback triggers the 'confirm' trigger."""
+def test_yes_book_them_callback_calls_invoke_safe():
     update = _cb(update_id=5, chat_id=111, data="yes, book them", message_id=200)
 
     with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
-    assert mock_invoke.call_args[0][0] == "confirm"
-    assert mock_invoke.call_args[1].get("message_id") == 200
+    assert mock_invoke.call_args[0] == (111, "yes, book them")
 
 
 # ---------------------------------------------------------------------------
-# 8. "skip" callback without awaiting_weak_areas → trigger "skip" (no graph)
+# 7. "skip" callback → invoke_safe as resume value
 # ---------------------------------------------------------------------------
 
-def test_skip_callback_sends_skip_message_without_graph():
-    """\"skip\" with no awaiting_weak_areas state sends the skip message and returns."""
+def test_skip_callback_calls_invoke_safe():
+    """In HITL, 'skip' is a resume value forwarded to the graph."""
     update = _cb(update_id=6, chat_id=111, data="skip", message_id=201)
 
-    with patch("src.api.telegram.callback_handlers._graph") as mock_graph, \
-         patch("src.api.telegram.callback_handlers.send_message") as mock_send, \
-         patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
-        mock_graph.get_state.return_value = {}
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
+        _run(handle_update(update))
 
-        result = _run(handle_update(update))
-
-    assert result.body == b'{"ok":true}'
-    mock_invoke.assert_not_called()
-    mock_send.assert_called_once()
-    assert "no study blocks booked" in mock_send.call_args[0][0].lower()
+    mock_invoke.assert_called_once()
+    assert mock_invoke.call_args[0] == (111, "skip")
 
 
 # ---------------------------------------------------------------------------
-# 9. Rating "😐 OK" callback → trigger "rate" with quality_score=3
+# 8. Rating "😐 OK" callback → invoke_safe as resume value
 # ---------------------------------------------------------------------------
 
-def test_ok_rating_callback_triggers_rate_with_score_3():
-    """😐 OK" callback triggers 'rate' with quality_score=3."""
+def test_ok_rating_callback_calls_invoke_safe():
     update = _cb(update_id=7, chat_id=111, data="😐 OK", message_id=202)
 
     with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
-    assert mock_invoke.call_args[0][0] == "rate"
-    assert mock_invoke.call_args[1].get("quality_score") == 3
+    assert mock_invoke.call_args[0] == (111, "😐 OK")
 
 
 # ---------------------------------------------------------------------------
-# 10. "category:DSA" callback → trigger "study_topic_category"
+# 9. "category:DSA" callback → invoke_safe as resume value
 # ---------------------------------------------------------------------------
 
-def test_category_callback_triggers_study_topic_category():
-    """category:DSA" triggers 'study_topic_category' with the correct category."""
+def test_category_callback_calls_invoke_safe():
     update = _cb(update_id=8, chat_id=111, data="category:DSA")
 
     with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
-    assert mock_invoke.call_args[0][0] == "study_topic_category"
-    assert mock_invoke.call_args[1].get("study_topic_category") == "DSA"
+    assert mock_invoke.call_args[0] == (111, "category:DSA")
 
 
 # ---------------------------------------------------------------------------
-# 11. "subtopic_id:<valid>" → trigger "study_topic_confirm" with topic name
+# 10. "subtopic_id:5" callback → invoke_safe as resume value
 # ---------------------------------------------------------------------------
 
-def test_subtopic_id_valid_triggers_study_topic_confirm():
-    """subtopic_id:5" with a matching DB row triggers 'study_topic_confirm'."""
+def test_subtopic_id_callback_calls_invoke_safe():
     update = _cb(update_id=9, chat_id=111, data="subtopic_id:5", message_id=203)
 
-    with patch("src.services.topic_service.get_topic_name_by_id", return_value="DSA - Arrays"), \
-         patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
-    assert mock_invoke.call_args[0][0] == "study_topic_confirm"
-    assert mock_invoke.call_args[1].get("proposed_topic") == "DSA - Arrays"
+    assert mock_invoke.call_args[0] == (111, "subtopic_id:5")
 
 
 # ---------------------------------------------------------------------------
-# 12. "subtopic_id:<non-numeric>" → early return, no graph
+# 11. "studied:7" callback → invoke_safe as resume value
 # ---------------------------------------------------------------------------
 
-def test_subtopic_id_invalid_returns_early():
-    """subtopic_id:abc" is invalid — returns ok without invoking the graph."""
-    update = _cb(update_id=10, chat_id=111, data="subtopic_id:abc")
-
-    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
-        result = _run(handle_update(update))
-
-    assert result.body == b'{"ok":true}'
-    mock_invoke.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# 13. "studied:<valid id>" → DB updated, confirmation message sent
-# ---------------------------------------------------------------------------
-
-def test_studied_valid_id_updates_db_and_sends_confirmation():
-    """studied:7" with a valid DB row updates status and sends a success message."""
+def test_studied_callback_calls_invoke_safe():
+    """studied: is now a resume value for the activate_topic interrupt."""
     update = _cb(update_id=11, chat_id=111, data="studied:7", message_id=204)
 
-    with patch("src.services.topic_service.graduate_topic", return_value="DSA - Arrays"), \
-         patch("src.api.telegram.callback_handlers.send_message") as mock_send, \
-         patch("src.api.telegram.callback_handlers.remove_buttons"):
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
-    mock_send.assert_called_once()
-    msg = mock_send.call_args[0][0]
-    assert "DSA - Arrays" in msg
-    assert "graduated to active" in msg
+    mock_invoke.assert_called_once()
+    assert mock_invoke.call_args[0] == (111, "studied:7")
 
 
 # ---------------------------------------------------------------------------
-# 14. "studied:<valid id>" but rowcount=0 → error message, in-flight cleared
-# ---------------------------------------------------------------------------
-
-def test_studied_invalid_id_sends_error_message():
-    """studied:999" where DB rowcount=0 sends an error message."""
-    update = _cb(update_id=12, chat_id=111, data="studied:999", message_id=205)
-
-    with patch("src.services.topic_service.graduate_topic", side_effect=ValueError("Topic id=999 not found in DB")), \
-         patch("src.api.telegram.callback_handlers.send_message") as mock_send:
-        result = _run(handle_update(update))
-
-    assert result.body == b'{"ok":true}'
-    mock_send.assert_called_once()
-    assert "⚠️" in mock_send.call_args[0][0]
-
-    # In-flight should be cleared on error
-    assert 205 not in _in_flight_message_ids
-
-
-# ---------------------------------------------------------------------------
-# 15. In-flight message_id blocks repeat tap
+# 12. In-flight message_id blocks repeat tap
 # ---------------------------------------------------------------------------
 
 def test_in_flight_message_id_blocks_repeat_tap():
-    """A tap on a message_id already in _in_flight_message_ids returns early."""
+    """A tap on a message_id already in _in_flight_message_ids is suppressed."""
     message_id = 206
     _in_flight_message_ids.add(message_id)
 
     update = _cb(update_id=13, chat_id=111, data="yes, book them", message_id=message_id)
 
-    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke, \
-         patch("src.api.telegram.callback_handlers.send_message"):
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         result = _run(handle_update(update))
 
     assert result.body == b'{"ok":true}'
@@ -336,59 +259,39 @@ def test_in_flight_message_id_blocks_repeat_tap():
 
 
 # ---------------------------------------------------------------------------
-# 16. /plan alias -> trigger "daily"
+# 13. /pick → invoke_safe(chat_id, "/pick")
 # ---------------------------------------------------------------------------
 
-def test_plan_message_triggers_daily():
-    """/plan text triggers the 'daily' trigger."""
-    update = _msg(update_id=14, chat_id=111, text="/plan")
-
-    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
-        _run(handle_update(update))
-
-    mock_invoke.assert_called_once()
-    assert mock_invoke.call_args[0][0] == "daily"
-
-
-# ---------------------------------------------------------------------------
-# 17. /pick alias -> trigger "study_topic"
-# ---------------------------------------------------------------------------
-
-def test_pick_message_triggers_study_topic():
-    """/pick text triggers the 'study_topic' trigger."""
+def test_pick_message_calls_invoke_safe():
     update = _msg(update_id=15, chat_id=111, text="/pick")
 
     with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
         _run(handle_update(update))
 
     mock_invoke.assert_called_once()
-    assert mock_invoke.call_args[0][0] == "study_topic"
+    assert mock_invoke.call_args[0] == (111, "/pick")
 
 
 # ---------------------------------------------------------------------------
-# 18. /activate alias -> direct command path
+# 14. /activate → invoke_safe(chat_id, "/activate") (now goes through graph)
 # ---------------------------------------------------------------------------
 
-def test_activate_message_returns_direct_response_without_graph():
-    """/activate is handled directly and does not invoke the graph."""
+def test_activate_message_calls_invoke_safe():
+    """/activate is forwarded to the graph (activate_topic node handles it)."""
     update = _msg(update_id=16, chat_id=111, text="/activate")
 
-    with patch("src.services.topic_service.get_in_progress_topics", return_value=[]), \
-         patch("src.api.telegram.message_handlers.send_message") as mock_send, \
-         patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
-        result = _run(handle_update(update))
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
+        _run(handle_update(update))
 
-    assert result.body == b'{"ok":true}'
-    mock_send.assert_called_once()
-    mock_invoke.assert_not_called()
+    mock_invoke.assert_called_once()
+    assert mock_invoke.call_args[0] == (111, "/activate")
 
 
 # ---------------------------------------------------------------------------
-# 19. /help -> direct help message
+# 15. /help → direct help message (no graph)
 # ---------------------------------------------------------------------------
 
 def test_help_message_returns_direct_response_without_graph():
-    """/help is handled directly, sends help text, and does not invoke graph."""
     update = _msg(update_id=17, chat_id=111, text="/help")
 
     with patch("src.api.telegram.message_handlers.send_message") as mock_send, \
@@ -401,3 +304,35 @@ def test_help_message_returns_direct_response_without_graph():
     assert "/help" in mock_send.call_args[0][0]
     mock_invoke.assert_not_called()
 
+
+# ---------------------------------------------------------------------------
+# 16. /view → direct snapshot (no graph)
+# ---------------------------------------------------------------------------
+
+def test_view_message_returns_direct_response_without_graph():
+    update = _msg(update_id=18, chat_id=111, text="/view")
+
+    snapshot = {"overdue": [], "due_today": [], "in_progress": []}
+    with patch("src.services.view_service.get_study_snapshot", return_value=snapshot), \
+         patch("src.api.telegram.message_handlers.send_message") as mock_send, \
+         patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
+        result = _run(handle_update(update))
+
+    assert result.body == b'{"ok":true}'
+    mock_send.assert_called_once()
+    mock_invoke.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 17. Free text → invoke_safe (forwarded as weak-areas resume value)
+# ---------------------------------------------------------------------------
+
+def test_free_text_calls_invoke_safe():
+    """Free text is forwarded to the graph as a potential resume value."""
+    update = _msg(update_id=19, chat_id=111, text="struggled with dynamic programming")
+
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
+        _run(handle_update(update))
+
+    mock_invoke.assert_called_once()
+    assert mock_invoke.call_args[0] == (111, "struggled with dynamic programming")

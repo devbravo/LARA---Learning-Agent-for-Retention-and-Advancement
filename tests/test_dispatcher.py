@@ -110,61 +110,65 @@ def test_clear_in_flight_removes_from_in_flight():
 # invoke_safe — per-chat serialization (_chat_in_flight)
 # ---------------------------------------------------------------------------
 
+def _mock_graph_no_interrupt():
+    """Return a mock graph where get_state reports no pending interrupt."""
+    from unittest.mock import MagicMock
+    mock_graph = MagicMock()
+    mock_snapshot = MagicMock()
+    mock_snapshot.tasks = []  # no pending interrupt
+    mock_graph.graph.get_state.return_value = mock_snapshot
+    mock_graph.graph.invoke.return_value = None
+    return mock_graph
+
+
 def test_chat_in_flight_cleared_on_success():
     """_chat_in_flight is released after a successful graph invocation."""
-    with patch("src.api.telegram.dispatcher._graph") as mock_graph:
-        mock_graph.invoke.return_value = None
-        dispatcher.invoke_safe("rate", chat_id=42)
+    with patch("src.api.telegram.dispatcher._graph", _mock_graph_no_interrupt()):
+        dispatcher.invoke_safe(42, "/done")
 
     assert 42 not in _chat_in_flight
 
 
 def test_chat_in_flight_cleared_on_exception():
-    """_chat_in_flight is released even when _graph.invoke raises."""
-    with patch("src.api.telegram.dispatcher._graph") as mock_graph:
-        mock_graph.invoke.side_effect = RuntimeError("boom")
-        dispatcher.invoke_safe("rate", chat_id=42)
+    """_chat_in_flight is released even when graph.invoke raises."""
+    mock_graph = _mock_graph_no_interrupt()
+    mock_graph.graph.invoke.side_effect = RuntimeError("boom")
+    with patch("src.api.telegram.dispatcher._graph", mock_graph):
+        dispatcher.invoke_safe(42, "/done")
 
     assert 42 not in _chat_in_flight
 
 
 def test_second_call_waits_for_first_to_finish():
-    """Second invoke_safe for the same chat_id starts only after the first completes.
-
-    The first invocation holds _chat_in_flight for ~150 ms. We record
-    the order in which each call enters (and exits) _graph.invoke to
-    verify strict serialization.
-    """
+    """Second invoke_safe for the same chat_id starts only after the first completes."""
     CHAT_ID = 99
     call_order: list[str] = []
-    barrier = threading.Barrier(2)   # synchronises both threads to start together
+    barrier = threading.Barrier(2)
 
-    def slow_invoke(**_kwargs):
-        call_order.append("first_start")
-        time.sleep(0.15)
-        call_order.append("first_end")
-
-    def fast_invoke(**_kwargs):
-        call_order.append("second_start")
-        call_order.append("second_end")
-
-    invoke_calls = [slow_invoke, fast_invoke]
-    invoke_iter = iter(invoke_calls)
+    invoke_count = [0]
     invoke_lock = threading.Lock()
 
-    def graph_invoke(trigger, chat_id, **kwargs):
+    def graph_invoke(state_or_cmd, config=None):
         with invoke_lock:
-            fn = next(invoke_iter)
-        fn(trigger=trigger, chat_id=chat_id, **kwargs)
+            invoke_count[0] += 1
+            n = invoke_count[0]
+        if n == 1:
+            call_order.append("first_start")
+            time.sleep(0.15)
+            call_order.append("first_end")
+        else:
+            call_order.append("second_start")
+            call_order.append("second_end")
 
-    with patch("src.api.telegram.dispatcher._graph") as mock_graph:
-        mock_graph.invoke.side_effect = graph_invoke
+    mock_graph = _mock_graph_no_interrupt()
+    mock_graph.graph.invoke.side_effect = graph_invoke
 
+    with patch("src.api.telegram.dispatcher._graph", mock_graph):
         t1 = threading.Thread(
-            target=lambda: (barrier.wait(), dispatcher.invoke_safe("rate", chat_id=CHAT_ID))
+            target=lambda: (barrier.wait(), dispatcher.invoke_safe(CHAT_ID, "/done"))
         )
         t2 = threading.Thread(
-            target=lambda: (barrier.wait(), dispatcher.invoke_safe("rate", chat_id=CHAT_ID))
+            target=lambda: (barrier.wait(), dispatcher.invoke_safe(CHAT_ID, "/done"))
         )
 
         t1.start()
@@ -172,18 +176,16 @@ def test_second_call_waits_for_first_to_finish():
         t1.join(timeout=3)
         t2.join(timeout=3)
 
-    # The second call must not start before the first finishes.
     assert call_order.index("second_start") > call_order.index("first_end"), (
         f"second call started before first finished: {call_order}"
     )
-    assert 42 not in _chat_in_flight
+    assert CHAT_ID not in _chat_in_flight
 
 
-def test_non_serialized_triggers_do_not_block():
-    """Triggers outside the serialization list do not use _chat_in_flight."""
-    with patch("src.api.telegram.dispatcher._graph") as mock_graph:
-        mock_graph.invoke.return_value = None
-        dispatcher.invoke_safe("confirm", chat_id=55)
+def test_all_invocations_use_chat_in_flight():
+    """All invoke_safe calls now use per-chat serialization (HITL pattern)."""
+    with patch("src.api.telegram.dispatcher._graph", _mock_graph_no_interrupt()):
+        dispatcher.invoke_safe(55, "yes, book them")
 
-    assert 55 not in _chat_in_flight
+    assert 55 not in _chat_in_flight  # cleared after completion
 

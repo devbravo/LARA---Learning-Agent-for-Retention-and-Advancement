@@ -253,40 +253,32 @@ def test_study_topic_confirm_sets_in_progress():
 
 
 def test_study_topic_confirm_sends_confirmation_message():
-    """Confirmation message is sent after setting topic in_progress."""
+    """Confirmation message is set in state after marking topic in_progress."""
     path = _make_topics_db([
         {"name": "DSA - Arrays", "tier": 1, "status": "inactive"},
     ])
 
-    from src.agent import nodes as nodes_module
-
-    mock_send = MagicMock()
-    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
-         patch.object(nodes_module._telegram, "send_message", mock_send):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
         from src.agent.nodes import study_topic_confirm
-        study_topic_confirm({"proposed_topic": "DSA - Arrays"})
+        result = study_topic_confirm({"proposed_topic": "DSA - Arrays"})
 
-    mock_send.assert_called_once()
-    assert "DSA - Arrays" in mock_send.call_args[0][0]
+    assert result.get("messages")
+    assert "DSA - Arrays" in result["messages"][0]
 
 
 def test_study_topic_confirm_no_op_when_already_in_progress():
-    """study_topic_confirm does not update a topic already in in_progress status."""
+    """study_topic_confirm sets error message state for a topic already in in_progress."""
     path = _make_topics_db([
         {"name": "DSA - Arrays", "tier": 1, "status": "in_progress"},
     ])
 
-    from src.agent import nodes as nodes_module
-
-    mock_send = MagicMock()
-    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
-         patch.object(nodes_module._telegram, "send_message", mock_send):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
         from src.agent.nodes import study_topic_confirm
-        study_topic_confirm({"proposed_topic": "DSA - Arrays"})
+        result = study_topic_confirm({"proposed_topic": "DSA - Arrays"})
 
-    # Should send an error/warning message, not a success message
-    mock_send.assert_called_once()
-    assert "⚠️" in mock_send.call_args[0][0]
+    # Should return an error/warning message in state
+    assert result.get("messages")
+    assert "⚠️" in result["messages"][0]
 
     # Status must remain unchanged
     conn = sqlite3.connect(path)
