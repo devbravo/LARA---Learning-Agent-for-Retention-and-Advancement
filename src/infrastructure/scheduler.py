@@ -157,4 +157,3 @@ def build_scheduler() -> AsyncIOScheduler:
     )
 
     return scheduler
-
