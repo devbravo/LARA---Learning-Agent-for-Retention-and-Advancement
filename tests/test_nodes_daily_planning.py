@@ -1,7 +1,8 @@
 """Integration-style tests for the ``daily_planning`` node.
 
 These tests patch external integrations but exercise the real planning node logic
-end-to-end, including synthetic study busy blocks passed into ``gap_finder``.
+end-to-end, including synthetic study busy blocks that are passed into the gap
+finder inside ``daily_planning``.
 """
 
 from datetime import date, datetime, time
