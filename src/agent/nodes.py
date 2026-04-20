@@ -72,6 +72,7 @@ class AgentState(TypedDict, total=False):
     current_topic_name: str | None
     study_topic_category: str | None    # selected category in /study_topic flow, e.g. "DSA"
     pending_subtopic_message_id: int | None  # message_id of the last sent subtopic list (for cleanup)
+    pending_picker_message_id: int | None    # message_id of the last sent duration picker (for cleanup)
 
 # ---------------------------------------------------------------------------
 # Node: router

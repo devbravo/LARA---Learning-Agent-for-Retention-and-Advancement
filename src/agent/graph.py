@@ -154,6 +154,12 @@ def get_state(chat_id: int) -> dict:
         return {}
 
 
+def update_state(chat_id: int, values: dict) -> None:
+    """Write partial state values into the checkpoint for a given chat_id."""
+    config = cast(Any, {"configurable": {"thread_id": str(chat_id)}})
+    graph.update_state(config, values)
+
+
 def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
     """
     Convenience wrapper to invoke the graph.

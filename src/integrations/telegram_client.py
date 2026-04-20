@@ -109,24 +109,28 @@ async def _send_message(text: str) -> None:
         raise RuntimeError(f"Telegram send_message failed: {e}") from e
 
 
-async def _send_buttons(text: str, buttons: list[str]) -> None:
+async def _send_buttons(text: str, buttons: list[str]) -> int:
     """Send a message with a single-row inline keyboard.
 
     Args:
         text: Message text.
         buttons: Callback labels (label equals callback data).
+
+    Returns:
+        The Telegram message_id of the sent message.
     """
     assert _tg_bot is not None and _tg_chat_id is not None
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(label, callback_data=label) for label in buttons]]
     )
     try:
-        await _tg_bot.send_message(
+        msg = await _tg_bot.send_message(
             chat_id=_tg_chat_id,
             text=text,
             reply_markup=keyboard,
             parse_mode="HTML",
         )
+        return msg.message_id
     except TelegramError as e:
         raise RuntimeError(f"Telegram send_buttons failed: {e}") from e
 
@@ -182,9 +186,13 @@ def send_message(text: str) -> None:
     _run(_send_message(text))
 
 
-def send_buttons(text: str, buttons: list[str]) -> None:
-    """Synchronous wrapper for ``_send_buttons``."""
-    _run(_send_buttons(text, buttons))
+def send_buttons(text: str, buttons: list[str]) -> int:
+    """Synchronous wrapper for ``_send_buttons``.
+
+    Returns:
+        The Telegram message_id of the sent message.
+    """
+    return _run(_send_buttons(text, buttons))
 
 
 def send_inline_buttons(text: str, buttons: list[tuple[str, str]]) -> int:

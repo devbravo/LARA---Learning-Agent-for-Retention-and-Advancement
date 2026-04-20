@@ -152,7 +152,7 @@ def test_study_message_sends_duration_picker():
     update = _msg(update_id=3, chat_id=111, text="/study")
 
     with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke, \
-         patch("src.api.telegram.handler.send_buttons") as mock_buttons:
+         patch("src.api.telegram.handler._telegram.send_buttons") as mock_buttons:
         _run(handle_update(update))
 
     mock_invoke.assert_not_called()
