@@ -332,10 +332,12 @@ def on_demand(state: AgentState) -> AgentState:
             return {"messages": ["🎉 Nothing due for review right now — enjoy your break!"]}
 
         duration_min = state.get("duration_min") or 30
+        status = f"📚 Generating a {duration_min} min brief for {topic['name']}…"
+        _telegram.send_message(status)
         return {
             "proposed_topic": topic["name"],
             "has_study_plan": False,  # prevents confirm from treating stale proposed_slots as a booking flow
-            "messages": [f"📚 Generating a {duration_min} min brief for {topic['name']}…"],
+            "messages": [status],
         }
 
     except Exception as e:
