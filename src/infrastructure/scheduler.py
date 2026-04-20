@@ -2,12 +2,12 @@
 APScheduler setup for the Learning Manager agent.
 
 Jobs:
-  - Daily 08:00 (Mon–Sat)  → trigger="daily"   (morning briefing)
-  - Sunday 09:00           → trigger="daily"   (weekly planning variant)
-  - Daily 20:00 (Mon–Sat)  → trigger="evening" (tomorrow's preview)
+  - Mon–Fri 07:00  → trigger="daily"   (weekday morning briefing)
+  - Sat–Sun 10:00  → trigger="weekend" (weekend briefing)
+  - Mon–Fri 20:00  → trigger="evening" (tomorrow's preview)
 
 Timezone: America/Paramaribo
-Guard:    never invoke during the 15:00–19:30 protected block.
+Guard:    never invoke weekday briefing during the 15:00–19:00 protected block.
 """
 
 import os
@@ -58,27 +58,44 @@ def _is_protected_block() -> bool:
             return True
     return False
 
-def _run_daily_planning() -> None:
+def _run_weekday_planning() -> None:
     """Invoke the graph with ``trigger='daily'`` if outside protected time.
     On failure, logs the exception and sends a user-facing Telegram warning.
     """
     chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
     if _is_protected_block():
-        logger.warning("Daily briefing skipped — inside protected block (15:00–19:30).")
+        logger.warning("Weekday briefing skipped — inside protected block (15:00–19:30).")
         return
-    logger.info("Scheduler: firing daily briefing for chat_id=%s", chat_id)
+    logger.info("Scheduler: firing Weekday briefing for chat_id=%s", chat_id)
     try:
         _graph.invoke(trigger="daily", chat_id=chat_id)
     except Exception as e:
-        logger.error("Daily briefing graph error: %s", e)
+        logger.error("Weekday briefing graph error: %s", e)
 
         try:
-            send_message(f"⚠️ Daily briefing failed: {e}")
+            send_message(f"⚠️ Weekday briefing failed: {e}")
         except Exception:
             pass
 
 
-def _run_evening_briefing() -> None:
+def _run_weekend_brief() -> None:
+    """Invoke the graph with ``trigger='weekend_brief'`` on Sat/Sun at 10:00
+    On failure, logs the exception and sends a user-facing Telegram warning.
+    """
+    chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
+    logger.info("Scheduler: firing weekend briefing for chat_id=%s", chat_id)
+    try:
+        _graph.invoke(trigger="weekend", chat_id=chat_id)
+    except Exception as e:
+        logger.error("Weekend briefing graph error: %s", e)
+        try:
+            send_message(f"⚠️ Weekend briefing failed: {e}")
+        except Exception:
+            pass
+
+
+
+def _run_evening_brief() -> None:
     """Invoke the graph with ``trigger='evening'`` if outside protected time.
     On failure, logs the exception and sends a user-facing Telegram warning.
     """
@@ -105,35 +122,36 @@ def build_scheduler() -> AsyncIOScheduler:
     config = _load_config()
     scheduler = AsyncIOScheduler(timezone=_TZ)
 
-    daily = config["schedule"]["daily_planning"]
-    sunday = config["schedule"]["sunday_planning"]
-    evening = config["schedule"]["evening_briefing"]
+    weekday = config["schedule"]["weekday_planning"]
+    weekend = config["schedule"]["weekend_brief"]
+    evening = config["schedule"]["evening_brief"]
 
-    # Mon–Sat at 08:00
+    # Mon–Fri at 07:00
     scheduler.add_job(
-        _run_daily_planning,
-        trigger=CronTrigger(day_of_week="mon-sat", hour=daily["hour"], minute=daily["minute"], timezone=_TZ),
-        id="daily_planning_weekday",
-        name=f"Daily Briefing (Mon–Sat {daily['hour']:02d}:{daily['minute']:02d})",
+        _run_weekday_planning,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=weekday["hour"], minute=weekday["minute"], timezone=_TZ),
+        id="weekday_planning",
+        name=f"Weekday Briefing (Mon–Fri {weekday['hour']:02d}:{weekday['minute']:02d})",
         replace_existing=True,
-        misfire_grace_time=daily["misfire_grace_time"],
+        misfire_grace_time=weekday["misfire_grace_time"],
     )
 
-    # Sunday at 09:00 (weekly planning variant)
+    # Sat-Sun 10:00 (weekend planning variant)
     scheduler.add_job(
-        _run_daily_planning,
-        trigger=CronTrigger(day_of_week="sun", hour=sunday["hour"], minute=sunday["minute"], timezone=_TZ),
-        id="daily_planning_sunday",
-        name=f"Weekly Planning (Sun {sunday['hour']:02d}:{sunday['minute']:02d})",
+        _run_weekend_brief,
+        trigger=CronTrigger(day_of_week="sat,sun", hour=weekend["hour"], minute=weekend["minute"], timezone=_TZ),
+        id="weekend_brief",
+        name=f"Weekend Brief (Sat-Sun {weekend['hour']:02d}:{weekend['minute']:02d})",
         replace_existing=True,
-        misfire_grace_time=sunday["misfire_grace_time"],
+        misfire_grace_time=weekend["misfire_grace_time"],
     )
 
+    # Mon-Fri at 20:00
     scheduler.add_job(
-        _run_evening_briefing,
-        trigger=CronTrigger(day_of_week="mon-sat", hour=evening["hour"], minute=evening["minute"], timezone=_TZ),
-        id="evening_briefing",
-        name=f"Evening Briefing — Tomorrow's Preview (Mon–Sat {evening['hour']:02d}:{evening['minute']:02d})",
+        _run_evening_brief,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=evening["hour"], minute=evening["minute"], timezone=_TZ),
+        id="evening_brief",
+        name=f"Evening Briefing — Tomorrow's Preview (Mon–Fri {evening['hour']:02d}:{evening['minute']:02d})",
         replace_existing=True,
         misfire_grace_time=evening["misfire_grace_time"],
     )

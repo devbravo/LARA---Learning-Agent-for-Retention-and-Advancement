@@ -105,6 +105,7 @@ def route_from_router(state: AgentState) -> str:
     mapping = {
         "daily":                "daily_planning",
         "evening":              "daily_planning",
+        "weekend":              "weekend_brief",
         "on_demand":            "on_demand",
         "done":                 "done_parser",
         "confirm":              "output",
@@ -304,6 +305,68 @@ def daily_planning(state: AgentState) -> AgentState:
         error_payload: object = {"messages": [f"⚠️ Daily briefing failed: {e}"]}
         error_state = cast(AgentState, error_payload)
         return error_state
+
+
+
+# ---------------------------------------------------------------------------
+# Node: weekend_brief
+# ---------------------------------------------------------------------------
+
+def weekend_brief(state: AgentState) -> AgentState:
+    """Lightweight Sat/Sun morning brief.
+
+    No calendar writes, no slot packing. Shows SM-2 topics due today
+    (with weak areas focus) or falls back to in-progress topics.
+    Asks Diego what time block he has available.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Partial AgentState with a single outbound message.
+    """
+    try:
+        today = date.today()
+        day_str = f"{today.strftime('%A %B')} {today.day}"
+        lines = [f"☀️ Good morning Diego — {day_str}", ""]
+
+        due_topics = _sm2.get_due_topics(target_date=today)
+        in_progress = topic_repository.get_in_progress_topic_names()
+
+        if due_topics:
+            lines.append(f"🎯 You have {len(due_topics)} topic(s) due for review today:")
+            for topic in due_topics:
+                weak = topic.get("weak_areas")
+                focus = f" — focus: {weak}" if weak else ""
+                overdue_days = (today - date.fromisoformat(topic["next_review"])).days
+                overdue_str = f" ⚠️ overdue {overdue_days}d" if overdue_days > 0 else ""
+                lines.append(f"• {topic['name']}{overdue_str}{focus}")
+            lines.append("")
+            lines.append("What time block will you have today to tackle these?")
+
+        elif in_progress:
+            lines.append("📚 Nothing due for SM-2 review today.")
+            lines.append("")
+            lines.append("You have in-progress topics:")
+            for name in in_progress:
+                lines.append(f"• {name}")
+            lines.append("")
+            lines.append("Want to book a study block for one of these? Tell me when.")
+
+        else:
+            lines.append("🎉 You're all caught up — nothing due today.")
+            lines.append("")
+            lines.append("Take a rest, or do /study if you want to practice anyway.")
+
+        return {
+            "messages": ["\n".join(lines)],
+            "has_study_plan": False,
+            "preview_only": True,
+        }
+
+    except Exception as e:
+        logger.error("weekend_brief failed: %s", e)
+        return {"messages": [f"⚠️ Weekend brief failed: {e}"]}
 
 
 # ---------------------------------------------------------------------------

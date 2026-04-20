@@ -3,11 +3,11 @@ schedule:
     hour: 7
     minute: 0
     misfire_grace_time: 3600
-  weekend_planning:
+  weekend_brief:
     hour: 10
     minute: 0
     misfire_grace_time: 600
-  evening_briefing:
+  evening_brief:
     hour: 20
     minute: 0
     misfire_grace_time: 600
