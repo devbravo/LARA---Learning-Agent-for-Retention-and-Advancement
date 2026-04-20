@@ -28,18 +28,16 @@ from langgraph.graph import END, START, StateGraph
 from src.agent.nodes import (
     AgentState,
     generate_brief,
-    calendar_reader,
     confirm,
     daily_planning,
+    weekend_brief,
     done_parser,
-    gap_finder,
     log_session,
     log_weak_areas,
     output,
     route_from_daily_planning,
     route_from_router,
     router,
-    sm2_engine,
     on_demand,
     study_topic,
     study_topic_category,
@@ -62,11 +60,9 @@ def build_graph(checkpointer=None):
     # Register all nodes
     builder.add_node("router", router)
     builder.add_node("daily_planning", daily_planning)
+    builder.add_node("weekend_brief", weekend_brief)
     builder.add_node("on_demand", on_demand)
     builder.add_node("done_parser", done_parser)
-    builder.add_node("calendar_reader", calendar_reader)
-    builder.add_node("sm2_engine", sm2_engine)
-    builder.add_node("gap_finder", gap_finder)
     builder.add_node("generate_brief", generate_brief)
     builder.add_node("confirm", confirm)
     builder.add_node("log_session", log_session)
@@ -85,6 +81,7 @@ def build_graph(checkpointer=None):
         route_from_router,
         {
             "daily_planning":       "daily_planning",
+            "weekend_brief":        "weekend_brief",
             "on_demand":            "on_demand",
             "done_parser":          "done_parser",
             "output":               "output",
@@ -102,6 +99,8 @@ def build_graph(checkpointer=None):
         route_from_daily_planning,
         {"confirm": "confirm", "output": "output"},
     )
+
+    builder.add_edge("weekend_brief", "output")
     builder.add_edge("on_demand", "generate_brief")
     builder.add_edge("generate_brief", "confirm")
     builder.add_edge("confirm", END)
@@ -116,6 +115,7 @@ def build_graph(checkpointer=None):
     builder.add_edge("study_topic", END)
     builder.add_edge("study_topic_category", END)
     builder.add_edge("study_topic_confirm", END)
+
 
     if checkpointer is None:
         _DB_DIR.mkdir(parents=True, exist_ok=True)

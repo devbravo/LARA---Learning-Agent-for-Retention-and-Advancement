@@ -56,7 +56,7 @@ def _load_topics() -> dict:
 # ---------------------------------------------------------------------------
 
 class AgentState(TypedDict, total=False):
-    trigger: str               # "daily" | "evening" | "on_demand" | "done" | "confirm" | "rate" | "weak_areas"
+    trigger: str               # "daily" | "evening" | "on_demand" | "done" | "confirm" | "rate" | "weak_areas | weekend"
     chat_id: int
     message_id: int | None              # Telegram message_id of the confirm keyboard
     duration_min: int | None
@@ -105,6 +105,7 @@ def route_from_router(state: AgentState) -> str:
     mapping = {
         "daily":                "daily_planning",
         "evening":              "daily_planning",
+        "weekend":              "weekend_brief",
         "on_demand":            "on_demand",
         "done":                 "done_parser",
         "confirm":              "output",
@@ -130,67 +131,6 @@ def route_from_daily_planning(state: AgentState) -> str:
         return "output"
     return "confirm" if state.get("has_study_plan") else "output"
 
-
-# ---------------------------------------------------------------------------
-# Node: calendar_reader
-# ---------------------------------------------------------------------------
-
-def calendar_reader(state: AgentState) -> AgentState:
-    """Fetch today's calendar events and report count.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        State update with a status message.
-    """
-    try:
-        events = _gcal.get_events(date.today())
-        return {"messages": state.get("messages", []) + [f"📅 Fetched {len(events)} events"]}
-    except Exception as e:
-        return {"messages": state.get("messages", []) + [f"⚠️ Calendar read failed: {e}"]}
-
-
-# ---------------------------------------------------------------------------
-# Node: sm2_engine
-# ---------------------------------------------------------------------------
-
-def sm2_engine(state: AgentState) -> AgentState:
-    """Fetch due topics from SM-2 and report count.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        State update with a status message.
-    """
-    try:
-        topics = _sm2.get_due_topics()
-        return {"messages": state.get("messages", []) + [f"🧠 {len(topics)} topics due"]}
-    except Exception as e:
-        return {"messages": state.get("messages", []) + [f"⚠️ SM-2 fetch failed: {e}"]}
-
-
-# ---------------------------------------------------------------------------
-# Node: gap_finder
-# ---------------------------------------------------------------------------
-
-def gap_finder(state: AgentState) -> AgentState:
-    """Compute today's free windows and report count.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        State update with a status message.
-    """
-    try:
-        config = _load_config()
-        events = _gcal.get_events(date.today())
-        windows = _gap_finder.find_free_windows(events, date.today(), config)
-        return {"messages": state.get("messages", []) + [f"🕐 {len(windows)} free windows found"]}
-    except Exception as e:
-        return {"messages": state.get("messages", []) + [f"⚠️ Gap finder failed: {e}"]}
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +244,68 @@ def daily_planning(state: AgentState) -> AgentState:
         error_payload: object = {"messages": [f"⚠️ Daily briefing failed: {e}"]}
         error_state = cast(AgentState, error_payload)
         return error_state
+
+
+
+# ---------------------------------------------------------------------------
+# Node: weekend_brief
+# ---------------------------------------------------------------------------
+
+def weekend_brief(state: AgentState) -> AgentState:
+    """Lightweight Sat/Sun morning brief.
+
+    No calendar writes, no slot packing. Shows SM-2 topics due today
+    (with weak areas focus) or falls back to in-progress topics.
+    Asks Diego what time block he has available.
+
+    Args:
+        state: Current partial agent state.
+
+    Returns:
+        Partial AgentState with a single outbound message.
+    """
+    try:
+        today = date.today()
+        day_str = f"{today.strftime('%A %B')} {today.day}"
+        lines = [f"☀️ Good morning Diego — {day_str}", ""]
+
+        due_topics = _sm2.get_due_topics(target_date=today)
+        in_progress = topic_repository.get_in_progress_topic_names()
+
+        if due_topics:
+            lines.append(f"🎯 You have {len(due_topics)} topic(s) due for review today:")
+            for topic in due_topics:
+                weak = topic.get("weak_areas")
+                focus = f" — focus: {weak}" if weak else ""
+                overdue_days = (today - date.fromisoformat(topic["next_review"])).days
+                overdue_str = f" ⚠️ overdue {overdue_days}d" if overdue_days > 0 else ""
+                lines.append(f"• {topic['name']}{overdue_str}{focus}")
+            lines.append("")
+            lines.append("What time block will you have today to tackle these?")
+
+        elif in_progress:
+            lines.append("📚 Nothing due for SM-2 review today.")
+            lines.append("")
+            lines.append("You have in-progress topics:")
+            for name in in_progress:
+                lines.append(f"• {name}")
+            lines.append("")
+            lines.append("Want to book a study block for one of these? Tell me when.")
+
+        else:
+            lines.append("🎉 You're all caught up — nothing due today.")
+            lines.append("")
+            lines.append("Take a rest, or do /study if you want to practice anyway.")
+
+        return {
+            "messages": ["\n".join(lines)],
+            "has_study_plan": False,
+            "preview_only": True,
+        }
+
+    except Exception as e:
+        logger.error("weekend_brief failed: %s", e)
+        return {"messages": [f"⚠️ Weekend brief failed: {e}"]}
 
 
 # ---------------------------------------------------------------------------
