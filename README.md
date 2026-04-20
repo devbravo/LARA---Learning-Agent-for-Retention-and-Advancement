@@ -27,7 +27,7 @@ Telegram ──► FastAPI /webhook ──► LangGraph graph ──► Telegram
                Google Calendar      SQLite            Claude API
                (read + write)    (SM-2 state,       (study briefs
                                   sessions log)       only)
-APScheduler ──► daily_planning (daily + Sunday variant + evening preview)
+APScheduler ──► daily_planning (Mon–Fri morning + evening preview) / weekend_brief (Sat–Sun)
 ```
 
 ### LangGraph nodes
@@ -36,16 +36,17 @@ APScheduler ──► daily_planning (daily + Sunday variant + evening preview)
 |---|---|
 | `router` | Entry point — routes by trigger type |
 | `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder |
+| `weekend_brief` | Sat/Sun brief — shows due topics with weak areas and overdue indicators |
 | `on_demand` | Handles `/study` flow, picks highest-priority due topic |
 | `done_parser` | Finds first unlogged slot, sends rating buttons |
 | `log_session` | Logs session with quality score, prompts for weak areas |
 | `log_weak_areas` | Saves weak areas or clears on Skip, prompts for next topic |
-| `calendar_reader` | Read-only GCal fetch |
-| `sm2_engine` | Returns due topics ranked by tier + easiness factor |
-| `gap_finder` | Computes free windows respecting protected blocks |
 | `generate_brief` | Calls Claude API — the only LLM call in the graph |
 | `confirm` | Sends plan to Telegram with inline keyboard; waits for tap |
 | `output` | Final Telegram send + GCal write after confirmation |
+| `study_topic` | Starts `/pick` flow, sends category inline buttons, cleans up stale lists |
+| `study_topic_category` | Handles category tap, sends matching subtopic inline buttons |
+| `study_topic_confirm` | Marks selected topic as `in_progress`, notifies user |
 
 ---
 
@@ -78,36 +79,50 @@ lara/
 ├── src/
 │   ├── main.py              # Entry point — starts FastAPI + scheduler
 │   ├── server.py            # Backwards compat re-export: from src.api.app import app
-│   ├── webhook_handler.py   # Intent detection, dedup, _invoke_safe, handle_update()
-│   ├── scheduler.py         # APScheduler jobs
-│   ├── api/
-│   │   ├── app.py           # FastAPI app factory + lifespan
-│   │   ├── routes/
-│   │   │   ├── health.py          # GET /health
-│   │   │   ├── webhook.py         # POST /webhook (auth + parse)
-│   │   │   └── scheduler_status.py  # GET /scheduler-status
-│   │   └── schemas/
-│   │       └── telegram.py  # Pydantic models for Telegram payloads
 │   ├── agent/
-│   │   ├── graph.py         # LangGraph graph + SqliteSaver checkpointer
-│   │   ├── nodes.py         # Node orchestration + AgentState
+│   │   ├── graph.py                   # LangGraph graph + SqliteSaver checkpointer
+│   │   ├── nodes.py                   # Node orchestration + AgentState
 │   │   ├── planning_helpers.py        # Study-event matching + rebooking helpers
 │   │   ├── daily_planning_helpers.py  # Daily/evening section builders + slot packing
 │   │   ├── formatting.py              # Shared time/date formatting helpers
-│   │   └── tools.py         # LangGraph tools
+│   │   └── tools.py                   # LangGraph tools
+│   ├── api/
+│   │   ├── app.py           # FastAPI app factory + lifespan
+│   │   ├── routes/
+│   │   │   ├── health.py              # GET /health
+│   │   │   ├── webhook.py             # POST /webhook (auth + parse)
+│   │   │   └── scheduler_status.py    # GET /scheduler-status
+│   │   └── telegram/
+│   │       ├── handler.py             # handle_update() — thin orchestrator
+│   │       ├── intent_parser.py       # Intent dataclass; parse_callback / parse_message
+│   │       ├── callback_handlers.py   # one function per callback type
+│   │       ├── message_handlers.py    # one function per command
+│   │       └── dispatcher.py          # dedup sets, idempotency lock, invoke_safe()
 │   ├── core/
 │   │   ├── db.py            # Schema init, seed, connection helper
 │   │   ├── sm2.py           # SM-2 algorithm (pure Python)
 │   │   └── gap_finder.py    # Free window computation (pure Python)
-│   └── integrations/
-│       ├── gcal.py          # Google Calendar read + write
-│       ├── telegram_client.py  # send_message / send_buttons / remove_buttons
-│       └── claude_api.py    # generate_brief()
+│   ├── infrastructure/
+│   │   └── scheduler.py     # APScheduler jobs (weekday, weekend, evening)
+│   ├── integrations/
+│   │   ├── gcal.py          # Google Calendar read + write
+│   │   ├── telegram_client.py  # send_message / send_buttons / remove_buttons
+│   │   └── claude_api.py    # generate_brief()
+│   ├── repositories/
+│   │   ├── session_repository.py
+│   │   ├── sm2_repository.py
+│   │   └── topic_repository.py
+│   └── services/
+│       └── topic_service.py # graduate_topic(), get_in_progress_topics()
 └── tests/
     ├── test_sm2.py
     ├── test_gap_finder.py
     ├── test_tools.py
     ├── test_study_topic.py
+    ├── test_nodes_daily_planning.py
+    ├── test_nodes_weekend_brief.py
+    ├── test_repositories.py
+    ├── test_dispatcher.py
     └── test_webhook_handler.py
 ```
 

@@ -16,41 +16,44 @@ creates or rebooks [Study] events for the in-progress study flow.
 |---|---|
 | `router` | Entry point. Reads checkpointed state. Routes by trigger. |
 | `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder. Sets proposed_slots. |
+| `weekend_brief` | Sat/Sun brief. Shows SM-2 due topics with weak areas + overdue indicators. No slot packing. |
 | `on_demand` | Handles `/study` flow. Picks highest-priority due topic. |
 | `done_parser` | Finds first unlogged slot from proposed_slots. Sends rating buttons. |
 | `log_session` | Logs session row with quality score. Prompts for weak areas. |
 | `log_weak_areas` | Saves weak areas (or clears on Skip). Prompts for next unlogged slot or ends. |
-| `calendar_reader` | Read-only GCal fetch. |
-| `sm2_engine` | Returns due topics ranked by tier + easiness factor. Pure Python. |
-| `gap_finder` | Computes free windows respecting protected blocks. Pure Python. |
 | `generate_brief` | Calls Claude API. Only node that uses an LLM. |
 | `confirm` | Sends plan to Telegram. Awaits button tap. |
 | `output` | Final Telegram send + GCal write after confirmation. |
+| `study_topic` | Starts `/pick` flow. Sends category inline buttons. Cleans up stale subtopic lists. |
+| `study_topic_category` | Handles category tap. Sends matching subtopic inline buttons. |
+| `study_topic_confirm` | Marks selected topic as `in_progress`. Notifies user. |
 
 ## Triggers
 
 | Trigger | What it starts |
 |---|---|
-| APScheduler daily | `daily_planning` → `confirm` → `output` |
-| APScheduler Sunday | Weekly planning variant of `daily_planning` |
-| APScheduler evening | `daily_planning` (tomorrow preview) → `output` |
+| APScheduler Mon–Fri 07:00 | `daily_planning` → `confirm` → `output` |
+| APScheduler Sat–Sun 10:00 | `weekend_brief` → `output` |
+| APScheduler Mon–Fri 20:00 | `daily_planning` (evening preview) → `output` |
 | `/study` | `on_demand` → `generate_brief` → `confirm` |
 | Duration tap (`30/45/60 min`) | `on_demand` → `generate_brief` → `confirm` |
 | `confirm` tap | `output` → writes GCal events |
+| `skip` tap | `output` → END (no calendar write) |
 | `/done` | `done_parser` → END (waits for rating tap) |
 | Rating tap (😕 😐 😊) | `log_session` → `output` → END (waits for weak areas reply) |
 | Weak areas reply or Skip | `log_weak_areas` → `output` → END |
 | `/plan` | `daily_planning` (manual trigger for testing) |
-| `/activate` | Webhook helper sends in-progress topic picker (inline buttons) |
-| `studied:<topic_id>` tap | Promotes topic to `active`, resets SM-2 fields, sets first review for tomorrow |
+| `/pick` | `study_topic` → END (awaits category tap) |
+| `category:<name>` tap | `study_topic_category` → END (awaits subtopic tap) |
+| `subtopic_id:<id>` tap | `study_topic_confirm` → END |
 
 ## Graph flow
 
 ```
 START → router → daily_planning → confirm → END
-                               └→ output → END (no plan)
+                               └→ output → END (no plan or evening preview)
 
-               → daily_planning (evening trigger) → output → END (preview only)
+               → weekend_brief → output → END
 
                → on_demand → generate_brief → confirm → END
 
@@ -59,6 +62,12 @@ START → router → daily_planning → confirm → END
                → log_session → output → END (sends weak areas prompt, waits)
 
                → log_weak_areas → output → END
+
+               → study_topic → END (sends category buttons, waits)
+
+               → study_topic_category → END (sends subtopic buttons, waits)
+
+               → study_topic_confirm → END
 ```
 
 ---
@@ -162,6 +171,8 @@ Confirm these mock interview blocks?
 | `awaiting_weak_areas` | bool | True = next plain text is a weak areas reply |
 | `quality_score` | int | SM-2 rating: 2, 3, or 5 |
 | `messages` | list[str] | Outbound Telegram messages |
+| `study_topic_category` | str | Selected category in `/pick` flow, e.g. `"DSA"` |
+| `pending_subtopic_message_id` | int | message_id of the last sent subtopic list (for cleanup on retry) |
 
 ---
 
