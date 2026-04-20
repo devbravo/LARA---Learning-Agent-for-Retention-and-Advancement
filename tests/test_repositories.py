@@ -2,10 +2,13 @@ import os
 import sqlite3
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import pytz
+
 from src.infrastructure import db as core_db
+from src.infrastructure.time import _tz
 from src.repositories import session_repository, sm2_repository, topic_repository
 
 
@@ -176,6 +179,97 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["duration_min"], 60)
         self.assertEqual(rows[0]["quality_score"], 5)
+
+    # ------------------------------------------------------------------
+    # Legacy UTC row compat — day-boundary tests
+    # ------------------------------------------------------------------
+
+    def _insert_session_with_studied_at(self, topic_id: int, studied_at: str) -> int:
+        """Insert a session row with an explicit studied_at value (bypasses repo)."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                "INSERT INTO sessions (topic_id, duration_min, quality_score, studied_at) VALUES (?, ?, ?, ?)",
+                (topic_id, 30, 3, studied_at),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def test_legacy_utc_row_is_found_by_today_helpers(self) -> None:
+        """A legacy row stored as UTC timestamp (01:00 UTC = today local for UTC+X) is returned."""
+        topic_id = self._insert_topic(name="Legacy UTC Topic")
+
+        # Compute a UTC timestamp that falls inside today's local window.
+        # local midnight in UTC + 1 hour is safely within "today local" for
+        # any timezone east of UTC-01:00.
+        tz = _tz()
+        today_local_midnight = datetime.now(tz).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        utc_ts = (today_local_midnight + timedelta(hours=1)).astimezone(timezone.utc)
+        studied_at_utc = utc_ts.strftime("%Y-%m-%d %H:%M:%S")
+
+        self._insert_session_with_studied_at(topic_id, studied_at_utc)
+
+        logged = session_repository.get_logged_topic_names_for_today()
+        self.assertIn("Legacy UTC Topic", logged)
+
+        session_id = session_repository.get_today_session_id(topic_id)
+        self.assertIsNotNone(session_id)
+
+    def test_legacy_utc_row_from_yesterday_is_not_found(self) -> None:
+        """A UTC row whose local time is yesterday must not appear in today helpers.
+
+        We use yesterday noon UTC as the stored timestamp. For any timezone within
+        UTC-12..UTC+14 yesterday noon UTC is always in "yesterday local" (or at
+        worst yesterday local for very-east timezones), so it is unambiguously
+        outside today's local window and outside the UTC range for today local.
+        """
+        topic_id = self._insert_topic(name="Yesterday UTC Topic")
+
+        yesterday_noon_utc = (
+            datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+            - timedelta(days=1)
+        )
+        studied_at_utc = yesterday_noon_utc.strftime("%Y-%m-%d %H:%M:%S")
+
+        self._insert_session_with_studied_at(topic_id, studied_at_utc)
+
+        logged = session_repository.get_logged_topic_names_for_today()
+        self.assertNotIn("Yesterday UTC Topic", logged)
+
+        session_id = session_repository.get_today_session_id(topic_id)
+        self.assertIsNone(session_id)
+
+    def test_upsert_does_not_duplicate_legacy_utc_row(self) -> None:
+        """upsert_today_session must UPDATE a legacy UTC row, not INSERT a second one."""
+        topic_id = self._insert_topic(name="No Duplicate")
+
+        # Insert a legacy UTC row falling inside today local
+        tz = _tz()
+        today_local_midnight = datetime.now(tz).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        utc_ts = (today_local_midnight + timedelta(hours=1)).astimezone(timezone.utc)
+        self._insert_session_with_studied_at(topic_id, utc_ts.strftime("%Y-%m-%d %H:%M:%S"))
+
+        # Now upsert — should update, not insert
+        session_repository.upsert_today_session(topic_id, 60, 5)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            rows = conn.execute(
+                "SELECT id, duration_min, quality_score FROM sessions WHERE topic_id = ?",
+                (topic_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual(len(rows), 1, "Expected exactly one row — legacy row should be updated, not duplicated")
+        self.assertEqual(rows[0][1], 60)
+        self.assertEqual(rows[0][2], 5)
 
 
 class Sm2RepositoryTests(RepositoryDbTestCase):
