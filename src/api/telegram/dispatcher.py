@@ -124,7 +124,7 @@ def invoke_safe(trigger: str, chat_id: int, **kwargs: Any) -> None:
         except OSError as e:
             logger.debug("Unable to read state.db size at %s: %s", state_db_path, e)
         logger.info("Graph invocation complete: trigger=%s", trigger)
-        if trigger in ("confirm", "on_demand", "rate", "study_topic_confirm", "study_topic_category", "studied") and message_id is not None:
+        if trigger in ("confirm", "on_demand", "rate", "study_topic_confirm", "study_topic_category", "studied", "weak_areas") and message_id is not None:
             mark_confirmed(message_id)
     except Exception as e:
         logger.error(
