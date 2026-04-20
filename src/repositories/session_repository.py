@@ -1,36 +1,51 @@
 """Session repository SQL helpers."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+import pytz
 
 from src.infrastructure.db import get_connection
-from src.infrastructure.time import local_now, local_today
+from src.infrastructure.time import _tz, local_now, local_today
+
+_TIMESTAMP_FMT = "%Y-%m-%d %H:%M:%S"
 
 
-def _today_dates() -> tuple[str, str]:
-    """Return (local_date, utc_date) for transition-safe "today" queries.
+def _legacy_utc_range() -> tuple[str, str]:
+    """Return the UTC window that covers today in the local timezone.
 
-    Legacy rows were stored with SQLite's DEFAULT CURRENT_TIMESTAMP (UTC).
-    New rows are stored as local time via local_now(). During the transition
-    period both dates must be checked so no session is missed or duplicated.
+    Legacy rows were stored via SQLite's DEFAULT CURRENT_TIMESTAMP (UTC).
+    Rather than matching a UTC calendar date (which is wrong for timezones
+    east of UTC — their "today" spans two UTC dates), we compute the exact
+    UTC timestamps for local midnight → next local midnight so the range
+    maps precisely to the current local day.
+
+    Returns:
+        (utc_start, utc_end) as ``'YYYY-MM-DD HH:MM:SS'`` strings suitable
+        for ``studied_at >= ? AND studied_at < ?`` SQL comparisons.
     """
-    local = local_today()
-    utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return local, utc
+    tz = _tz()
+    today_local = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_local = today_local + timedelta(days=1)
+    utc_start = today_local.astimezone(timezone.utc).strftime(_TIMESTAMP_FMT)
+    utc_end = tomorrow_local.astimezone(timezone.utc).strftime(_TIMESTAMP_FMT)
+    return utc_start, utc_end
 
 
 def get_logged_topic_names_for_today() -> set[str]:
     """Return topic names that already have a logged session today (local date).
 
-    Matches both local and UTC date to handle legacy rows stored as UTC
-    timestamps before the local-time migration.
+    Matches new local-time rows by calendar date and legacy UTC rows by the
+    UTC window that corresponds to the current local day.
     """
-    local, utc = _today_dates()
+    local = local_today()
+    utc_start, utc_end = _legacy_utc_range()
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT DISTINCT t.name FROM sessions s
                JOIN topics t ON t.id = s.topic_id
-               WHERE DATE(s.studied_at) = ? OR DATE(s.studied_at) = ?""",
-            (local, utc),
+               WHERE DATE(s.studied_at) = ?
+                  OR (s.studied_at >= ? AND s.studied_at < ?)""",
+            (local, utc_start, utc_end),
         ).fetchall()
     return {row["name"] for row in rows}
 
@@ -38,19 +53,24 @@ def get_logged_topic_names_for_today() -> set[str]:
 def upsert_today_session(topic_id: int, duration_min: int, quality_score: int) -> None:
     """Insert or update today's session row for a topic (local date).
 
-    Matches both local and UTC date to handle legacy rows stored as UTC
-    timestamps before the local-time migration, preventing duplicate rows.
+    Matches new local-time rows by calendar date and legacy UTC rows by the
+    UTC window that corresponds to the current local day, preventing duplicate
+    rows during the migration transition period.
 
     Args:
         topic_id: Topic primary key.
         duration_min: Session duration in minutes.
         quality_score: Session quality score (2/3/5).
     """
-    local, utc = _today_dates()
+    local = local_today()
+    utc_start, utc_end = _legacy_utc_range()
     with get_connection() as conn:
         existing = conn.execute(
-            "SELECT id FROM sessions WHERE topic_id = ? AND (DATE(studied_at) = ? OR DATE(studied_at) = ?)",
-            (topic_id, local, utc),
+            """SELECT id FROM sessions
+               WHERE topic_id = ?
+                 AND (DATE(studied_at) = ?
+                      OR (studied_at >= ? AND studied_at < ?))""",
+            (topic_id, local, utc_start, utc_end),
         ).fetchone()
         if existing:
             conn.execute(
@@ -67,8 +87,8 @@ def upsert_today_session(topic_id: int, duration_min: int, quality_score: int) -
 def get_today_session_id(topic_id: int) -> int | None:
     """Return today's session id for a topic (local date).
 
-    Matches both local and UTC date to handle legacy rows stored as UTC
-    timestamps before the local-time migration.
+    Matches new local-time rows by calendar date and legacy UTC rows by the
+    UTC window that corresponds to the current local day.
 
     Args:
         topic_id: Topic primary key.
@@ -76,11 +96,15 @@ def get_today_session_id(topic_id: int) -> int | None:
     Returns:
         Session id when present, else ``None``.
     """
-    local, utc = _today_dates()
+    local = local_today()
+    utc_start, utc_end = _legacy_utc_range()
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT id FROM sessions WHERE topic_id = ? AND (DATE(studied_at) = ? OR DATE(studied_at) = ?)",
-            (topic_id, local, utc),
+            """SELECT id FROM sessions
+               WHERE topic_id = ?
+                 AND (DATE(studied_at) = ?
+                      OR (studied_at >= ? AND studied_at < ?))""",
+            (topic_id, local, utc_start, utc_end),
         ).fetchone()
     return row["id"] if row else None
 
