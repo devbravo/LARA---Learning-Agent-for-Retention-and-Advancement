@@ -52,7 +52,7 @@ def handle_study(chat_id: int) -> Intent:
     Returns:
         Intent with ``trigger='on_demand'``.
     """
-    return Intent(trigger="on_demand", chat_id=chat_id, message_id=None, extra={})
+    return Intent(trigger="menu", chat_id=chat_id, message_id=None, extra={})
 
 
 def handle_daily(chat_id: int) -> Intent:

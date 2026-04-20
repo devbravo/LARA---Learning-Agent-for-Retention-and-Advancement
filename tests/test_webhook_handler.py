@@ -147,15 +147,18 @@ def test_done_message_triggers_done():
 # 5. /study → trigger "on_demand"
 # ---------------------------------------------------------------------------
 
-def test_study_message_triggers_on_demand():
-    """/study text triggers the 'on_demand' trigger."""
+def test_study_message_sends_duration_picker():
+    """/study sends the duration picker buttons without invoking the graph."""
     update = _msg(update_id=3, chat_id=111, text="/study")
 
-    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke:
+    with patch("src.api.telegram.dispatcher.invoke_safe") as mock_invoke, \
+         patch("src.api.telegram.handler.send_buttons") as mock_buttons:
         _run(handle_update(update))
 
-    mock_invoke.assert_called_once()
-    assert mock_invoke.call_args[0][0] == "on_demand"
+    mock_invoke.assert_not_called()
+    mock_buttons.assert_called_once_with(
+        "How long do you have?", ["30 min", "45 min", "60 min"]
+    )
 
 
 # ---------------------------------------------------------------------------
