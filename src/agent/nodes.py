@@ -605,8 +605,8 @@ def output(state: AgentState) -> AgentState:
     """Send the final Telegram message for non-confirm flows.
 
     Used by daily_planning (no-plan / evening preview) and weekend_brief.
-    No-ops for ``skip`` — the callback handler already sent the user-facing
-    message before invoking the graph.
+    The ``skip`` trigger never reaches this node — it is short-circuited in
+    the webhook handler before graph invocation.
 
     Args:
         state: Current partial agent state.

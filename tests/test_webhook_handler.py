@@ -144,7 +144,7 @@ def test_done_message_triggers_done():
 
 
 # ---------------------------------------------------------------------------
-# 5. /study → trigger "on_demand"
+# 5. /study → send duration picker
 # ---------------------------------------------------------------------------
 
 def test_study_message_sends_duration_picker():
