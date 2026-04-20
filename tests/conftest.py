@@ -17,8 +17,12 @@ def _stub(name: str) -> MagicMock:
 
 
 def _stub_if_missing(name: str) -> None:
-    """Register a MagicMock for *name* only when the package is not installed."""
-    if importlib.util.find_spec(name.split(".")[0]) is None:
+    """Register a MagicMock for *name* only when the module is not importable."""
+    try:
+        installed = importlib.util.find_spec(name) is not None
+    except (ValueError, ModuleNotFoundError):
+        installed = False
+    if not installed:
         sys.modules.setdefault(name, MagicMock())
 
 

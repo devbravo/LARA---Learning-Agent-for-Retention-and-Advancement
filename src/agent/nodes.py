@@ -302,9 +302,6 @@ def weekend_brief(state: AgentState) -> AgentState:
             "messages": ["\n".join(lines)],
             "has_study_plan": False,
             "preview_only": True,
-            "proposed_slots": None,
-            "proposed_slot": None,
-            "proposed_topic": None,
         }
 
     except Exception as e:
@@ -334,8 +331,6 @@ def on_demand(state: AgentState) -> AgentState:
         duration_min = state.get("duration_min") or 30
         return {
             "proposed_topic": topic["name"],
-            "proposed_slot": None,
-            "proposed_slots": None,
             "messages": [f"📚 Generating a {duration_min} min brief for {topic['name']}…"],
         }
 
@@ -381,10 +376,16 @@ def done_parser(state: AgentState) -> AgentState:
             _telegram.send_message(f"⚠️ Topic '{topic_name}' not found in database.")
             return {}
 
-        # Detect mid-flow: buttons already sent for this topic but not yet tapped.
-        # Avoid sending duplicate buttons — just remind the user.
+        # Detect mid-flow: a weak-areas prompt or rating buttons are still open.
+        if state.get("awaiting_weak_areas"):
+            logger.info("done_parser: awaiting_weak_areas — sending reminder for %s", topic_name)
+            _telegram.send_message(
+                f"⏳ Still waiting for your weak-areas reply on <b>{topic_name}</b> — tap Skip or reply with text."
+            )
+            return {}
+
         pending_name = state.get("current_topic_name")
-        if pending_name == topic_name and not state.get("awaiting_weak_areas"):
+        if pending_name == topic_name:
             logger.info("done_parser: rating already pending for %s — sending reminder", topic_name)
             _telegram.send_message(
                 f"⏳ Still waiting for your rating on <b>{topic_name}</b> — tap a button above."
@@ -840,6 +841,14 @@ def study_topic_confirm(state: AgentState) -> AgentState:
         if not topic_name:
             _telegram.send_message("⚠️ No topic selected.")
             return {}
+
+        pending_subtopic_message_id = state.get("pending_subtopic_message_id")
+        if pending_subtopic_message_id is not None:
+            chat_id = state.get("chat_id")
+            try:
+                _telegram.remove_buttons(chat_id, pending_subtopic_message_id)
+            except Exception as e:
+                logger.warning("study_topic_confirm: failed to remove subtopic buttons: %s", e)
 
         updated = topic_repository.set_topic_in_progress(topic_name)
         if not updated:
