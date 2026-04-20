@@ -68,6 +68,8 @@ def parse_message(message_text: str, chat_id: int) -> ParseResult:
         return message_handlers.handle_study_topic(chat_id)
     elif text_lower == "/activate":
         return message_handlers.handle_studied_command(chat_id)
+    elif text_lower == "/view":
+        return message_handlers.handle_view_command(chat_id)
     elif text_lower == "/help":
         return message_handlers.handle_help_command(chat_id)
     else:

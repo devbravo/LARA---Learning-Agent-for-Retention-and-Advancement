@@ -301,7 +301,7 @@ def weekend_brief(state: AgentState) -> AgentState:
             "messages": ["\n".join(lines)],
             "has_study_plan": False,
             "preview_only": True,
-            "proposed_slots": [],
+            "proposed_slots": None,
             "proposed_slot": None,
             "proposed_topic": None,
         }
