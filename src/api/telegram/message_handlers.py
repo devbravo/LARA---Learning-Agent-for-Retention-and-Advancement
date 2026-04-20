@@ -50,9 +50,9 @@ def handle_study(chat_id: int) -> Intent:
     Args:
         chat_id: Telegram chat identifier used as LangGraph thread id.
     Returns:
-        Intent with ``trigger='on_demand'``.
+        Intent with ``trigger='menu'``.
     """
-    return Intent(trigger="on_demand", chat_id=chat_id, message_id=None, extra={})
+    return Intent(trigger="menu", chat_id=chat_id, message_id=None, extra={})
 
 
 def handle_daily(chat_id: int) -> Intent:

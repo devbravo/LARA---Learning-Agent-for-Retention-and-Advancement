@@ -109,7 +109,6 @@ def route_from_router(state: AgentState) -> str:
         "on_demand":            "on_demand",
         "done":                 "done_parser",
         "confirm":              "book_events",
-        "skip":                 "output",
         "rate":                 "log_session",
         "weak_areas":           "log_weak_areas",
         "study_topic":          "study_topic",
@@ -371,7 +370,7 @@ def done_parser(state: AgentState) -> AgentState:
         # marked as logged (upsert_today_session ran in log_session), so unlogged[0]
         # could be the next topic, not the one actually awaiting weak-area input.
         if state.get("awaiting_weak_areas"):
-            pending_topic = state.get("current_topic_name") or topic_name
+            pending_topic = state.get("current_topic_name") or "the current topic"
             logger.info("done_parser: awaiting_weak_areas — sending reminder for %s", pending_topic)
             _telegram.send_message(
                 f"⏳ Still waiting for your weak-areas reply on <b>{pending_topic}</b> — tap Skip or reply with text."
@@ -606,8 +605,8 @@ def output(state: AgentState) -> AgentState:
     """Send the final Telegram message for non-confirm flows.
 
     Used by daily_planning (no-plan / evening preview) and weekend_brief.
-    No-ops for ``skip`` — the callback handler already sent the user-facing
-    message before invoking the graph.
+    The ``skip`` trigger never reaches this node — it is short-circuited in
+    the webhook handler before graph invocation.
 
     Args:
         state: Current partial agent state.
@@ -615,9 +614,6 @@ def output(state: AgentState) -> AgentState:
     Returns:
         Always an empty update after the side effect completes.
     """
-    if state.get("trigger") == "skip":
-        return {}
-
     messages = state.get("messages") or []
     if messages:
         try:

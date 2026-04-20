@@ -231,21 +231,7 @@ def test_log_weak_areas_edge_goes_to_end_not_output():
 
 
 # ---------------------------------------------------------------------------
-# 11. output no-ops on skip trigger (no re-send of stale plan)
-# ---------------------------------------------------------------------------
-
-def test_output_noop_on_skip_trigger():
-    """output does not send any Telegram message when trigger is 'skip'."""
-    state = {"trigger": "skip", "messages": ["☀️ Good morning Diego — old plan from checkpoint"]}
-    mock_send = MagicMock()
-    with patch.object(_nodes._telegram, "send_message", mock_send):
-        result = output(state)
-    mock_send.assert_not_called()
-    assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# 12. route_from_router maps "skip" to "output"
+# 11. route_from_router maps "skip" to "output" (via default fallback)
 # ---------------------------------------------------------------------------
 
 def test_route_from_router_maps_skip_to_output():

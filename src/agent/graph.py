@@ -15,7 +15,6 @@ Flow:
   rate trigger              → log_session → END  (sends weak-areas prompt, waits)
   weak_areas trigger        → log_weak_areas → END
   confirm trigger           → book_events → END
-  skip trigger              → output (no-op) → END
   study_topic*              → END  (each step waits for next callback)
 
 Checkpointer: SqliteSaver backed by db/state.db.
@@ -161,7 +160,7 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
 
     Args:
         trigger:  'daily' | 'evening' | 'weekend' | 'on_demand' | 'done' |
-                  'confirm' | 'skip' | 'rate' | 'weak_areas' |
+                  'confirm' | 'rate' | 'weak_areas' |
                   'study_topic' | 'study_topic_category' | 'study_topic_confirm'
         chat_id:  Telegram chat ID (used as LangGraph thread_id)
         **kwargs: Additional state fields (duration_min, messages, etc.)
