@@ -16,7 +16,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="LARA", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app = FastAPI(title="LARA", lifespan=lifespan)
     app.include_router(health.router)
     app.include_router(webhook.router)
     app.include_router(scheduler_status.router)

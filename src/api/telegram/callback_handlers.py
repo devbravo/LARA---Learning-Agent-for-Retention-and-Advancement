@@ -38,6 +38,14 @@ def handle_duration(cb: str, chat_id: int, message_id: int | None) -> Intent | N
         if not dispatcher.try_mark_in_flight(message_id):
             logger.info("message_id=%s already in-flight or processed — ignoring repeat tap", message_id)
             return None
+        try:
+            remove_buttons(chat_id, message_id)
+        except Exception as e:
+            logger.warning("handle_duration: failed to remove picker buttons: %s", e)
+    try:
+        _graph.update_state(chat_id, {"pending_picker_message_id": None})
+    except Exception as e:
+        logger.warning("handle_duration: failed to clear pending_picker_message_id: %s", e)
     duration = int(cb.replace(" min", ""))
     extra: dict = {"duration_min": duration}
     if message_id is not None:

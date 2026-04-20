@@ -13,7 +13,8 @@ import logging
 from fastapi.responses import JSONResponse
 
 from src.models.telegram import TelegramUpdate
-from src.integrations.telegram_client import send_buttons
+from src.agent import graph as _graph
+from src.integrations import telegram_client as _telegram
 from src.api.telegram import dispatcher
 from src.api.telegram.intent_parser import parse_callback, parse_message
 from src.api.telegram.types import Intent, ParseResult
@@ -88,11 +89,23 @@ async def handle_update(update: TelegramUpdate) -> JSONResponse:
 
     # Menu: send duration picker directly, no graph needed
     if intent.trigger == "menu":
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(
-            None,
-            lambda: send_buttons("How long do you have?", ["30 min", "45 min", "60 min"]),
-        )
+        _chat_id = intent.chat_id
+
+        def _send_picker() -> None:
+            state = _graph.get_state(_chat_id)
+            old_id = state.get("pending_picker_message_id")
+            if old_id is not None:
+                try:
+                    _telegram.remove_buttons(_chat_id, old_id)
+                except Exception as e:
+                    logger.warning("menu: failed to remove old picker: %s", e)
+            msg_id = _telegram.send_buttons("How long do you have?", ["30 min", "45 min", "60 min"])
+            try:
+                _graph.update_state(_chat_id, {"pending_picker_message_id": msg_id})
+            except Exception as e:
+                logger.warning("menu: failed to checkpoint picker message_id: %s", e)
+
+        asyncio.get_event_loop().run_in_executor(None, _send_picker)
         return JSONResponse({"ok": True})
 
     # Fire-and-forget graph invocation
