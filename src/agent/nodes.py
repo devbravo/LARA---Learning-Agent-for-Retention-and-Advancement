@@ -56,7 +56,7 @@ def _load_topics() -> dict:
 # ---------------------------------------------------------------------------
 
 class AgentState(TypedDict, total=False):
-    trigger: str               # "daily" | "evening" | "on_demand" | "done" | "confirm" | "rate" | "weak_areas | weekend"
+    trigger: str               # "daily" | "evening" | "on_demand" | "done" | "confirm" | "rate" | "weak_areas" | "weekend"
     chat_id: int
     message_id: int | None              # Telegram message_id of the confirm keyboard
     duration_min: int | None
@@ -301,6 +301,9 @@ def weekend_brief(state: AgentState) -> AgentState:
             "messages": ["\n".join(lines)],
             "has_study_plan": False,
             "preview_only": True,
+            "proposed_slots": [],
+            "proposed_slot": None,
+            "proposed_topic": None,
         }
 
     except Exception as e:

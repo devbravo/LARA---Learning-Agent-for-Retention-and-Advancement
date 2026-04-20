@@ -64,7 +64,7 @@ def _run_weekday_planning() -> None:
     """
     chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
     if _is_protected_block():
-        logger.warning("Weekday briefing skipped — inside protected block (15:00–19:30).")
+        logger.warning("Weekday briefing skipped — inside protected block (15:00–19:00).")
         return
     logger.info("Scheduler: firing Weekday briefing for chat_id=%s", chat_id)
     try:
@@ -79,7 +79,7 @@ def _run_weekday_planning() -> None:
 
 
 def _run_weekend_brief() -> None:
-    """Invoke the graph with ``trigger='weekend_brief'`` on Sat/Sun at 10:00
+    """Invoke the graph with ``trigger='weekend'`` on Sat/Sun at 10:00
     On failure, logs the exception and sends a user-facing Telegram warning.
     """
     chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
@@ -101,7 +101,7 @@ def _run_evening_brief() -> None:
     """
     chat_id = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
     if _is_protected_block():
-        logger.warning("Evening briefing skipped — inside protected block (15:00–19:30).")
+        logger.warning("Evening briefing skipped — inside protected block (15:00–19:00).")
         return
     logger.info("Scheduler: firing evening briefing for chat_id=%s", chat_id)
     try:
@@ -117,7 +117,7 @@ def _run_evening_brief() -> None:
 def build_scheduler() -> AsyncIOScheduler:
     """Create and configure the APScheduler instance used by the API app.
     Returns:
-        ``AsyncIOScheduler`` with weekday/sunday daily jobs and evening preview.
+        ``AsyncIOScheduler`` with weekday planning, weekend brief, and evening brief jobs.
     """
     config = _load_config()
     scheduler = AsyncIOScheduler(timezone=_TZ)
