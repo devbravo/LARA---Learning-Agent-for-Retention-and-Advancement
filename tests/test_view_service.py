@@ -79,7 +79,7 @@ def test_all_sections_populated():
         {"name": "LangGraph", "tier": 1, "status": "active", "next_review": TODAY.isoformat()},
         {"name": "LLMOps", "tier": 1, "status": "in_progress"},
     ])
-    with patch("src.services.view_service.get_connection", _make_get_connection(path)):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
         snap = get_study_snapshot(TODAY)
 
     assert len(snap["overdue"]) == 2
@@ -98,7 +98,7 @@ def test_only_overdue_topics():
     path = _make_topics_db([
         {"name": "DSA - Arrays", "tier": 1, "status": "active", "next_review": YESTERDAY.isoformat()},
     ])
-    with patch("src.services.view_service.get_connection", _make_get_connection(path)):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
         snap = get_study_snapshot(TODAY)
 
     assert len(snap["overdue"]) == 1
@@ -116,7 +116,7 @@ def test_only_in_progress_topics():
     path = _make_topics_db([
         {"name": "Sales Engineering", "tier": 2, "status": "in_progress"},
     ])
-    with patch("src.services.view_service.get_connection", _make_get_connection(path)):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
         snap = get_study_snapshot(TODAY)
 
     assert snap["overdue"] == []
@@ -132,7 +132,7 @@ def test_only_in_progress_topics():
 def test_empty_snapshot():
     """All sections are empty when there are no relevant topics."""
     path = _make_topics_db([])
-    with patch("src.services.view_service.get_connection", _make_get_connection(path)):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
         snap = get_study_snapshot(TODAY)
 
     assert snap == {"overdue": [], "due_today": [], "in_progress": []}
@@ -148,7 +148,7 @@ def test_overdue_sorted_most_overdue_first():
         {"name": "Topic A", "tier": 1, "status": "active", "next_review": YESTERDAY.isoformat()},
         {"name": "Topic B", "tier": 1, "status": "active", "next_review": THREE_DAYS_AGO.isoformat()},
     ])
-    with patch("src.services.view_service.get_connection", _make_get_connection(path)):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
         snap = get_study_snapshot(TODAY)
 
     assert snap["overdue"][0]["name"] == "Topic B"
@@ -169,7 +169,7 @@ def test_weak_areas_on_correct_topics():
         {"name": "LangGraph", "tier": 1, "status": "active", "next_review": TODAY.isoformat()},
         {"name": "LLMOps", "tier": 2, "status": "in_progress", "weak_areas": "eval pipelines"},
     ])
-    with patch("src.services.view_service.get_connection", _make_get_connection(path)):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
         snap = get_study_snapshot(TODAY)
 
     assert snap["overdue"][0]["weak_areas"] == "rotate arrays"
@@ -186,7 +186,7 @@ def test_topics_due_tomorrow_excluded():
     path = _make_topics_db([
         {"name": "Future Topic", "tier": 1, "status": "active", "next_review": TOMORROW.isoformat()},
     ])
-    with patch("src.services.view_service.get_connection", _make_get_connection(path)):
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
         snap = get_study_snapshot(TODAY)
 
     assert snap["overdue"] == []
