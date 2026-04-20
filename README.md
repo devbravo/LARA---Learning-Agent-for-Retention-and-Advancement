@@ -114,6 +114,7 @@ lara/
 │   │   └── topic_repository.py
 │   └── services/
 │       └── topic_service.py # graduate_topic(), get_in_progress_topics()
+│       └── view_service.py
 └── tests/
     ├── test_sm2.py
     ├── test_gap_finder.py

@@ -2,7 +2,11 @@
 
 from datetime import date
 
-from src.infrastructure.db import get_connection
+from src.repositories.topic_repository import (
+    fetch_due_today_topics,
+    fetch_in_progress_topics_with_weak_areas,
+    fetch_overdue_topics,
+)
 
 
 def get_study_snapshot(today: date | None = None) -> dict:
@@ -22,26 +26,9 @@ def get_study_snapshot(today: date | None = None) -> dict:
 
     today_str = today.isoformat()
 
-    with get_connection() as conn:
-        overdue_rows = conn.execute(
-            """SELECT name, next_review, weak_areas FROM topics
-               WHERE status = 'active' AND next_review < ?
-               ORDER BY next_review ASC""",
-            (today_str,),
-        ).fetchall()
-
-        due_today_rows = conn.execute(
-            """SELECT name, weak_areas FROM topics
-               WHERE status = 'active' AND next_review = ?
-               ORDER BY tier ASC, easiness_factor ASC""",
-            (today_str,),
-        ).fetchall()
-
-        in_progress_rows = conn.execute(
-            """SELECT name, weak_areas FROM topics
-               WHERE status = 'in_progress'
-               ORDER BY tier ASC, name ASC""",
-        ).fetchall()
+    overdue_rows = fetch_overdue_topics(today_str)
+    due_today_rows = fetch_due_today_topics(today_str)
+    in_progress_rows = fetch_in_progress_topics_with_weak_areas()
 
     overdue = []
     for row in overdue_rows:

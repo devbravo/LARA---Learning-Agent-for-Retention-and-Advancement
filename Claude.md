@@ -43,6 +43,7 @@ creates or rebooks [Study] events for the in-progress study flow.
 | Rating tap (😕 😐 😊) | `log_session` → `output` → END (waits for weak areas reply) |
 | Weak areas reply or Skip | `log_weak_areas` → `output` → END |
 | `/plan` | `daily_planning` (manual trigger for testing) |
+| `/view` | Handled directly by the webhook path to show the view response; does not route through LangGraph ||
 | `/pick` | `study_topic` → END (awaits category tap) |
 | `category:<name>` tap | `study_topic_category` → END (awaits subtopic tap) |
 | `subtopic_id:<id>` tap | `study_topic_confirm` → END |

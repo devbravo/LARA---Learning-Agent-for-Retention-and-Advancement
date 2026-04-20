@@ -137,8 +137,9 @@ def handle_view_command(chat_id: int) -> JSONResponse:
     """
     _ = chat_id
     try:
+        today = date.today()
         snapshot = view_service.get_study_snapshot()
-        msg = _format_snapshot(snapshot, date.today())
+        msg = _format_snapshot(snapshot, today)
     except Exception as exc:
         logger.exception("Error fetching study snapshot: %s", exc)
         loop = asyncio.get_event_loop()
