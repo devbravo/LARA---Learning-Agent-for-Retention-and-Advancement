@@ -11,7 +11,7 @@ from src.agent.formatting import (
     format_time,
     topic_due_label,
 )
-from src.agent.planning_helpers import build_in_progress_study_slots, get_prebooked_topics, get_topic_config
+from src.agent.planning_helpers import build_in_progress_study_slots, build_missing_study_events, get_prebooked_topics, get_topic_config
 from src.core import gap_finder as _gap_finder
 
 if TYPE_CHECKING:
@@ -73,8 +73,12 @@ def append_evening_mock_block_lines(
     due_topics: list[dict],
     config: dict,
     topics_config: dict,
+    in_progress_topics: list[str] | None = None,
 ) -> None:
-    """Append the evening study-window section.
+    """Append the evening mock-interview block section.
+
+    Synthetic [Study] busy events are added for in-progress topics before
+    calling the gap finder so that mock blocks never overlap study time.
 
     Args:
         lines: Mutable list of message lines to append to.
@@ -84,29 +88,37 @@ def append_evening_mock_block_lines(
         due_topics: Topics returned by SM-2 for the target date.
         config: Runtime config values from ``config.yaml``.
         topics_config: Topic metadata loaded from ``topics.yaml``.
+        in_progress_topics: Topic names currently marked ``in_progress``.
     """
-    free_windows = _gap_finder.find_free_windows(events, target_date, config)
+    # Include synthetic [Study] busy blocks so mock slots never overlap them
+    study_busy = build_missing_study_events(
+        in_progress_topics or [], timed_events, target_date, config
+    )
+    effective_events = events + study_busy
+
+    free_windows = _gap_finder.find_free_windows(effective_events, target_date, config)
     prebooked = get_prebooked_topics(timed_events, due_topics)
     available_topics = [t for t in due_topics if t["name"] not in prebooked]
 
-    if free_windows:
-        lines.append("🎯 Mock interview blocks:")
-        for i, win in enumerate(free_windows):
-            topic = available_topics[i] if i < len(available_topics) else None
-            if topic is None:
-                break
-            topic_cfg = get_topic_config(topic["name"], topics_config)
-            default_duration = topic_cfg.get("default_duration_minutes", 60)
-            duration = min(default_duration, win["duration_min"])
-            t_start = format_time(win["start"])
-            start_dt = datetime.combine(target_date, win["start"])
-            end_dt = start_dt + timedelta(minutes=duration)
-            t_end = format_time(end_dt.time())
-            lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
-            if topic.get("weak_areas"):
-                lines.append(f"  ⚠️ Focus on: {topic['weak_areas']}")
-    else:
-        lines.append("🎯 Mock interview blocks: None found for tomorrow")
+    lines.append("🎯 Mock interview blocks:")
+    found_any = False
+    for i, win in enumerate(free_windows):
+        topic = available_topics[i] if i < len(available_topics) else None
+        if topic is None:
+            break
+        found_any = True
+        topic_cfg = get_topic_config(topic["name"], topics_config)
+        default_duration = topic_cfg.get("default_duration_minutes", 60)
+        duration = min(default_duration, win["duration_min"])
+        t_start = format_time(win["start"])
+        start_dt = datetime.combine(target_date, win["start"])
+        end_dt = start_dt + timedelta(minutes=duration)
+        t_end = format_time(end_dt.time())
+        lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
+        if topic.get("weak_areas"):
+            lines.append(f"  ⚠️ Focus on: {topic['weak_areas']}")
+    if not found_any:
+        lines.append("• None found for tomorrow")
     lines.append("")
 
 
@@ -220,7 +232,7 @@ def build_evening_preview_state(
         A partial ``AgentState`` with preview flags and a single composed message.
     """
     day_str = f"{target_date.strftime('%A %B')} {target_date.day}"
-    lines = [f"🌙 Tomorrow's plan — {day_str}", ""]
+    lines = [f"🌙 Good Evening Diego — {day_str}", "", f"📋 Tomorrow's plan:", ""]
     append_calendar_lines(lines, timed_events, "📅 Your day: No meetings tomorrow")
     append_in_progress_lines(lines, in_progress_topics or [], timed_events, target_date)
     append_evening_mock_block_lines(
@@ -231,6 +243,7 @@ def build_evening_preview_state(
         due_topics,
         config,
         topics_config,
+        in_progress_topics=in_progress_topics or [],
     )
     lines.append("No confirmation needed — this is your preview for tomorrow.")
     return {

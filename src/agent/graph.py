@@ -32,6 +32,8 @@ from langgraph.graph import END, START, StateGraph
 from src.agent.nodes import (
     AgentState,
     activate_topic,
+    await_brief_confirmation,
+    await_daily_confirmation,
     book_events,
     daily_planning,
     done_parser,
@@ -42,10 +44,12 @@ from src.agent.nodes import (
     on_demand,
     output,
     route_from_activate_topic,
+    route_from_await_brief_confirmation,
+    route_from_await_daily_confirmation,
     route_from_daily_planning,
     route_from_done_parser,
-    route_from_log_weak_areas,
     route_from_generate_brief,
+    route_from_log_weak_areas,
     route_from_on_demand,
     route_from_router,
     route_from_study_topic,
@@ -69,11 +73,13 @@ def build_graph(checkpointer=None):
     # Register all nodes
     builder.add_node("router", router)
     builder.add_node("daily_planning", daily_planning)
+    builder.add_node("await_daily_confirmation", await_daily_confirmation)
     builder.add_node("weekend_brief", weekend_brief)
     builder.add_node("send_duration_picker", send_duration_picker)
     builder.add_node("on_demand", on_demand)
     builder.add_node("done_parser", done_parser)
     builder.add_node("generate_brief", generate_brief)
+    builder.add_node("await_brief_confirmation", await_brief_confirmation)
     builder.add_node("log_session", log_session)
     builder.add_node("log_weak_areas", log_weak_areas)
     builder.add_node("output", output)
@@ -106,13 +112,18 @@ def build_graph(checkpointer=None):
     builder.add_conditional_edges(
         "daily_planning",
         route_from_daily_planning,
+        {"await_daily_confirmation": "await_daily_confirmation", "output": "output"},
+    )
+    builder.add_conditional_edges(
+        "await_daily_confirmation",
+        route_from_await_daily_confirmation,
         {"book_events": "book_events", "output": "output"},
     )
 
     # Weekend brief
     builder.add_edge("weekend_brief", "output")
 
-    # On-demand flow
+    # On-demand flow (interrupt lives in on_demand)
     builder.add_edge("send_duration_picker", "on_demand")
     builder.add_conditional_edges(
         "on_demand",
@@ -122,6 +133,11 @@ def build_graph(checkpointer=None):
     builder.add_conditional_edges(
         "generate_brief",
         route_from_generate_brief,
+        {"await_brief_confirmation": "await_brief_confirmation", "output": "output"},
+    )
+    builder.add_conditional_edges(
+        "await_brief_confirmation",
+        route_from_await_brief_confirmation,
         {"book_events": "book_events", "output": "output"},
     )
 

@@ -69,9 +69,18 @@ def clear_in_flight(message_id: int) -> None:
 
 
 def has_pending_interrupt(state: Any) -> bool:
-    """Return True when the graph is paused at an interrupt() call."""
+    """Return True when the graph is paused at an interrupt() call.
+
+    Checks both tasks[*].interrupts (primary) and snapshot.next (fallback).
+    In LangGraph 1.x, after graph.invoke() raises GraphInterrupt the checkpoint
+    is saved; snapshot.next is non-empty iff the graph is mid-flow (paused or
+    about to resume a node).  A completed run always has next == ().
+    """
     tasks = getattr(state, "tasks", [])
-    return any(getattr(t, "interrupts", None) for t in tasks)
+    if any(getattr(t, "interrupts", None) for t in tasks):
+        return True
+    # Fallback: non-empty next tuple means the graph is paused mid-flow.
+    return bool(getattr(state, "next", ()))
 
 
 def resolve_trigger(payload: str) -> str:
