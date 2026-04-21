@@ -553,9 +553,16 @@ def done_parser(state: AgentState) -> AgentState:
             return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."]}
 
         logger.info("done_parser: sending rating buttons for %s", topic_name)
-        _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+        chat_id = state.get("chat_id")
+        rating_msg_id = _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
 
         rating_payload = interrupt("waiting for rating")
+
+        if rating_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, rating_msg_id)
+            except Exception:
+                pass
 
         score_map = {"😕 hard": 2, "😐 ok": 3, "😊 easy": 5}
         quality = score_map.get((rating_payload or "").lower().strip(), 3)
@@ -597,8 +604,15 @@ def log_session(state: AgentState) -> AgentState:
             if topic_id is None:
                 return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."]}
 
-            _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+            chat_id = state.get("chat_id")
+            loop_rating_msg_id = _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
             rating_payload = interrupt("waiting for rating (loop)")
+
+            if loop_rating_msg_id and chat_id:
+                try:
+                    _telegram.remove_buttons(chat_id, loop_rating_msg_id)
+                except Exception:
+                    pass
 
             score_map = {"😕 hard": 2, "😐 ok": 3, "😊 easy": 5}
             quality = score_map.get((rating_payload or "").lower().strip(), 3)
@@ -611,6 +625,7 @@ def log_session(state: AgentState) -> AgentState:
                 duration_min = slot["duration_min"]
                 break
 
+        chat_id = state.get("chat_id")
         session_repository.upsert_today_session(
             topic_id=topic_id,
             duration_min=duration_min,
@@ -618,11 +633,17 @@ def log_session(state: AgentState) -> AgentState:
         )
         _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=quality)
 
-        _telegram.send_buttons(
+        weak_areas_msg_id = _telegram.send_buttons(
             "Any weak areas to note? Reply with text or tap Skip.",
             ["Skip"]
         )
         weak_areas_payload = interrupt("waiting for weak areas")
+
+        if weak_areas_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, weak_areas_msg_id)
+            except Exception:
+                pass
 
         return {
             "current_topic_id": topic_id,

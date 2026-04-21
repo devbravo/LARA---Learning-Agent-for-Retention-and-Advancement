@@ -62,7 +62,7 @@ async def handle_update(update: TelegramUpdate) -> JSONResponse:
     logger.info("Dispatching: chat_id=%s payload=%r message_id=%s", chat_id, payload, message_id)
 
     # --- 4. Fire-and-forget graph invocation ---
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     loop.run_in_executor(
         None,
         lambda: dispatcher.invoke_safe(chat_id, payload, message_id=message_id),

@@ -35,18 +35,21 @@ APScheduler ──► daily_planning (Mon–Fri morning + evening preview) / wee
 | Node | Responsibility |
 |---|---|
 | `router` | Entry point — routes by trigger type |
-| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder |
+| `daily_planning` | Assembles morning/evening plan from calendar + SM-2 + gap finder; interrupt() for booking confirmation |
 | `weekend_brief` | Sat/Sun brief — shows due topics with weak areas and overdue indicators |
-| `on_demand` | Handles `/study` flow, picks highest-priority due topic |
-| `done_parser` | Finds first unlogged slot, sends rating buttons |
-| `log_session` | Logs session with quality score, prompts for weak areas |
-| `log_weak_areas` | Saves weak areas or clears on Skip, prompts for next topic |
-| `generate_brief` | Calls Claude API — the only LLM call in the graph |
-| `confirm` | Sends plan to Telegram with inline keyboard; waits for tap |
-| `output` | Final Telegram send + GCal write after confirmation |
+| `send_duration_picker` | Sends duration buttons; interrupt() for selection |
+| `on_demand` | Picks highest-priority due topic for requested duration |
+| `generate_brief` | Calls Claude API — the only LLM call; interrupt() for booking confirmation |
+| `book_events` | Writes `[Mock]` GCal events after user confirmation |
+| `done_parser` | Finds first unlogged slot; interrupt() for quality rating |
+| `log_session` | Logs session with quality score; interrupt() for weak areas |
+| `log_weak_areas` | Saves weak areas or clears on Skip; loops or ends |
 | `study_topic` | Starts `/pick` flow, sends category inline buttons, cleans up stale lists |
-| `study_topic_category` | Handles category tap, sends matching subtopic inline buttons |
+| `study_topic_category` | Handles category tap, sends matching subtopic inline buttons; interrupt() for selection |
 | `study_topic_confirm` | Marks selected topic as `in_progress`, notifies user |
+| `activate_topic` | Lists in-progress topics as inline buttons; interrupt() for selection |
+| `graduate_topic` | Graduates selected topic to active SM-2 with first review tomorrow |
+| `output` | Sends `state["messages"][-1]` via Telegram — shared terminal node |
 
 ---
 
