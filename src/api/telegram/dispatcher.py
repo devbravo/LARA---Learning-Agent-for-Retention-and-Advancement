@@ -95,7 +95,7 @@ def resolve_trigger(payload: str) -> str:
     return mapping.get(payload.lower().strip(), payload)
 
 
-def invoke_safe(chat_id: int, payload: str, message_id: int | None = None, **kwargs: Any) -> None:
+def invoke_safe(chat_id: int, payload: str, message_id: int | None = None) -> None:
     """Invoke the graph safely, choosing resume vs fresh based on interrupt state.
 
     Reads graph state once to check has_pending_interrupt(). If an interrupt
@@ -130,11 +130,6 @@ def invoke_safe(chat_id: int, payload: str, message_id: int | None = None, **kwa
             trigger = resolve_trigger(payload)
             logger.info("Fresh graph invocation: trigger=%s chat_id=%s", trigger, chat_id)
             initial_state: dict = {"trigger": trigger, "chat_id": chat_id}
-            for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot",
-                        "quality_score", "messages", "current_topic_id", "current_topic_name",
-                        "study_topic_category"):
-                if kwargs.get(key) is not None:
-                    initial_state[key] = kwargs[key]
             _graph.graph.invoke(initial_state, config=config)
 
         logger.info("Graph invocation complete: chat_id=%s", chat_id)

@@ -20,13 +20,18 @@ reads Google Calendar to plan around your real schedule, generates focused study
 ## Architecture
 
 ```
-Telegram ──► FastAPI /webhook ──► LangGraph graph ──► Telegram
-                                       │
-                    ┌──────────────────┼──────────────────┐
-                    │                  │                   │
-               Google Calendar      SQLite            Claude API
-               (read + write)    (SM-2 state,       (study briefs
-                                  sessions log)       only)
+Telegram ──► FastAPI /webhook ──► dispatcher.py ──► LangGraph graph ──► Telegram
+                                        │                   │
+                                has pending interrupt?      │
+                                   yes → Command(resume)    │
+                                   no  → fresh invoke       │
+                                        │                   │
+                     ┌──────────────────┼──────────────────┐
+                     │                  │                   │
+                Google Calendar      SQLite            Claude API
+                (read + write)    (SM-2 state,       (study briefs
+                                   sessions log,       only)
+                                   checkpoints)
 APScheduler ──► daily_planning (Mon–Fri morning + evening preview) / weekend_brief (Sat–Sun)
 ```
 
@@ -34,21 +39,23 @@ APScheduler ──► daily_planning (Mon–Fri morning + evening preview) / wee
 
 | Node | Responsibility |
 |---|---|
-| `router` | Entry point — routes by trigger type |
-| `daily_planning` | Assembles morning/evening plan from calendar + SM-2 + gap finder; interrupt() for booking confirmation |
+| `router` | Entry point — routes by trigger type (7 targets) |
+| `daily_planning` | Assembles morning/evening plan from calendar + SM-2 + gap finder; sends booking buttons |
+| `await_daily_confirmation` | interrupt() — waits for user to confirm or skip the daily booking proposal |
 | `weekend_brief` | Sat/Sun brief — shows due topics with weak areas and overdue indicators |
-| `send_duration_picker` | Sends duration buttons; interrupt() for selection |
-| `on_demand` | Picks highest-priority due topic for requested duration |
-| `generate_brief` | Calls Claude API — the only LLM call; interrupt() for booking confirmation |
+| `send_duration_picker` | Sends duration buttons; cleans up stale picker |
+| `on_demand` | interrupt() — picks highest-priority due topic for requested duration |
+| `generate_brief` | Calls Claude API — the only LLM call; sends booking buttons when a slot is available |
+| `await_brief_confirmation` | interrupt() — waits for user to confirm or skip the on-demand booking proposal |
 | `book_events` | Writes `[Mock]` GCal events after user confirmation |
-| `done_parser` | Finds first unlogged slot; interrupt() for quality rating |
-| `log_session` | Logs session with quality score; interrupt() for weak areas |
-| `log_weak_areas` | Saves weak areas or clears on Skip; loops or ends |
+| `done_parser` | Finds first unlogged slot; sends rating buttons; sets `has_unlogged_sessions` |
+| `log_session` | interrupt() — logs session with quality score; sends weak areas prompt |
+| `log_weak_areas` | interrupt() — saves weak areas or clears on Skip; sets `has_unlogged_sessions`; loops or ends |
 | `study_topic` | Starts `/pick` flow, sends category inline buttons, cleans up stale lists |
-| `study_topic_category` | Handles category tap, sends matching subtopic inline buttons; interrupt() for selection |
-| `study_topic_confirm` | Marks selected topic as `in_progress`, notifies user |
-| `activate_topic` | Lists in-progress topics as inline buttons; interrupt() for selection |
-| `graduate_topic` | Graduates selected topic to active SM-2 with first review tomorrow |
+| `study_topic_category` | interrupt() — handles category tap, sends matching subtopic inline buttons |
+| `study_topic_confirm` | interrupt() — marks selected topic as `in_progress`, notifies user |
+| `activate_topic` | Lists in-progress topics as inline buttons |
+| `graduate_topic` | interrupt() — graduates selected topic to active SM-2 with first review tomorrow |
 | `output` | Sends `state["messages"][-1]` via Telegram — shared terminal node |
 
 ---

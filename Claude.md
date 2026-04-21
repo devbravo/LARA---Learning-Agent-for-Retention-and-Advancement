@@ -47,20 +47,22 @@ live in `route_from_router`.
 | Node | Responsibility |
 |---|---|
 | `router` | Entry point. Routes fresh triggers only. 7 targets. |
-| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder. Sets proposed_slots. Calls interrupt(). |
+| `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder. Sets proposed_slots. Sends booking buttons. |
+| `await_daily_confirmation` | interrupt() is first statement. Waits for user to confirm or skip the daily booking proposal. Routes to book_events or output. |
 | `weekend_brief` | Sat/Sun brief. Shows SM-2 due topics with weak areas + overdue indicators. No interrupt. |
-| `send_duration_picker` | Sends "How long do you have?" buttons. Cleans up stale picker. Calls interrupt(). |
-| `on_demand` | Picks highest-priority due topic for requested duration. |
-| `generate_brief` | Calls Claude API. Only node that uses an LLM. |
+| `send_duration_picker` | Sends "How long do you have?" buttons. Cleans up stale picker. |
+| `on_demand` | interrupt() is first statement. Picks highest-priority due topic for requested duration. |
+| `generate_brief` | Calls Claude API. Only node that uses an LLM. Sends booking buttons when a slot is available. |
+| `await_brief_confirmation` | interrupt() is first statement. Waits for user to confirm or skip the on-demand booking proposal. Routes to book_events or output. |
 | `book_events` | Writes GCal events after user confirms. Handles both single and multi-slot flows. |
-| `done_parser` | Finds first unlogged slot from proposed_slots. Sends rating buttons. Calls interrupt(). |
-| `log_session` | Logs session row with quality score. Updates SM-2. Sends weak areas prompt. Calls interrupt(). |
-| `log_weak_areas` | Saves weak areas (or clears on Skip). Prompts for next unlogged slot or ends. |
-| `study_topic` | Starts /pick flow. Sends category inline buttons. Cleans up stale subtopic lists. Calls interrupt(). |
-| `study_topic_category` | Handles category resume. Sends matching subtopic inline buttons. Calls interrupt(). |
-| `study_topic_confirm` | Marks selected topic as in_progress. Sets confirmation message. |
-| `activate_topic` | Lists in-progress topics as inline buttons. Calls interrupt(). |
-| `graduate_topic` | Graduates selected topic to active SM-2. Sets confirmation message. |
+| `done_parser` | Finds first unlogged slot from proposed_slots. Sends rating buttons. Sets has_unlogged_sessions. |
+| `log_session` | interrupt() is first statement. Logs session row with quality score. Updates SM-2. Sends weak areas prompt. |
+| `log_weak_areas` | interrupt() is first statement. Saves weak areas (or clears on Skip). Sets has_unlogged_sessions. Prompts for next unlogged slot or ends. |
+| `study_topic` | Starts /pick flow. Sends category inline buttons. Cleans up stale subtopic lists. |
+| `study_topic_category` | interrupt() is first statement. Handles category resume. Sends matching subtopic inline buttons. |
+| `study_topic_confirm` | interrupt() is first statement. Marks selected topic as in_progress. Sets confirmation message. |
+| `activate_topic` | Lists in-progress topics as inline buttons. |
+| `graduate_topic` | interrupt() is first statement. Graduates selected topic to active SM-2. Sets confirmation message. |
 | `output` | Shared terminal node. Sends state["messages"][-1] via Telegram and ends. |
 
 ---
@@ -69,9 +71,11 @@ live in `route_from_router`.
 
 **Morning / Evening briefing:**
 ```
-START → router → daily_planning → interrupt() →
-[resume: "yes, book them"] → book_events → output → END
-[resume: "skip"] → output → END
+START → router → daily_planning →
+  (has_study_plan=True, preview_only=False) → await_daily_confirmation → interrupt() →
+    [resume: "yes, book them"] → book_events → output → END
+    [resume: "skip"] → output → END
+  (has_study_plan=False or preview_only=True) → output → END
 ```
 
 **Weekend brief:**
@@ -81,34 +85,37 @@ START → router → weekend_brief → output → END
 
 **On-demand study (/study):**
 ```
-START → router → send_duration_picker → interrupt() →
-[resume: "30 min" | "45 min" | "60 min"] → on_demand → generate_brief → interrupt() →
-[resume: "yes, book them"] → book_events → output → END
-[resume: "skip"] → output → END
+START → router → send_duration_picker → on_demand → interrupt() →
+[resume: "30 min" | "45 min" | "60 min"] → generate_brief →
+  (has_study_plan=True, proposed_slot set) → await_brief_confirmation → interrupt() →
+    [resume: "yes, book them"] → book_events → output → END
+    [resume: "skip"] → output → END
+  (no free slot) → output → END
 ```
 
 **Done / logging (/done):**
 ```
-START → router → done_parser → interrupt() →
-[resume: "😕 hard" | "😐 ok" | "😊 easy"] → log_session → interrupt() →
-[resume: <text> | "skip"] → log_weak_areas →
-  if more unlogged slots → interrupt() → [repeat from log_session]
-  else → output → END
+START → router → done_parser →
+  (has_unlogged_sessions=True) → log_session → interrupt() →
+    [resume: "😕 hard" | "😐 ok" | "😊 easy"] → log_weak_areas → interrupt() →
+      [resume: <text> | "skip"] →
+        if more unlogged slots (has_unlogged_sessions=True) → log_session → [repeat]
+        else → output → END
+  (has_unlogged_sessions=False) → output → END
 ```
 
 **Pick a topic (/pick):**
 ```
-START → router → study_topic → interrupt() →
-[resume: "category:DSA" | ...] → study_topic_category → interrupt() →
-[resume: "subtopic_id:14" | ...] → study_topic_confirm → output → END
+START → router → study_topic → study_topic_category → interrupt() →
+[resume: "category:DSA" | ...] → study_topic_confirm → interrupt() →
+[resume: "subtopic_id:14" | ...] → output → END
 ```
 
 **Activate a topic (/activate):**
 ```
-START → router → activate_topic → interrupt() →
-[resume: "studied:14" | ...] → graduate_topic → output → END
+START → router → activate_topic → graduate_topic → interrupt() →
+[resume: "studied:14" | ...] → output → END
 ```
-
 ---
 
 ## Router — fresh entry points only
@@ -334,4 +341,3 @@ suggestions
 - `credentials/` is never committed
 - Validate `X-Telegram-Bot-Api-Secret-Token` header on every webhook request
 - SQLite files are local only — never exposed via HTTP
-```

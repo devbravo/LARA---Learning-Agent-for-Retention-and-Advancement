@@ -12,18 +12,30 @@ Covers:
 
   activate_topic:
     7. No in-progress topics → early message, no buttons sent
-    8. Valid resume payload forwarded to state
+    8. Valid resume payload graduates the topic
     9. Invalid resume payload (wrong prefix) → warning message
     10. Buttons removed after valid resume
-    11. Buttons removed after invalid resume (try/finally guarantee)
+    11. Buttons removed even after invalid resume
 """
 
 import os
 import sqlite3
+import sys
 import tempfile
 from unittest.mock import MagicMock, patch
 
-from src.agent.nodes import activate_topic, graduate_topic
+# ---------------------------------------------------------------------------
+# Remove the conftest stub so we can import the real build_graph.
+# This must happen before any src.agent.graph import.
+# ---------------------------------------------------------------------------
+sys.modules.pop("src.agent.graph", None)
+
+from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
+from langgraph.types import Command  # noqa: E402
+
+import src.agent.nodes as _nodes  # noqa: E402
+from src.agent.graph import build_graph  # noqa: E402
+from src.agent.nodes import activate_topic, graduate_topic  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +93,15 @@ def _get_topic_status(db_path: str, name: str) -> str:
     row = conn.execute("SELECT status FROM topics WHERE name = ?", (name,)).fetchone()
     conn.close()
     return row["status"]
+
+
+def _make_test_graph():
+    """Build an isolated graph backed by a temporary SQLite checkpointer."""
+    fd, state_path = tempfile.mkstemp(suffix="_state.db")
+    os.close(fd)
+    conn = sqlite3.connect(state_path, check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
+    return build_graph(checkpointer=checkpointer)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +174,7 @@ def test_graduate_topic_topic_not_found_returns_warning():
 
 
 # ---------------------------------------------------------------------------
-# 5. Success path
+# 5. Success path — full HITL graph (trigger=activate → resume=studied:<id>)
 # ---------------------------------------------------------------------------
 
 def test_graduate_topic_success_sets_active_status():
@@ -163,13 +184,18 @@ def test_graduate_topic_success_sets_active_status():
     ])
     topic_id = _get_topic_id(path, "DSA - Linked Lists")
 
-    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
-        result = graduate_topic({"payload": f"studied:{topic_id}"})
+    g = _make_test_graph()
+    chat_id = 5001
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_message"), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=f"studied:{topic_id}"), config=config)
 
     assert _get_topic_status(path, "DSA - Linked Lists") == "active"
-    assert result.get("messages")
-    assert "DSA - Linked Lists" in result["messages"][0]
-    assert "✅" in result["messages"][0]
 
 
 def test_graduate_topic_success_message_mentions_sm2():
@@ -179,15 +205,25 @@ def test_graduate_topic_success_message_mentions_sm2():
     ])
     topic_id = _get_topic_id(path, "Gen AI - RAG")
 
-    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
-        result = graduate_topic({"payload": f"studied:{topic_id}"})
+    g = _make_test_graph()
+    chat_id = 5002
+    config = {"configurable": {"thread_id": str(chat_id)}}
 
-    msg = result["messages"][0]
+    mock_send = MagicMock()
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_message", mock_send), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=f"studied:{topic_id}"), config=config)
+
+    mock_send.assert_called()
+    msg = mock_send.call_args[0][0]
     assert "SM-2" in msg or "tomorrow" in msg.lower()
 
 
 def test_graduate_topic_success_sets_next_review_to_tomorrow():
-    """After graduation, next_review is set to a future date (SQLite date('now','+1 day'))."""
+    """After graduation, next_review is set to a future date."""
     from datetime import date
 
     path = _make_topics_db([
@@ -195,15 +231,21 @@ def test_graduate_topic_success_sets_next_review_to_tomorrow():
     ])
     topic_id = _get_topic_id(path, "Gen AI - RAG")
 
-    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
-        graduate_topic({"payload": f"studied:{topic_id}"})
+    g = _make_test_graph()
+    chat_id = 5003
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_message"), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=f"studied:{topic_id}"), config=config)
 
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT next_review FROM topics WHERE id = ?", (topic_id,)).fetchone()
     conn.close()
-    # SQLite date('now', '+1 day') is UTC-based, so it may be 1–2 calendar days
-    # ahead depending on local timezone. Assert it is strictly in the future.
     assert row["next_review"] is not None
     assert row["next_review"] > date.today().isoformat()
 
@@ -236,102 +278,117 @@ def test_activate_topic_no_in_progress_does_not_send_buttons():
 
 
 # ---------------------------------------------------------------------------
-# 7. activate_topic — valid resume payload forwarded to state
+# 7. Full HITL: valid resume graduates the topic
 # ---------------------------------------------------------------------------
 
 def test_activate_topic_valid_payload_stored_in_state():
-    """A 'studied:<id>' resume payload is stored in state['payload']."""
-    from src.agent import nodes as nodes_module
-    from langgraph.types import interrupt as _interrupt
+    """A 'studied:<id>' resume graduates the topic and sends a confirmation."""
+    path = _make_topics_db([
+        {"name": "DSA - Linked Lists", "tier": 1, "status": "in_progress"},
+    ])
+    topic_id = _get_topic_id(path, "DSA - Linked Lists")
 
-    topics = [{"id": 7, "name": "DSA - Linked Lists"}]
-    mock_remove = MagicMock()
+    g = _make_test_graph()
+    chat_id = 5004
+    config = {"configurable": {"thread_id": str(chat_id)}}
 
-    with patch.object(nodes_module.topic_service, "get_in_progress_topics", return_value=topics), \
-         patch.object(nodes_module._telegram, "send_inline_buttons", return_value=42), \
-         patch.object(nodes_module._telegram, "remove_buttons", mock_remove), \
-         patch("src.agent.nodes.interrupt", return_value="studied:7"):
-        result = activate_topic({"chat_id": 123})
+    mock_send = MagicMock()
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_message", mock_send), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=f"studied:{topic_id}"), config=config)
 
-    assert result.get("payload") == "studied:7"
-    assert not result.get("messages")
+    assert _get_topic_status(path, "DSA - Linked Lists") == "active"
+    mock_send.assert_called()
+    assert "✅" in mock_send.call_args[0][0]
 
 
 # ---------------------------------------------------------------------------
-# 8. activate_topic — invalid resume payload returns warning
+# 8. Full HITL: invalid resume payload returns warning
 # ---------------------------------------------------------------------------
 
 def test_activate_topic_invalid_resume_returns_warning():
     """A resume payload that doesn't start with 'studied:' returns a warning message."""
-    from src.agent import nodes as nodes_module
-
     topics = [{"id": 7, "name": "DSA - Linked Lists"}]
 
-    with patch.object(nodes_module.topic_service, "get_in_progress_topics", return_value=topics), \
-         patch.object(nodes_module._telegram, "send_inline_buttons", return_value=42), \
-         patch.object(nodes_module._telegram, "remove_buttons"), \
-         patch("src.agent.nodes.interrupt", return_value="category:DSA"):
-        result = activate_topic({"chat_id": 123})
+    g = _make_test_graph()
+    chat_id = 5005
+    config = {"configurable": {"thread_id": str(chat_id)}}
 
-    assert result.get("messages")
-    assert "⚠️" in result["messages"][0]
+    mock_send = MagicMock()
+    with patch.object(_nodes.topic_service, "get_in_progress_topics", return_value=topics), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_message", mock_send), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume="category:DSA"), config=config)
+
+    mock_send.assert_called_once()
+    assert "⚠️" in mock_send.call_args[0][0]
 
 
 def test_activate_topic_empty_resume_returns_warning():
     """An empty resume payload returns a warning message."""
-    from src.agent import nodes as nodes_module
-
     topics = [{"id": 7, "name": "DSA - Linked Lists"}]
 
-    with patch.object(nodes_module.topic_service, "get_in_progress_topics", return_value=topics), \
-         patch.object(nodes_module._telegram, "send_inline_buttons", return_value=42), \
-         patch.object(nodes_module._telegram, "remove_buttons"), \
-         patch("src.agent.nodes.interrupt", return_value=""):
-        result = activate_topic({"chat_id": 123})
+    g = _make_test_graph()
+    chat_id = 5006
+    config = {"configurable": {"thread_id": str(chat_id)}}
 
-    assert result.get("messages")
-    assert "⚠️" in result["messages"][0]
+    mock_send = MagicMock()
+    with patch.object(_nodes.topic_service, "get_in_progress_topics", return_value=topics), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_message", mock_send), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=""), config=config)
+
+    mock_send.assert_called_once()
+    assert "⚠️" in mock_send.call_args[0][0]
 
 
 # ---------------------------------------------------------------------------
-# 9. activate_topic — buttons removed after valid resume
+# 9. Full HITL: buttons removed after resume (valid and invalid)
 # ---------------------------------------------------------------------------
 
 def test_activate_topic_buttons_removed_after_valid_resume():
     """remove_buttons is called with the correct chat_id and message_id after a valid resume."""
-    from src.agent import nodes as nodes_module
+    path = _make_topics_db([
+        {"name": "DSA - Linked Lists", "tier": 1, "status": "in_progress"},
+    ])
+    topic_id = _get_topic_id(path, "DSA - Linked Lists")
 
-    topics = [{"id": 7, "name": "DSA - Linked Lists"}]
+    g = _make_test_graph()
+    chat_id = 5007
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
     mock_remove = MagicMock()
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_message"), \
+         patch.object(_nodes._telegram, "remove_buttons", mock_remove):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=f"studied:{topic_id}"), config=config)
 
-    with patch.object(nodes_module.topic_service, "get_in_progress_topics", return_value=topics), \
-         patch.object(nodes_module._telegram, "send_inline_buttons", return_value=42), \
-         patch.object(nodes_module._telegram, "remove_buttons", mock_remove), \
-         patch("src.agent.nodes.interrupt", return_value="studied:7"):
-        activate_topic({"chat_id": 123})
+    mock_remove.assert_called_once_with(chat_id, 42)
 
-    mock_remove.assert_called_once_with(123, 42)
-
-
-# ---------------------------------------------------------------------------
-# 10. activate_topic — buttons removed even after invalid resume (try/finally)
-# ---------------------------------------------------------------------------
 
 def test_activate_topic_buttons_removed_after_invalid_resume():
-    """remove_buttons is called even when the resume payload is invalid (try/finally guarantee)."""
-    from src.agent import nodes as nodes_module
-
+    """remove_buttons is called even when the resume payload is invalid."""
     topics = [{"id": 7, "name": "DSA - Linked Lists"}]
+    chat_id = 456
+
+    g = _make_test_graph()
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
     mock_remove = MagicMock()
+    with patch.object(_nodes.topic_service, "get_in_progress_topics", return_value=topics), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=99), \
+         patch.object(_nodes._telegram, "send_message"), \
+         patch.object(_nodes._telegram, "remove_buttons", mock_remove):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume="not_a_valid_payload"), config=config)
 
-    with patch.object(nodes_module.topic_service, "get_in_progress_topics", return_value=topics), \
-         patch.object(nodes_module._telegram, "send_inline_buttons", return_value=99), \
-         patch.object(nodes_module._telegram, "remove_buttons", mock_remove), \
-         patch("src.agent.nodes.interrupt", return_value="not_a_valid_payload"):
-        activate_topic({"chat_id": 456})
-
-    mock_remove.assert_called_once_with(456, 99)
-
-
-
-
+    mock_remove.assert_called_once_with(chat_id, 99)

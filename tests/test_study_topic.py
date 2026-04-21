@@ -15,9 +15,22 @@ Covers:
 
 import os
 import sqlite3
+import sys
 import tempfile
 from datetime import date
 from unittest.mock import MagicMock, patch
+
+# ---------------------------------------------------------------------------
+# Remove the conftest stub so we can import the real build_graph.
+# This must happen before any src.agent.graph import.
+# ---------------------------------------------------------------------------
+sys.modules.pop("src.agent.graph", None)
+
+from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
+from langgraph.types import Command  # noqa: E402
+
+import src.agent.nodes as _nodes  # noqa: E402
+from src.agent.graph import build_graph  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -59,6 +72,15 @@ def _make_get_connection(db_path: str):
         conn.row_factory = sqlite3.Row
         return conn
     return _get_connection
+
+
+def _make_test_graph():
+    """Build an isolated graph backed by a temporary SQLite checkpointer."""
+    fd, state_path = tempfile.mkstemp(suffix="_state.db")
+    os.close(fd)
+    conn = sqlite3.connect(state_path, check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
+    return build_graph(checkpointer=checkpointer)
 
 
 def _extract_categories(topic_names: list[str]) -> list[str]:
@@ -229,21 +251,38 @@ def test_tier3_never_shown_when_no_tier1_or_tier2():
 
 
 # ---------------------------------------------------------------------------
-# 7. study_topic_confirm sets status = 'in_progress'
+# 7. study_topic_confirm sets status = 'in_progress'  (full HITL graph)
 # ---------------------------------------------------------------------------
 
+def _get_topic_id(db_path: str, name: str) -> int:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT id FROM topics WHERE name = ?", (name,)).fetchone()
+    conn.close()
+    return row["id"]
+
+
 def test_study_topic_confirm_sets_in_progress():
-    """Calling study_topic_confirm sets the topic's status to 'in_progress' in the DB."""
+    """Invoking the full pick flow sets the topic's status to 'in_progress' in the DB."""
     path = _make_topics_db([
         {"name": "DSA - Arrays", "tier": 1, "status": "inactive"},
     ])
+    topic_id = _get_topic_id(path, "DSA - Arrays")
 
-    from src.agent import nodes as nodes_module
+    g = _make_test_graph()
+    chat_id = 6001
+    config = {"configurable": {"thread_id": str(chat_id)}}
 
     with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
-         patch.object(nodes_module._telegram, "send_message"):
-        from src.agent.nodes import study_topic_confirm
-        study_topic_confirm({"proposed_topic": "DSA - Arrays"})
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=10), \
+         patch.object(_nodes._telegram, "remove_buttons"), \
+         patch.object(_nodes._telegram, "send_message"):
+        # trigger=pick → study_topic sends category buttons → study_topic_category interrupts
+        g.invoke({"trigger": "pick", "chat_id": chat_id}, config=config)
+        # resume category → study_topic_category sends subtopic buttons → study_topic_confirm interrupts
+        g.invoke(Command(resume="category:DSA"), config=config)
+        # resume subtopic → study_topic_confirm sets in_progress → output → END
+        g.invoke(Command(resume=f"subtopic_id:{topic_id}"), config=config)
 
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
@@ -253,17 +292,27 @@ def test_study_topic_confirm_sets_in_progress():
 
 
 def test_study_topic_confirm_sends_confirmation_message():
-    """Confirmation message is set in state after marking topic in_progress."""
+    """Confirmation message is sent via Telegram after marking topic in_progress."""
     path = _make_topics_db([
         {"name": "DSA - Arrays", "tier": 1, "status": "inactive"},
     ])
+    topic_id = _get_topic_id(path, "DSA - Arrays")
 
-    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)):
-        from src.agent.nodes import study_topic_confirm
-        result = study_topic_confirm({"proposed_topic": "DSA - Arrays"})
+    g = _make_test_graph()
+    chat_id = 6002
+    config = {"configurable": {"thread_id": str(chat_id)}}
 
-    assert result.get("messages")
-    assert "DSA - Arrays" in result["messages"][0]
+    mock_send = MagicMock()
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=10), \
+         patch.object(_nodes._telegram, "remove_buttons"), \
+         patch.object(_nodes._telegram, "send_message", mock_send):
+        g.invoke({"trigger": "pick", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume="category:DSA"), config=config)
+        g.invoke(Command(resume=f"subtopic_id:{topic_id}"), config=config)
+
+    mock_send.assert_called_once()
+    assert "DSA - Arrays" in mock_send.call_args[0][0]
 
 
 def test_study_topic_confirm_no_op_when_already_in_progress():

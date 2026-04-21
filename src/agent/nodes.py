@@ -82,6 +82,7 @@ class AgentState(TypedDict, total=False):
     pending_weak_areas_message_id: int | None # message_id of last sent weak-areas prompt
     pending_category_message_id: int | None   # message_id of last sent category selector
     pending_topic_selection_message_id: int | None  # message_id of last sent topic selector
+    has_unlogged_sessions: bool | None        # True when done_parser / log_weak_areas queued a topic for rating
 
 
 # ---------------------------------------------------------------------------
@@ -122,12 +123,12 @@ def route_from_await_daily_confirmation(state: AgentState) -> str:
 
 def route_from_done_parser(state: AgentState) -> str:
     # Route to log_session when a topic was queued for rating
-    return "log_session" if state.get("pending_rating_message_id") else "output"
+    return "log_session" if state.get("has_unlogged_sessions") else "output"
 
 
 def route_from_log_weak_areas(state: AgentState) -> str:
-    # log_weak_areas sets pending_rating_message_id when more topics remain
-    return "log_session" if state.get("pending_rating_message_id") else "output"
+    # log_weak_areas sets has_unlogged_sessions when more topics remain
+    return "log_session" if state.get("has_unlogged_sessions") else "output"
 
 
 def route_from_on_demand(state: AgentState) -> str:
@@ -623,20 +624,20 @@ def done_parser(state: AgentState) -> AgentState:
     try:
         proposed_slots = state.get("proposed_slots") or []
         if not proposed_slots:
-            return {"messages": ["No study sessions were planned today."]}
+            return {"messages": ["No study sessions were planned today."], "has_unlogged_sessions": False}
 
         logged_names = session_repository.get_logged_topic_names_for_today()
         unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
 
         if not unlogged:
-            return {"messages": ["All sessions already logged for today."]}
+            return {"messages": ["All sessions already logged for today."], "has_unlogged_sessions": False}
 
         slot = unlogged[0]
         topic_name = slot["topic"]
         topic_id = topic_repository.get_topic_id_by_name(topic_name)
 
         if topic_id is None:
-            return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."]}
+            return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."], "has_unlogged_sessions": False}
 
         logger.info("done_parser: sending rating buttons for %s", topic_name)
         # Send rating buttons and return — interrupt lives in log_session
@@ -647,6 +648,7 @@ def done_parser(state: AgentState) -> AgentState:
             "current_topic_name": topic_name,
             "quality_score": None,
             "pending_rating_message_id": rating_msg_id,
+            "has_unlogged_sessions": True,
         }
 
     except Exception as e:
@@ -763,6 +765,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
                 "payload": None,
                 "pending_weak_areas_message_id": None,
                 "pending_rating_message_id": None,
+                "has_unlogged_sessions": False,
             }
 
         # More topics: send next rating buttons — interrupt lives in log_session
@@ -776,6 +779,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
                 "payload": None,
                 "pending_weak_areas_message_id": None,
                 "pending_rating_message_id": None,
+                "has_unlogged_sessions": False,
             }
 
         rating_msg_id = _telegram.send_buttons(
@@ -789,6 +793,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
             "payload": None,
             "pending_weak_areas_message_id": None,
             "pending_rating_message_id": rating_msg_id,
+            "has_unlogged_sessions": True,
         }
 
     except Exception as e:
