@@ -218,7 +218,6 @@ Triggered by `/done`. No structured paste required.
 |---|---|---|
 | `trigger` | str | Fresh flow routing signal |
 | `chat_id` | int | Telegram chat ID / LangGraph thread_id |
-| `message_id` | int | Telegram message_id for button removal |
 | `duration_min` | int | Requested session duration |
 | `proposed_topic` | str | Single-slot flow (on_demand) |
 | `proposed_slot` | dict | Single-slot flow (on_demand) |
@@ -230,11 +229,13 @@ Triggered by `/done`. No structured paste required.
 | `quality_score` | int | SM-2 rating: 2, 3, or 5 |
 | `messages` | list[str] | Outbound Telegram messages |
 | `study_topic_category` | str | Selected category in /pick flow |
-| `pending_subtopic_message_id` | int | message_id of last sent subtopic list |
-| `pending_picker_message_id` | int | message_id of last sent duration picker |
+| `pending_message_id` | int | message_id of the one button message currently awaiting user interaction |
+| `has_unlogged_sessions` | bool | True when a topic has been queued for rating in the done flow |
 
 **Removed from state:**
-- `awaiting_weak_areas` — no longer needed; HITL interrupt() replaces this flag
+- `awaiting_weak_areas` — replaced by HITL interrupt()
+- `message_id` — legacy field; button removal now happens in-node
+- `pending_subtopic_message_id`, `pending_picker_message_id`, `pending_booking_message_id`, `pending_rating_message_id`, `pending_weak_areas_message_id`, `pending_category_message_id`, `pending_topic_selection_message_id` — collapsed into single `pending_message_id`; at most one button message is ever active at a time in the sequential HITL pattern
 
 ---
 

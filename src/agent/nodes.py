@@ -62,7 +62,6 @@ def _load_topics() -> dict:
 class AgentState(TypedDict, total=False):
     trigger: str               # fresh flow routing signal
     chat_id: int
-    message_id: int | None     # Telegram message_id (legacy; button removal now happens in-node)
     duration_min: int | None
     proposed_topic: str | None          # single-slot flow (on_demand)
     proposed_slot: dict | None          # single-slot flow (on_demand)
@@ -75,14 +74,8 @@ class AgentState(TypedDict, total=False):
     current_topic_id: int | None
     current_topic_name: str | None
     study_topic_category: str | None    # selected category in /pick flow
-    pending_subtopic_message_id: int | None   # message_id of last sent subtopic list
-    pending_picker_message_id: int | None     # message_id of last sent duration picker
-    pending_booking_message_id: int | None    # message_id of last sent booking confirm prompt
-    pending_rating_message_id: int | None     # message_id of last sent rating buttons
-    pending_weak_areas_message_id: int | None # message_id of last sent weak-areas prompt
-    pending_category_message_id: int | None   # message_id of last sent category selector
-    pending_topic_selection_message_id: int | None  # message_id of last sent topic selector
-    has_unlogged_sessions: bool | None        # True when done_parser / log_weak_areas queued a topic for rating
+    pending_message_id: int | None      # message_id of the one button message currently awaiting user interaction
+    has_unlogged_sessions: bool | None  # True when done_parser / log_weak_areas queued a topic for rating
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +250,7 @@ def daily_planning(state: AgentState) -> AgentState:
 
         # Send buttons and return — interrupt happens in await_daily_confirmation
         msg_id = _telegram.send_buttons(message, ["Yes, book them", "Skip"])
-        base_state["pending_booking_message_id"] = msg_id
+        base_state["pending_message_id"] = msg_id
         return cast(AgentState, base_state)
 
     except Exception as e:
@@ -278,7 +271,7 @@ def await_daily_confirmation(state: AgentState) -> AgentState:
     """
     try:
         chat_id = state.get("chat_id")
-        msg_id = state.get("pending_booking_message_id")
+        msg_id = state.get("pending_message_id")
 
         booking_payload = interrupt("waiting for booking confirmation")
 
@@ -292,7 +285,7 @@ def await_daily_confirmation(state: AgentState) -> AgentState:
         booking_payload_lower = (booking_payload or "").lower().strip()
         return {
             "payload": booking_payload,
-            "pending_booking_message_id": None,
+            "pending_message_id": None,
             "messages": [] if booking_payload_lower == "yes, book them"
                         else ["Okay, no study blocks booked. See you tomorrow! 👋"],
         }
@@ -363,8 +356,8 @@ def send_duration_picker(state: AgentState) -> AgentState:
     try:
         chat_id = state.get("chat_id")
 
-        # Clean up stale picker
-        old_id = state.get("pending_picker_message_id")
+        # Clean up stale picker from a previous abandoned /study flow
+        old_id = state.get("pending_message_id")
         if old_id is not None and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, old_id)
@@ -373,7 +366,7 @@ def send_duration_picker(state: AgentState) -> AgentState:
 
         msg_id = _telegram.send_buttons("How long do you have?", ["30 min", "45 min", "60 min"])
         # Return msg_id — interrupt lives in on_demand so there's no duplicate send on resume
-        return {"pending_picker_message_id": msg_id}
+        return {"pending_message_id": msg_id}
 
     except Exception as e:
         if isinstance(e, GraphInterrupt):
@@ -389,7 +382,7 @@ def on_demand(state: AgentState) -> AgentState:
     """interrupt() is the very first statement so re-runs on resume are side-effect-free."""
     try:
         chat_id = state.get("chat_id")
-        picker_msg_id = state.get("pending_picker_message_id")
+        picker_msg_id = state.get("pending_message_id")
 
         # Interrupt at start — no side effects above this line
         duration_payload = interrupt("waiting for duration selection")
@@ -412,7 +405,7 @@ def on_demand(state: AgentState) -> AgentState:
             return {
                 "messages": ["🎉 Nothing due for review right now — enjoy your break!"],
                 "duration_min": duration_min,
-                "pending_picker_message_id": None,
+                "pending_message_id": None,
             }
 
         # Find a free window of the requested duration
@@ -446,7 +439,7 @@ def on_demand(state: AgentState) -> AgentState:
             "proposed_slot": proposed_slot,
             "has_study_plan": proposed_slot is not None,
             "duration_min": duration_min,
-            "pending_picker_message_id": None,
+            "pending_message_id": None,
         }
 
     except Exception as e:
@@ -478,7 +471,7 @@ def generate_brief(state: AgentState) -> AgentState:
         if state.get("has_study_plan") and state.get("proposed_slot"):
             # Send brief with booking buttons — interrupt lives in await_brief_confirmation
             msg_id = _telegram.send_buttons(brief, ["Yes, book them", "Skip"])
-            return {"pending_booking_message_id": msg_id, "messages": []}
+            return {"pending_message_id": msg_id, "messages": []}
         else:
             # No free slot — brief is the final output
             return {"messages": [brief]}
@@ -499,7 +492,7 @@ def await_brief_confirmation(state: AgentState) -> AgentState:
     """interrupt() is the very first statement — no duplicate sends on resume."""
     try:
         chat_id = state.get("chat_id")
-        msg_id = state.get("pending_booking_message_id")
+        msg_id = state.get("pending_message_id")
 
         booking_payload = interrupt("waiting for booking confirmation")
 
@@ -511,7 +504,7 @@ def await_brief_confirmation(state: AgentState) -> AgentState:
 
         return {
             "payload": booking_payload,
-            "pending_booking_message_id": None,
+            "pending_message_id": None,
             "messages": [],
         }
 
@@ -647,7 +640,7 @@ def done_parser(state: AgentState) -> AgentState:
             "current_topic_id": topic_id,
             "current_topic_name": topic_name,
             "quality_score": None,
-            "pending_rating_message_id": rating_msg_id,
+            "pending_message_id": rating_msg_id,
             "has_unlogged_sessions": True,
         }
 
@@ -666,7 +659,7 @@ def log_session(state: AgentState) -> AgentState:
     """interrupt() is first — on resume, no side-effects run before it."""
     try:
         chat_id = state.get("chat_id")
-        rating_msg_id = state.get("pending_rating_message_id")
+        rating_msg_id = state.get("pending_message_id")
         topic_id = state.get("current_topic_id")
         topic_name = state.get("current_topic_name") or "topic"
 
@@ -709,8 +702,7 @@ def log_session(state: AgentState) -> AgentState:
             "current_topic_name": topic_name,
             "quality_score": quality,
             "payload": None,
-            "pending_rating_message_id": None,
-            "pending_weak_areas_message_id": weak_areas_msg_id,
+            "pending_message_id": weak_areas_msg_id,
         }
 
     except Exception as e:
@@ -727,7 +719,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
     """interrupt() is first — on resume, no side-effects run before it."""
     try:
         chat_id = state.get("chat_id")
-        weak_areas_msg_id = state.get("pending_weak_areas_message_id")
+        weak_areas_msg_id = state.get("pending_message_id")
         topic_id = state.get("current_topic_id")
 
         # Interrupt at start — no side effects above this line
@@ -743,7 +735,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
         text = (weak_areas_payload or "").strip()
 
         if not topic_id:
-            return {"pending_weak_areas_message_id": None}
+            return {"pending_message_id": None}
 
         session_id = session_repository.get_today_session_id(topic_id)
 
@@ -763,8 +755,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
             return {
                 "messages": ["All sessions logged for today. Great work! 💪"],
                 "payload": None,
-                "pending_weak_areas_message_id": None,
-                "pending_rating_message_id": None,
+                "pending_message_id": None,
                 "has_unlogged_sessions": False,
             }
 
@@ -777,8 +768,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
             return {
                 "messages": [f"⚠️ Topic '{next_topic_name}' not found in database."],
                 "payload": None,
-                "pending_weak_areas_message_id": None,
-                "pending_rating_message_id": None,
+                "pending_message_id": None,
                 "has_unlogged_sessions": False,
             }
 
@@ -791,8 +781,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
             "current_topic_name": next_topic_name,
             "quality_score": None,
             "payload": None,
-            "pending_weak_areas_message_id": None,
-            "pending_rating_message_id": rating_msg_id,
+            "pending_message_id": rating_msg_id,
             "has_unlogged_sessions": True,
         }
 
@@ -825,8 +814,8 @@ def study_topic(state: AgentState) -> AgentState:
     try:
         chat_id = state.get("chat_id")
 
-        # Clean up any leftover subtopic list
-        old_msg_id = state.get("pending_subtopic_message_id")
+        # Clean up any leftover button message from a previous abandoned /pick flow
+        old_msg_id = state.get("pending_message_id")
         if old_msg_id is not None and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, old_msg_id)
@@ -838,7 +827,7 @@ def study_topic(state: AgentState) -> AgentState:
         available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
 
         if not available:
-            return {"messages": ["No inactive topics available to start studying."], "pending_subtopic_message_id": None}
+            return {"messages": ["No inactive topics available to start studying."], "pending_message_id": None}
 
         categories = sorted(set(
             r["name"].split(" - ")[0] if " - " in r["name"] else "Other"
@@ -850,8 +839,7 @@ def study_topic(state: AgentState) -> AgentState:
 
         # Send buttons and return — interrupt lives in study_topic_category
         return {
-            "pending_subtopic_message_id": None,
-            "pending_category_message_id": cat_msg_id,
+            "pending_message_id": cat_msg_id,
             "study_topic_category": None,  # clear any stale category
         }
 
@@ -859,7 +847,7 @@ def study_topic(state: AgentState) -> AgentState:
         logger.error("study_topic failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
-        return {"messages": [f"⚠️ Failed to load topics: {e}"], "pending_subtopic_message_id": None}
+        return {"messages": [f"⚠️ Failed to load topics: {e}"], "pending_message_id": None}
 
 
 # ---------------------------------------------------------------------------
@@ -870,7 +858,7 @@ def study_topic_category(state: AgentState) -> AgentState:
     """interrupt() is first — no duplicate category prompt on resume."""
     try:
         chat_id = state.get("chat_id")
-        cat_msg_id = state.get("pending_category_message_id")
+        cat_msg_id = state.get("pending_message_id")
 
         # Interrupt at start — no side effects above this line
         category_payload = interrupt("waiting for category selection")
@@ -895,7 +883,7 @@ def study_topic_category(state: AgentState) -> AgentState:
             subtopic_rows = [r for r in available if r["name"].startswith(f"{category} - ")]
 
         if not subtopic_rows:
-            return {"messages": [f"No topics found in category '{category}'."], "pending_category_message_id": None}
+            return {"messages": [f"No topics found in category '{category}'."], "pending_message_id": None}
 
         buttons = [(r["name"], f"subtopic_id:{r['id']}") for r in subtopic_rows]
         try:
@@ -903,21 +891,20 @@ def study_topic_category(state: AgentState) -> AgentState:
         except RuntimeError as e:
             if "timed out" in str(e).lower():
                 logger.warning("send_inline_buttons timed out: %s", e)
-                return {"messages": ["⚠️ Timed out while sending the topic list. Please retry /pick."], "pending_category_message_id": None}
+                return {"messages": ["⚠️ Timed out while sending the topic list. Please retry /pick."], "pending_message_id": None}
             raise
 
         # Send subtopic buttons and return — interrupt lives in study_topic_confirm
         return {
             "study_topic_category": category,
-            "pending_subtopic_message_id": subtopic_msg_id,
-            "pending_category_message_id": None,
+            "pending_message_id": subtopic_msg_id,
         }
 
     except Exception as e:
         logger.error("study_topic_category failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
-        return {"messages": [f"⚠️ Failed to load subtopics: {e}"], "pending_category_message_id": None}
+        return {"messages": [f"⚠️ Failed to load subtopics: {e}"], "pending_message_id": None}
 
 
 # ---------------------------------------------------------------------------
@@ -928,7 +915,7 @@ def study_topic_confirm(state: AgentState) -> AgentState:
     """interrupt() is first — no duplicate subtopic list on resume."""
     try:
         chat_id = state.get("chat_id")
-        subtopic_msg_id = state.get("pending_subtopic_message_id")
+        subtopic_msg_id = state.get("pending_message_id")
 
         # Interrupt at start — no side effects above this line
         subtopic_payload = interrupt("waiting for subtopic selection")
@@ -943,29 +930,29 @@ def study_topic_confirm(state: AgentState) -> AgentState:
         try:
             topic_id = int((subtopic_payload or "")[len("subtopic_id:"):])
         except (ValueError, TypeError):
-            return {"messages": ["⚠️ Invalid topic selection."], "pending_subtopic_message_id": None}
+            return {"messages": ["⚠️ Invalid topic selection."], "pending_message_id": None}
 
         resolved_name = topic_service.get_topic_name_by_id(topic_id)
         if resolved_name is None:
-            return {"messages": ["⚠️ Topic not found."], "pending_subtopic_message_id": None}
+            return {"messages": ["⚠️ Topic not found."], "pending_message_id": None}
 
         updated = topic_repository.set_topic_in_progress(resolved_name)
         if not updated:
-            return {"messages": [f"⚠️ Topic '{resolved_name}' not found or already in progress."], "pending_subtopic_message_id": None}
+            return {"messages": [f"⚠️ Topic '{resolved_name}' not found or already in progress."], "pending_message_id": None}
 
         return {
             "messages": [
                 f"✅ {resolved_name} added to In Progress. "
                 "It will be booked on your calendar tomorrow morning."
             ],
-            "pending_subtopic_message_id": None,
+            "pending_message_id": None,
         }
 
     except Exception as e:
         logger.error("study_topic_confirm failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
-        return {"messages": [f"⚠️ Failed to set topic in progress: {e}"], "pending_subtopic_message_id": None}
+        return {"messages": [f"⚠️ Failed to set topic in progress: {e}"], "pending_message_id": None}
 
 
 # ---------------------------------------------------------------------------
@@ -984,7 +971,7 @@ def activate_topic(state: AgentState) -> AgentState:
         topic_msg_id = _telegram.send_inline_buttons("Which topic did you just study?", buttons)
 
         # Send buttons and return — interrupt lives in graduate_topic
-        return {"pending_topic_selection_message_id": topic_msg_id}
+        return {"pending_message_id": topic_msg_id}
 
     except Exception as e:
         logger.error("activate_topic failed: %s", e, exc_info=True)
@@ -1001,7 +988,7 @@ def graduate_topic(state: AgentState) -> AgentState:
     """interrupt() is first — no duplicate topic list on resume."""
     try:
         chat_id = state.get("chat_id")
-        topic_msg_id = state.get("pending_topic_selection_message_id")
+        topic_msg_id = state.get("pending_message_id")
 
         # Interrupt at start — no side effects above this line
         studied_payload = interrupt("waiting for topic selection")
@@ -1014,12 +1001,12 @@ def graduate_topic(state: AgentState) -> AgentState:
                 pass
 
         if not isinstance(studied_payload, str) or not studied_payload.startswith("studied:"):
-            return {"messages": ["⚠️ Invalid topic selection."], "pending_topic_selection_message_id": None}
+            return {"messages": ["⚠️ Invalid topic selection."], "pending_message_id": None}
 
         try:
             topic_id = int(studied_payload[len("studied:"):])
         except ValueError:
-            return {"messages": ["⚠️ Invalid topic id."], "pending_topic_selection_message_id": None}
+            return {"messages": ["⚠️ Invalid topic id."], "pending_message_id": None}
 
         topic_name = topic_service.graduate_topic(topic_id)
         return {
@@ -1027,11 +1014,11 @@ def graduate_topic(state: AgentState) -> AgentState:
                 f"✅ {topic_name} graduated to active. "
                 "First SM-2 review scheduled for tomorrow."
             ],
-            "pending_topic_selection_message_id": None,
+            "pending_message_id": None,
         }
 
     except Exception as e:
         logger.error("graduate_topic failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
-        return {"messages": [f"⚠️ Failed to graduate topic: {e}"], "pending_topic_selection_message_id": None}
+        return {"messages": [f"⚠️ Failed to graduate topic: {e}"], "pending_message_id": None}
