@@ -271,7 +271,7 @@ src/
     telegram/
       handler.py         # Thin orchestrator: dedup + extract payload + dispatch
       intent_parser.py   # Payload normalization only
-      callback_handlers.py  # Telegram mechanics only (idempotency, remove_buttons)
+      callback_handlers.py  # Telegram mechanics only (idempotency guard + raw callback payload)
       message_handlers.py   # Command normalization + /help + /view direct responses
       dispatcher.py      # has_pending_interrupt() + bifurcation + invoke_safe()
       types.py           # Shared type definitions

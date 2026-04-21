@@ -172,8 +172,10 @@ def daily_planning(state: AgentState) -> AgentState:
 
         if is_evening:
             topics_config = _load_topics()
+            in_progress_topics = topic_repository.get_in_progress_topic_names()
             evening_state = build_evening_preview_state(
-                target_date, events, timed_events, due_topics, config, topics_config
+                target_date, events, timed_events, due_topics, config, topics_config,
+                in_progress_topics=in_progress_topics,
             )
             return cast(AgentState, evening_state)
 
@@ -861,14 +863,18 @@ def activate_topic(state: AgentState) -> AgentState:
         buttons = [(t["name"], f"studied:{t['id']}") for t in topics]
         topic_msg_id = _telegram.send_inline_buttons("Which topic did you just study?", buttons)
 
-        studied_payload = interrupt("waiting for topic selection")
+        try:
+            studied_payload = interrupt("waiting for topic selection")
+        finally:
+            # Remove buttons after resume, even if the resume payload is invalid.
+            if topic_msg_id and chat_id:
+                try:
+                    _telegram.remove_buttons(chat_id, topic_msg_id)
+                except Exception:
+                    pass
 
-        # Remove buttons after resume
-        if topic_msg_id and chat_id:
-            try:
-                _telegram.remove_buttons(chat_id, topic_msg_id)
-            except Exception:
-                pass
+        if not isinstance(studied_payload, str) or not studied_payload.startswith("studied:"):
+            return {"messages": ["⚠️ Invalid topic selection."]}
 
         return {"payload": studied_payload}
 
