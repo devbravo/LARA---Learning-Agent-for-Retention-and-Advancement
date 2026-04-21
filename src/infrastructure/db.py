@@ -20,32 +20,32 @@ def get_connection() -> sqlite3.Connection:
     Returns:
         ``sqlite3.Connection`` with ``row_factory`` set to ``sqlite3.Row``.
     """
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
 
 
 def init_db() -> None:
     """Create required tables and apply lightweight compatibility migrations."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with get_connection() as conn:
+    with get_connection() as db:
         # Migrate existing DB: add active column if missing
         try:
-            conn.execute("ALTER TABLE topics ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
-        except Exception:
+            db.execute("ALTER TABLE topics ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
             pass  # column already exists
 
         # Migrate existing DB: add status column if missing
         try:
-            conn.execute("ALTER TABLE topics ADD COLUMN status TEXT DEFAULT 'active'")
-        except Exception:
+            db.execute("ALTER TABLE topics ADD COLUMN status TEXT DEFAULT 'active'")
+        except sqlite3.OperationalError:
             pass  # column already exists
         try:
-            conn.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
-        except Exception:
+            db.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
+        except sqlite3.OperationalError:
             pass
 
-        conn.executescript("""
+        db.executescript("""
             CREATE TABLE IF NOT EXISTS topics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -93,8 +93,8 @@ def seed_topics() -> None:
 
     rows = [_map_status(t) for t in config["topics"]]
 
-    with get_connection() as conn:
-        conn.executemany(
+    with get_connection() as db:
+        db.executemany(
             """INSERT INTO topics (name, tier, status, next_review)
                VALUES (:name, :tier, :status, CASE WHEN :status = 'active' THEN date('now') ELSE NULL END)
                ON CONFLICT(name) DO UPDATE SET
@@ -113,8 +113,8 @@ if __name__ == "__main__":
     init_db()
     seed_topics()
 
-    with get_connection() as conn:
-        rows = conn.execute(
+    with get_connection() as db:
+        rows = db.execute(
             "SELECT id, name, tier, status, easiness_factor, interval_days, repetitions, next_review FROM topics ORDER BY tier, name"
         ).fetchall()
 
