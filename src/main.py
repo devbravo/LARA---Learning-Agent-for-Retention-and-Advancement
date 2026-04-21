@@ -4,23 +4,32 @@ Entry point for the LARA agent.
 Starts FastAPI (via uvicorn) and APScheduler in the same async process.
 """
 
+import os
+import signal
 import asyncio
 import logging
-import os
-from pathlib import Path
 
 import uvicorn
+from pathlib import Path
 from dotenv import load_dotenv
+
+from src.api.app import app
+
 
 load_dotenv(Path(__file__).parents[1] / ".env", override=True)
 
-from src.scheduler import build_scheduler
-from src.server import app
+_LOG_DIR = Path(__file__).parents[1] / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
+    handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler("logs/lara.log"),  # add this
+        ],
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
@@ -29,14 +38,7 @@ _PORT = int(os.environ.get("PORT", "8000"))
 
 
 async def main() -> None:
-    # --- Scheduler ---
-    scheduler = build_scheduler()
-    scheduler.start()
-
-    for job in scheduler.get_jobs():
-        logger.info("Scheduled: %s  next_run=%s", job.name, job.next_run_time)
-
-    # --- uvicorn (async, non-blocking) ---
+    """Run the uvicorn server with graceful signal-based shutdown handling."""
     config = uvicorn.Config(
         app=app,
         host=_HOST,
@@ -46,13 +48,23 @@ async def main() -> None:
     )
     server = uvicorn.Server(config)
 
-    logger.info("Starting LARA on %s:%s", _HOST, _PORT)
+    loop = asyncio.get_running_loop()
+
+    def _handle_exit() -> None:
+        logger.info("Shutting down Learning Manager…")
+        server.should_exit = True
 
     try:
-        await server.serve()
-    finally:
-        scheduler.shutdown(wait=False)
-        logger.info("Scheduler shut down.")
+        loop.add_signal_handler(signal.SIGTERM, _handle_exit)
+        loop.add_signal_handler(signal.SIGINT, _handle_exit)
+    except NotImplementedError:
+        logger.warning(
+            "Signal handlers are not supported by the current event loop/platform; "
+            "continuing without custom SIGTERM/SIGINT handlers."
+        )
+
+    logger.info("Starting LARA on %s:%s", _HOST, _PORT)
+    await server.serve()
 
 
 if __name__ == "__main__":

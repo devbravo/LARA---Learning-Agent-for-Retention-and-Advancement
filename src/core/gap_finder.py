@@ -1,6 +1,16 @@
+"""Pure-Python free-window calculation for study planning.
+
+Given calendar events, focus windows, and protected blocks, this module
+computes available study intervals and optional first-fit slots.
+"""
+
 from datetime import date, datetime, time
+from typing import Any
 
 MIN_WINDOW_MIN = 25
+
+BusyInterval = tuple[datetime, datetime]
+FreeWindow = dict[str, Any]
 
 
 def _time_to_dt(t_str: str, target_date: date) -> datetime:
@@ -15,12 +25,16 @@ def _parse_event_dt(dt_str: str) -> datetime:
     return dt.replace(tzinfo=None)
 
 
-def _subtract_busy(window_start: datetime, window_end: datetime, busy: list[tuple]) -> list[dict]:
+def _subtract_busy(
+    window_start: datetime,
+    window_end: datetime,
+    busy: list[BusyInterval],
+) -> list[FreeWindow]:
     """
     Return free sub-intervals within [window_start, window_end] after subtracting busy intervals.
     Results are filtered to >= MIN_WINDOW_MIN minutes.
     """
-    clipped = []
+    clipped: list[BusyInterval] = []
     for s, e in busy:
         s = max(s, window_start)
         e = min(e, window_end)
@@ -29,7 +43,7 @@ def _subtract_busy(window_start: datetime, window_end: datetime, busy: list[tupl
 
     clipped.sort()
 
-    gaps = []
+    gaps: list[BusyInterval] = []
     cursor = window_start
     for s, e in clipped:
         if cursor < s:
@@ -38,7 +52,7 @@ def _subtract_busy(window_start: datetime, window_end: datetime, busy: list[tupl
     if cursor < window_end:
         gaps.append((cursor, window_end))
 
-    result = []
+    result: list[FreeWindow] = []
     for s, e in gaps:
         dur = int((e - s).total_seconds() / 60)
         if dur >= MIN_WINDOW_MIN:
@@ -47,11 +61,11 @@ def _subtract_busy(window_start: datetime, window_end: datetime, busy: list[tupl
 
 
 def find_free_windows(
-    events: list[dict],
+    events: list[dict[str, Any]],
     target_date: date,
-    config: dict,
+    config: dict[str, Any],
     after_time: time | None = None,
-) -> list[dict]:
+) -> list[FreeWindow]:
     """
     Returns free study windows on target_date.
 
@@ -95,8 +109,19 @@ def find_free_windows(
     return result
 
 
-def find_slot_for_duration(free_windows: list[dict], duration_min: int) -> dict | None:
-    """Return the first free window large enough for duration_min. None if no fit."""
+def find_slot_for_duration(
+    free_windows: list[FreeWindow],
+    duration_min: int,
+) -> FreeWindow | None:
+    """Return the first free window large enough for ``duration_min``.
+
+    Args:
+        free_windows: Candidate windows returned by ``find_free_windows``.
+        duration_min: Required session duration in minutes.
+
+    Returns:
+        First matching window, or ``None`` when no interval is large enough.
+    """
     for window in free_windows:
         if window["duration_min"] >= duration_min:
             return window

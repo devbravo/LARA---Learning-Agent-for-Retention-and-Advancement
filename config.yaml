@@ -1,20 +1,24 @@
 schedule:
-  daily_planning:
+  weekday_planning:
     hour: 7
     minute: 0
     misfire_grace_time: 3600
-  sunday_planning:
-    hour: 9
+  weekend_brief:
+    hour: 10
     minute: 0
-    misfire_grace_time: 300
+    misfire_grace_time: 600
+  evening_brief:
+    hour: 22
+    minute: 12
+    misfire_grace_time: 600
 
 protected_blocks:
   - start: "15:00"
-    end: "19:30"
+    end: "19:00"
 
 focus_windows:
   - start: "08:00"
-    end: "09:00"
+    end: "10:00"
   - start: "10:00"
     end: "16:00"
 

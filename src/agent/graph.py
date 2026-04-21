@@ -1,14 +1,18 @@
 """
 LangGraph graph definition for the Learning Manager agent.
 
-Flow:
-  START → router → (conditional) → daily_planning | on_demand | done_parser | output
-  daily_planning  → confirm → END
-  on_demand       → generate_brief → confirm → END
-  done_parser     → END  (sends rating buttons directly, waits for tap via webhook)
-  rate trigger    → log_session → output → END  (log_session sends weak-areas prompt)
-  weak_areas      → log_weak_areas → output → END
-  output          → END
+Flow (HITL pattern — interrupt() replaces awaiting_* flags):
+
+  START → router → (conditional) → daily_planning | weekend_brief | send_duration_picker
+                                  | done_parser | study_topic | activate_topic | output
+
+  daily_planning (morning)  → interrupt() → book_events → output → END
+  daily_planning (skip/no-plan/evening) → output → END
+  weekend_brief             → output → END
+  send_duration_picker → interrupt() → on_demand → generate_brief → interrupt() → book_events → output → END
+  done_parser → interrupt() → log_session → interrupt() → log_weak_areas → (log_session | output) → END
+  study_topic → interrupt() → study_topic_category → interrupt() → study_topic_confirm → output → END
+  activate_topic → interrupt() → graduate_topic → output → END
 
 Checkpointer: SqliteSaver backed by db/state.db.
 Thread ID: chat_id from state (one thread per user).
@@ -16,6 +20,7 @@ Thread ID: chat_id from state (one thread per user).
 
 import sqlite3
 from pathlib import Path
+from typing import Any, cast
 
 from dotenv import load_dotenv
 
@@ -26,20 +31,31 @@ from langgraph.graph import END, START, StateGraph
 
 from src.agent.nodes import (
     AgentState,
-    generate_brief,
-    calendar_reader,
-    confirm,
+    activate_topic,
+    book_events,
     daily_planning,
     done_parser,
-    gap_finder,
+    generate_brief,
+    graduate_topic,
     log_session,
     log_weak_areas,
-    output,
-    route_from_daily_planning,
-    route_from_router,
-    router,
-    sm2_engine,
     on_demand,
+    output,
+    route_from_activate_topic,
+    route_from_daily_planning,
+    route_from_done_parser,
+    route_from_log_weak_areas,
+    route_from_generate_brief,
+    route_from_on_demand,
+    route_from_router,
+    route_from_study_topic,
+    route_from_study_topic_category,
+    router,
+    send_duration_picker,
+    study_topic,
+    study_topic_category,
+    study_topic_confirm,
+    weekend_brief,
 )
 
 _DB_DIR = Path(__file__).parents[2] / "db"
@@ -47,59 +63,104 @@ _STATE_DB_PATH = str(_DB_DIR / "state.db")
 
 
 def build_graph(checkpointer=None):
-    """
-    Construct and compile the LangGraph StateGraph.
-
-    Args:
-        checkpointer: Optional LangGraph checkpointer. Defaults to SqliteSaver.
-    """
-    builder = StateGraph(AgentState)
+    """Construct and compile the LangGraph StateGraph."""
+    builder: Any = StateGraph(cast(Any, AgentState))
 
     # Register all nodes
     builder.add_node("router", router)
     builder.add_node("daily_planning", daily_planning)
+    builder.add_node("weekend_brief", weekend_brief)
+    builder.add_node("send_duration_picker", send_duration_picker)
     builder.add_node("on_demand", on_demand)
     builder.add_node("done_parser", done_parser)
-    builder.add_node("calendar_reader", calendar_reader)
-    builder.add_node("sm2_engine", sm2_engine)
-    builder.add_node("gap_finder", gap_finder)
     builder.add_node("generate_brief", generate_brief)
-    builder.add_node("confirm", confirm)
     builder.add_node("log_session", log_session)
     builder.add_node("log_weak_areas", log_weak_areas)
     builder.add_node("output", output)
+    builder.add_node("book_events", book_events)
+    builder.add_node("study_topic", study_topic)
+    builder.add_node("study_topic_category", study_topic_category)
+    builder.add_node("study_topic_confirm", study_topic_confirm)
+    builder.add_node("activate_topic", activate_topic)
+    builder.add_node("graduate_topic", graduate_topic)
 
     # Entry point
     builder.add_edge(START, "router")
 
-    # Router → conditional branch
+    # Router → conditional branch (fresh triggers only)
     builder.add_conditional_edges(
         "router",
         route_from_router,
         {
-            "daily_planning": "daily_planning",
-            "on_demand": "on_demand",
-            "done_parser": "done_parser",
-            "output": "output",
-            "log_session": "log_session",
-            "log_weak_areas": "log_weak_areas",
+            "daily_planning":       "daily_planning",
+            "weekend_brief":        "weekend_brief",
+            "send_duration_picker": "send_duration_picker",
+            "done_parser":          "done_parser",
+            "study_topic":          "study_topic",
+            "activate_topic":       "activate_topic",
+            "output":               "output",
         },
     )
 
-    # Main flows
+    # Morning/evening briefing
     builder.add_conditional_edges(
         "daily_planning",
         route_from_daily_planning,
-        {"confirm": "confirm", "output": "output"},
+        {"book_events": "book_events", "output": "output"},
     )
-    builder.add_edge("on_demand", "generate_brief")
-    builder.add_edge("generate_brief", "confirm")
-    builder.add_edge("confirm", END)
 
-    # done flow
-    builder.add_edge("done_parser", END)
-    builder.add_edge("log_session", "output")
-    builder.add_edge("log_weak_areas", "output")
+    # Weekend brief
+    builder.add_edge("weekend_brief", "output")
+
+    # On-demand flow
+    builder.add_edge("send_duration_picker", "on_demand")
+    builder.add_conditional_edges(
+        "on_demand",
+        route_from_on_demand,
+        {"generate_brief": "generate_brief", "output": "output"},
+    )
+    builder.add_conditional_edges(
+        "generate_brief",
+        route_from_generate_brief,
+        {"book_events": "book_events", "output": "output"},
+    )
+
+    # Done / logging flow
+    builder.add_conditional_edges(
+        "done_parser",
+        route_from_done_parser,
+        {"log_session": "log_session", "output": "output"},
+    )
+    builder.add_edge("log_session", "log_weak_areas")
+    builder.add_conditional_edges(
+        "log_weak_areas",
+        route_from_log_weak_areas,
+        {"log_session": "log_session", "output": "output"},
+    )
+
+    # Pick a topic flow
+    builder.add_conditional_edges(
+        "study_topic",
+        route_from_study_topic,
+        {"study_topic_category": "study_topic_category", "output": "output"},
+    )
+    builder.add_conditional_edges(
+        "study_topic_category",
+        route_from_study_topic_category,
+        {"study_topic_confirm": "study_topic_confirm", "output": "output"},
+    )
+    builder.add_edge("study_topic_confirm", "output")
+
+    # Activate / graduate flow
+    builder.add_conditional_edges(
+        "activate_topic",
+        route_from_activate_topic,
+        {"graduate_topic": "graduate_topic", "output": "output"},
+    )
+    builder.add_edge("graduate_topic", "output")
+
+    # Shared terminal
+    builder.add_edge("book_events", "output")
     builder.add_edge("output", END)
 
     if checkpointer is None:
@@ -117,39 +178,36 @@ graph = build_graph()
 def get_state(chat_id: int) -> dict:
     """Read the latest checkpointed state for a given chat_id. Returns {} if none."""
     try:
-        config = {"configurable": {"thread_id": str(chat_id)}}
+        config = cast(Any, {"configurable": {"thread_id": str(chat_id)}})
         snapshot = graph.get_state(config)
         if snapshot and snapshot.values:
-            return snapshot.values
+            return cast(dict, snapshot.values)
         return {}
     except Exception:
         return {}
 
 
+def update_state(chat_id: int, values: dict) -> None:
+    """Write partial state values into the checkpoint for a given chat_id."""
+    config = cast(Any, {"configurable": {"thread_id": str(chat_id)}})
+    graph.update_state(config, values)
+
+
 def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
-    """
-    Convenience wrapper to invoke the graph.
-
-    Args:
-        trigger:  'daily' | 'on_demand' | 'done' | 'confirm'
-        chat_id:  Telegram chat ID (used as LangGraph thread_id)
-        **kwargs: Additional state fields (duration_min, messages, etc.)
-
-    Returns the final AgentState.
-    """
+    """Convenience wrapper to invoke the graph with a fresh trigger."""
     initial_state: AgentState = {
         "trigger": trigger,
         "chat_id": chat_id,
     }
-    # Only include kwargs that are explicitly provided — don't overwrite
-    # checkpointed state with None values
+    initial_state_dict: Any = initial_state
     for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot",
-                "quality_score", "messages", "current_topic_id", "current_topic_name"):
+                "quality_score", "messages", "current_topic_id", "current_topic_name",
+                "study_topic_category"):
         if kwargs.get(key) is not None:
-            initial_state[key] = kwargs[key]
+            initial_state_dict[key] = kwargs[key]
 
-    config = {"configurable": {"thread_id": str(chat_id)}}
-    return graph.invoke(initial_state, config=config)
+    config = cast(Any, {"configurable": {"thread_id": str(chat_id)}})
+    return cast(AgentState, graph.invoke(cast(Any, initial_state), config=config))
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +225,6 @@ if __name__ == "__main__":
     print(f"Learning Manager — Daily Briefing Dry Run ({date.today()})")
     print("=" * 60)
 
-    # Patch Telegram sends so nothing goes to the bot during dry run
     with patch("src.integrations.telegram_client.send_message") as mock_msg, \
          patch("src.integrations.telegram_client.send_buttons") as mock_btn:
 
@@ -178,17 +235,4 @@ if __name__ == "__main__":
 
         print("\n--- Morning Briefing ---\n")
         print(briefing)
-        print("\n--- State ---")
-        from src.agent.nodes import _fmt_time
-        slots = final_state.get("proposed_slots")
-        if slots:
-            for i, slot in enumerate(slots, 1):
-                t = f"{_fmt_time(slot['start'])}–{_fmt_time(slot['end'])} ({slot['duration_min']}min)"
-                print(f"  proposed_slots[{i}] : {slot['topic']} @ {t}")
-        else:
-            # on_demand fallback
-            print(f"  proposed_topic : {final_state.get('proposed_topic')}")
-            slot = final_state.get("proposed_slot")
-            if slot:
-                print(f"  proposed_slot  : {_fmt_time(slot['start'])}–{_fmt_time(slot['end'])} ({slot['duration_min']}min)")
         print("=" * 60)

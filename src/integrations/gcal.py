@@ -1,7 +1,15 @@
+"""Google Calendar integration for reading and creating study events.
+
+The write helpers create agent-owned events prefixed with ``[Mock]`` or
+``[Study]``. Read helpers return normalized event dictionaries used by planning
+nodes.
+"""
+
 import json
 import os
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -21,7 +29,11 @@ _CREDENTIALS_PATH = Path(
 _TOKEN_PATH = Path("credentials/token.json")
 
 
-def _get_service():
+def _get_service() -> Any:
+    """Build an authenticated Google Calendar service client.
+    Returns:
+        Google API service object for Calendar v3.
+    """
     required = {"GOOGLE_CALENDAR_ID", "GOOGLE_CREDENTIALS_PATH"}
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
@@ -48,9 +60,30 @@ def _get_service():
 
     return build("calendar", "v3", credentials=creds)
 
+def _should_skip_event(item: dict[str, Any]) -> bool:
+    """Return True if the authenticated user declined or is tentative on this event."""
+    attendees = item.get("attendees", [])
+    if not attendees:
+        return False
+    for attendee in attendees:
+        if attendee.get("self"):
+            return attendee.get("responseStatus") in ("declined", "tentative")
+    return False
 
-def get_events(day: date) -> list[dict]:
-    """Fetch all events for a given day from GOOGLE_CALENDAR_ID."""
+
+def get_events(day: date) -> list[dict[str, Any]]:
+    """Fetch all relevant events for a given day.
+
+    Args:
+        day: Target date to query in UTC day bounds.
+
+    Returns:
+        List of normalized event dictionaries containing id, summary, start,
+        end, and creator fields.
+
+    Raises:
+        RuntimeError: If the Google Calendar API request fails.
+    """
     calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
 
     time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
@@ -72,8 +105,10 @@ def get_events(day: date) -> list[dict]:
     except HttpError as e:
         raise RuntimeError(f"Google Calendar API error {e.resp.status}: {e.reason}") from e
 
-    events = []
+    events: list[dict[str, Any]] = []
     for item in result.get("items", []):
+        if _should_skip_event(item):
+            continue
         events.append({
             "id": item.get("id"),
             "summary": item.get("summary", "(No title)"),
@@ -84,16 +119,53 @@ def get_events(day: date) -> list[dict]:
     return events
 
 
-def write_event(topic: str, start: str, end: str) -> dict:
+def write_event(topic: str, start: str, end: str) -> dict[str, Any]:
     """
-    Create a new [Study] event on GOOGLE_CALENDAR_ID.
-
+    Create a new [Mock] event on GOOGLE_CALENDAR_ID.
     Args:
-        topic: Topic name — prefixed with '[Study]' automatically.
+        topic: Topic name — prefixed with '[Mock]' automatically.
         start: ISO-8601 datetime string (e.g. '2026-04-03T09:00:00').
         end:   ISO-8601 datetime string.
+    Returns:
+        Created event dictionary (id, summary, start, end, creator).
 
-    Returns the created event dict (id, summary, start, end, creator).
+    Raises:
+        RuntimeError: If the Google Calendar API request fails.
+    """
+    calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
+    body = {
+        "summary": f"[Mock] {topic}",
+        "description": "Booked by LARA - Personal Learning Assistant",
+        "start": {"dateTime": start, "timeZone": "UTC"},
+        "end": {"dateTime": end, "timeZone": "UTC"},
+    }
+    try:
+        service = _get_service()
+        created = service.events().insert(calendarId=calendar_id, body=body).execute()
+    except HttpError as e:
+        raise RuntimeError(f"Google Calendar API error {e.resp.status}: {e.reason}") from e
+
+    return {
+        "id": created.get("id"),
+        "summary": created.get("summary"),
+        "start": created.get("start", {}),
+        "end": created.get("end", {}),
+        "creator": created.get("creator", {}),
+    }
+
+
+def write_study_event(topic: str, start: str, end: str) -> dict[str, Any]:
+    """
+    Create a new [Study] event on GOOGLE_CALENDAR_ID.
+    Args:
+        topic: Topic name — prefixed with '[Study]' automatically.
+        start: ISO-8601 datetime string (e.g. '2026-04-03T08:00:00').
+        end:   ISO-8601 datetime string.
+    Returns:
+        Created event dictionary (id, summary, start, end, creator).
+
+    Raises:
+        RuntimeError: If the Google Calendar API request fails.
     """
     calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
     body = {

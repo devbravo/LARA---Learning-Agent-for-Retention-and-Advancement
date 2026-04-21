@@ -1,5 +1,13 @@
+"""SQLite helpers for schema initialization and topic seeding.
+
+This module owns local DB path constants, connection creation, and one-time
+bootstrap operations used in development/runtime startup flows.
+"""
+
 import sqlite3
 from pathlib import Path
+from typing import Any
+
 import yaml
 
 DB_PATH = Path(__file__).parents[2] / "db" / "learning.db"
@@ -7,12 +15,18 @@ TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
 
 
 def get_connection() -> sqlite3.Connection:
+    """Create a SQLite connection configured with row-name access.
+
+    Returns:
+        ``sqlite3.Connection`` with ``row_factory`` set to ``sqlite3.Row``.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db() -> None:
+    """Create required tables and apply lightweight compatibility migrations."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_connection() as conn:
         # Migrate existing DB: add active column if missing
@@ -40,7 +54,7 @@ def init_db() -> None:
                 easiness_factor REAL DEFAULT 2.5,
                 interval_days INTEGER DEFAULT 1,
                 repetitions INTEGER DEFAULT 0,
-                next_review DATE NOT NULL DEFAULT (date('now')),
+                next_review DATE DEFAULT NULL,
                 weak_areas TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -57,15 +71,23 @@ def init_db() -> None:
         """)
 
 
-def _map_status(topic: dict) -> dict:
-    """Map active boolean from topics.yaml to status string."""
-    t = dict(topic)
+def _map_status(topic: dict[str, Any]) -> dict[str, Any]:
+    """Normalize topic status from legacy ``active`` to ``status``.
+
+    Args:
+        topic: One topic object loaded from ``topics.yaml``.
+
+    Returns:
+        A copied topic mapping guaranteed to contain a ``status`` key.
+    """
+    t: dict[str, Any] = dict(topic)
     if "status" not in t:
         t["status"] = "active" if t.get("active", True) else "inactive"
     return t
 
 
 def seed_topics() -> None:
+    """Upsert topics from ``topics.yaml`` into the ``topics`` table."""
     with open(TOPICS_PATH) as f:
         config = yaml.safe_load(f)
 
@@ -73,11 +95,16 @@ def seed_topics() -> None:
 
     with get_connection() as conn:
         conn.executemany(
-            """INSERT INTO topics (name, tier, status)
-               VALUES (:name, :tier, :status)
+            """INSERT INTO topics (name, tier, status, next_review)
+               VALUES (:name, :tier, :status, CASE WHEN :status = 'active' THEN date('now') ELSE NULL END)
                ON CONFLICT(name) DO UPDATE SET
                    tier = excluded.tier,
-                   status = excluded.status""",
+                   status = excluded.status,
+                   next_review = CASE 
+                       WHEN excluded.status = 'active' AND topics.next_review IS NULL THEN date('now')
+                       WHEN excluded.status != 'active' THEN NULL
+                       ELSE topics.next_review
+                   END""",
             rows,
         )
 
