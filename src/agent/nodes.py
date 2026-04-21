@@ -235,7 +235,7 @@ def daily_planning(state: AgentState) -> AgentState:
         has_study_plan = bool(proposed_slots)
         message = "\n".join(lines + (["Confirm these mock interview blocks?"] if has_study_plan else ["No mock interview windows available today — calendar fully booked."]))
 
-        base_state: dict = {
+        base_state: AgentState = {
             "proposed_topic": proposed_topic,
             "proposed_slot": proposed_slot,
             "proposed_slots": proposed_slots if proposed_slots else None,
@@ -246,17 +246,17 @@ def daily_planning(state: AgentState) -> AgentState:
 
         if not has_study_plan:
             base_state["messages"] = [message]
-            return cast(AgentState, base_state)
+            return base_state
 
         # Send buttons and return — interrupt happens in await_daily_confirmation
         msg_id = _telegram.send_buttons(message, ["Yes, book them", "Skip"])
         base_state["pending_message_id"] = msg_id
-        return cast(AgentState, base_state)
+        return base_state
 
     except Exception as e:
         if isinstance(e, GraphInterrupt):
             raise
-        return cast(AgentState, {"messages": [f"⚠️ Daily briefing failed: {e}"]})
+        return {"messages": [f"⚠️ Daily briefing failed: {e}"]}
 
 
 # ---------------------------------------------------------------------------
@@ -279,8 +279,8 @@ def await_daily_confirmation(state: AgentState) -> AgentState:
         if msg_id and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         booking_payload_lower = (booking_payload or "").lower().strip()
         return {
@@ -300,7 +300,7 @@ def await_daily_confirmation(state: AgentState) -> AgentState:
 # Node: weekend_brief
 # ---------------------------------------------------------------------------
 
-def weekend_brief(state: AgentState) -> AgentState:
+def weekend_brief(_state: AgentState) -> AgentState:
     try:
         today = date.today()
         day_str = f"{today.strftime('%A %B')} {today.day}"
@@ -361,8 +361,8 @@ def send_duration_picker(state: AgentState) -> AgentState:
         if old_id is not None and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, old_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         msg_id = _telegram.send_buttons("How long do you have?", ["30 min", "45 min", "60 min"])
         # Return msg_id — interrupt lives in on_demand so there's no duplicate send on resume
@@ -391,8 +391,8 @@ def on_demand(state: AgentState) -> AgentState:
         if picker_msg_id and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, picker_msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         try:
             duration_min = int((duration_payload or "30 min").replace(" min", "").strip())
@@ -499,8 +499,8 @@ def await_brief_confirmation(state: AgentState) -> AgentState:
         if msg_id and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         return {
             "payload": booking_payload,
@@ -670,8 +670,8 @@ def log_session(state: AgentState) -> AgentState:
         if rating_msg_id and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, rating_msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         score_map = {"😕 hard": 2, "😐 ok": 3, "😊 easy": 5}
         quality = score_map.get((rating_payload or "").lower().strip(), 3)
@@ -729,13 +729,18 @@ def log_weak_areas(state: AgentState) -> AgentState:
         if weak_areas_msg_id and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, weak_areas_msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         text = (weak_areas_payload or "").strip()
 
         if not topic_id:
-            return {"pending_message_id": None}
+            return {
+                "pending_message_id": None,
+                "has_unlogged_sessions": False,
+                "current_topic_id": None,
+                "current_topic_name": None,
+            }
 
         session_id = session_repository.get_today_session_id(topic_id)
 
@@ -819,8 +824,8 @@ def study_topic(state: AgentState) -> AgentState:
         if old_msg_id is not None and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, old_msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         rows = topic_repository.get_inactive_topics_tier1_or2()
         tier1 = [r for r in rows if r["tier"] == 1]
@@ -867,8 +872,8 @@ def study_topic_category(state: AgentState) -> AgentState:
         if cat_msg_id and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, cat_msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         category = (category_payload or "")[len("category:"):] \
             if (category_payload or "").startswith("category:") else category_payload
@@ -924,8 +929,8 @@ def study_topic_confirm(state: AgentState) -> AgentState:
         if subtopic_msg_id and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, subtopic_msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         try:
             topic_id = int((subtopic_payload or "")[len("subtopic_id:"):])
@@ -966,7 +971,6 @@ def activate_topic(state: AgentState) -> AgentState:
         if not topics:
             return {"messages": ["No topics currently in progress."]}
 
-        chat_id = state.get("chat_id")
         buttons = [(t["name"], f"studied:{t['id']}") for t in topics]
         topic_msg_id = _telegram.send_inline_buttons("Which topic did you just study?", buttons)
 
@@ -997,8 +1001,8 @@ def graduate_topic(state: AgentState) -> AgentState:
         if topic_msg_id and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, topic_msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         if not isinstance(studied_payload, str) or not studied_payload.startswith("studied:"):
             return {"messages": ["⚠️ Invalid topic selection."], "pending_message_id": None}

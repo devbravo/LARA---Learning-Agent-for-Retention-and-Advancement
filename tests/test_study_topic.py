@@ -21,16 +21,19 @@ from datetime import date
 from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
-# Remove the conftest stub so we can import the real build_graph.
-# This must happen before any src.agent.graph import.
+# Temporarily remove the conftest stub so we can import the real build_graph,
+# then restore it so other tests that rely on the stub are unaffected.
 # ---------------------------------------------------------------------------
-sys.modules.pop("src.agent.graph", None)
+_graph_stub = sys.modules.pop("src.agent.graph", None)
 
 from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 
 import src.agent.nodes as _nodes  # noqa: E402
 from src.agent.graph import build_graph  # noqa: E402
+
+if _graph_stub is not None:
+    sys.modules["src.agent.graph"] = _graph_stub
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,10 +78,8 @@ def _make_get_connection(db_path: str):
 
 
 def _make_test_graph():
-    """Build an isolated graph backed by a temporary SQLite checkpointer."""
-    fd, state_path = tempfile.mkstemp(suffix="_state.db")
-    os.close(fd)
-    conn = sqlite3.connect(state_path, check_same_thread=False)
+    """Build an isolated graph backed by an in-memory SQLite checkpointer."""
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     checkpointer = SqliteSaver(conn)
     return build_graph(checkpointer=checkpointer)
 
