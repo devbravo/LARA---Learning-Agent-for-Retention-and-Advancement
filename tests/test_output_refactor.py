@@ -148,7 +148,7 @@ def test_book_events_sends_confirmation_after_booking():
         book_events(state)
     mock_send.assert_called_once()
     message = mock_send.call_args[0][0]
-    assert "✅ Booked 1 mock session(s)" in message
+    assert "🎯 Booked 1 mock session(s)" in message
     assert "DSA - Arrays" in message
 
 
