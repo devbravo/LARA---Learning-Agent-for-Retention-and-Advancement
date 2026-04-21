@@ -15,6 +15,8 @@ from src.core import sm2 as _sm2_mod
 
 import yaml
 
+from langgraph.types import interrupt
+
 from src.agent.formatting import (
     format_time,
     local_datetime_str,
@@ -36,6 +38,7 @@ from src.integrations import claude_api as _claude
 from src.integrations import gcal as _gcal
 from src.integrations import telegram_client as _telegram
 from src.repositories import session_repository, topic_repository
+from src.services import topic_service
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
 _TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
@@ -56,9 +59,9 @@ def _load_topics() -> dict:
 # ---------------------------------------------------------------------------
 
 class AgentState(TypedDict, total=False):
-    trigger: str               # "daily" | "evening" | "on_demand" | "done" | "confirm" | "rate" | "weak_areas" | "weekend"
+    trigger: str               # fresh flow routing signal
     chat_id: int
-    message_id: int | None              # Telegram message_id of the confirm keyboard
+    message_id: int | None     # Telegram message_id (legacy; button removal now happens in-node)
     duration_min: int | None
     proposed_topic: str | None          # single-slot flow (on_demand)
     proposed_slot: dict | None          # single-slot flow (on_demand)
@@ -67,26 +70,19 @@ class AgentState(TypedDict, total=False):
     preview_only: bool                  # True → evening briefing, route to output not confirm
     quality_score: int | None
     messages: list[str]        # outbound Telegram messages
-    awaiting_weak_areas: bool
+    payload: str | None        # raw resume value from interrupt()
     current_topic_id: int | None
     current_topic_name: str | None
-    study_topic_category: str | None    # selected category in /study_topic flow, e.g. "DSA"
-    pending_subtopic_message_id: int | None  # message_id of the last sent subtopic list (for cleanup)
-    pending_picker_message_id: int | None    # message_id of the last sent duration picker (for cleanup)
+    study_topic_category: str | None    # selected category in /pick flow
+    pending_subtopic_message_id: int | None  # message_id of last sent subtopic list
+    pending_picker_message_id: int | None    # message_id of last sent duration picker
+
 
 # ---------------------------------------------------------------------------
 # Node: router
 # ---------------------------------------------------------------------------
 
 def router(state: AgentState) -> AgentState:
-    """Validate the incoming trigger before graph routing.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        Empty update when trigger is present, otherwise an error message payload.
-    """
     trigger = state.get("trigger", "")
     if not trigger:
         return {"messages": ["⚠️ No trigger set — cannot route."]}
@@ -94,44 +90,67 @@ def router(state: AgentState) -> AgentState:
 
 
 def route_from_router(state: AgentState) -> str:
-    """Map a trigger string to the next graph node name.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        Graph node key used by conditional edges.
-    """
     trigger = state.get("trigger", "")
     mapping = {
-        "daily":                "daily_planning",
-        "evening":              "daily_planning",
-        "weekend":              "weekend_brief",
-        "on_demand":            "on_demand",
-        "done":                 "done_parser",
-        "confirm":              "book_events",
-        "rate":                 "log_session",
-        "weak_areas":           "log_weak_areas",
-        "study_topic":          "study_topic",
-        "study_topic_category": "study_topic_category",
-        "study_topic_confirm":  "study_topic_confirm",
+        "daily":    "daily_planning",
+        "evening":  "daily_planning",
+        "weekend":  "weekend_brief",
+        "study":    "send_duration_picker",
+        "done":     "done_parser",
+        "pick":     "study_topic",
+        "activate": "activate_topic",
     }
     return mapping.get(trigger, "output")
 
 
 def route_from_daily_planning(state: AgentState) -> str:
-    """Pick the next node after ``daily_planning``.
-
-    Args:
-        state: State returned by ``daily_planning``.
-
-    Returns:
-        ``output`` for preview/no-plan flows, otherwise ``confirm``.
-    """
-    if state.get("preview_only"):
+    if state.get("preview_only") or not state.get("has_study_plan"):
         return "output"
-    return "confirm" if state.get("has_study_plan") else "output"
+    payload = (state.get("payload") or "").lower().strip()
+    if payload == "yes, book them":
+        return "book_events"
+    return "output"
 
+
+def route_from_done_parser(state: AgentState) -> str:
+    if state.get("quality_score") is not None:
+        return "log_session"
+    return "output"
+
+
+def route_from_log_weak_areas(state: AgentState) -> str:
+    proposed_slots = state.get("proposed_slots") or []
+    logged_names = session_repository.get_logged_topic_names_for_today()
+    unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+    return "log_session" if unlogged else "output"
+
+
+def route_from_on_demand(state: AgentState) -> str:
+    return "generate_brief" if state.get("proposed_topic") else "output"
+
+
+def route_from_generate_brief(state: AgentState) -> str:
+    """Route to book_events only when a slot exists and user confirmed booking.
+
+    If no free slot was found (has_study_plan=False), the brief was already
+    sent directly — go straight to output with no booking step.
+    If a slot exists but user skipped, book_events handles the skip message.
+    """
+    if state.get("has_study_plan") and state.get("proposed_slot"):
+        return "book_events"
+    return "output"
+
+
+def route_from_activate_topic(state: AgentState) -> str:
+    return "graduate_topic" if state.get("payload") else "output"
+
+
+def route_from_study_topic(state: AgentState) -> str:
+    return "study_topic_category" if state.get("study_topic_category") else "output"
+
+
+def route_from_study_topic_category(state: AgentState) -> str:
+    return "study_topic_confirm" if state.get("proposed_topic") else "output"
 
 
 # ---------------------------------------------------------------------------
@@ -139,14 +158,6 @@ def route_from_daily_planning(state: AgentState) -> str:
 # ---------------------------------------------------------------------------
 
 def daily_planning(state: AgentState) -> AgentState:
-    """Build either the morning plan or evening preview payload.
-
-    Args:
-        state: Current partial agent state containing the trigger.
-
-    Returns:
-        Partial ``AgentState`` containing generated messages and planning fields.
-    """
     try:
         trigger = state.get("trigger", "daily")
         is_evening = trigger == "evening"
@@ -161,17 +172,17 @@ def daily_planning(state: AgentState) -> AgentState:
 
         if is_evening:
             topics_config = _load_topics()
+            in_progress_topics = topic_repository.get_in_progress_topic_names()
             evening_state = build_evening_preview_state(
-                target_date, events, timed_events, due_topics, config, topics_config
+                target_date, events, timed_events, due_topics, config, topics_config,
+                in_progress_topics=in_progress_topics,
             )
             return cast(AgentState, evening_state)
 
-        # --- Morning briefing: full interactive plan for today ---
+        # --- Morning briefing ---
         _TZ = pytz.timezone(config["timezone"])
         after_time = datetime.now(_TZ).time()
 
-        # Fetch in_progress topics BEFORE computing free windows so their
-        # [Study] blocks are treated as busy by gap_finder and don't overlap [Mock] slots.
         in_progress_topics = topic_repository.get_in_progress_topic_names()
 
         study_busy_events = build_missing_study_events(
@@ -209,7 +220,6 @@ def daily_planning(state: AgentState) -> AgentState:
                 )
             lines.append("")
 
-        # Auto-rebook [Study] events for in_progress topics
         rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
         assigned_names = {slot["topic"] for slot in proposed_slots}
@@ -224,28 +234,41 @@ def daily_planning(state: AgentState) -> AgentState:
             lines.append("")
 
         has_study_plan = bool(proposed_slots)
-        if has_study_plan:
-            lines.append("Confirm these mock interview blocks?")
-        else:
-            lines.append("No mock interview windows available today — calendar fully booked.")
+        message = "\n".join(lines + (["Confirm these mock interview blocks?"] if has_study_plan else ["No mock interview windows available today — calendar fully booked."]))
 
-        message = "\n".join(lines)
-        morning_payload: object = {
+        base_state: dict = {
             "proposed_topic": proposed_topic,
             "proposed_slot": proposed_slot,
             "proposed_slots": proposed_slots if proposed_slots else None,
             "has_study_plan": has_study_plan,
             "preview_only": False,
-            "messages": [message],
         }
-        morning_state = cast(AgentState, morning_payload)
-        return morning_state
+
+        if not has_study_plan:
+            base_state["messages"] = [message]
+            return cast(AgentState, base_state)
+
+        # Interactive path: send buttons and interrupt for user confirmation
+        chat_id = state.get("chat_id")
+        msg_id = _telegram.send_buttons(message, ["Yes, book them", "Skip"])
+        booking_payload = interrupt("waiting for booking confirmation")
+
+        # Remove buttons after resume
+        if msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, msg_id)
+            except Exception:
+                pass
+
+        booking_payload_lower = (booking_payload or "").lower().strip()
+        if booking_payload_lower != "yes, book them":
+            base_state["messages"] = ["Okay, no study blocks booked. See you tomorrow! 👋"]
+
+        base_state["payload"] = booking_payload
+        return cast(AgentState, base_state)
 
     except Exception as e:
-        error_payload: object = {"messages": [f"⚠️ Daily briefing failed: {e}"]}
-        error_state = cast(AgentState, error_payload)
-        return error_state
-
+        return cast(AgentState, {"messages": [f"⚠️ Daily briefing failed: {e}"]})
 
 
 # ---------------------------------------------------------------------------
@@ -253,18 +276,6 @@ def daily_planning(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def weekend_brief(state: AgentState) -> AgentState:
-    """Lightweight Sat/Sun morning brief.
-
-    No calendar writes, no slot packing. Shows SM-2 topics due today
-    (with weak areas focus) or falls back to in-progress topics.
-    Asks Diego what time block he has available.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        Partial AgentState with a single outbound message.
-    """
     try:
         today = date.today()
         day_str = f"{today.strftime('%A %B')} {today.day}"
@@ -313,18 +324,51 @@ def weekend_brief(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
+# Node: send_duration_picker
+# ---------------------------------------------------------------------------
+
+def send_duration_picker(state: AgentState) -> AgentState:
+    try:
+        chat_id = state.get("chat_id")
+
+        # Clean up stale picker
+        old_id = state.get("pending_picker_message_id")
+        if old_id is not None and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, old_id)
+            except Exception:
+                pass
+
+        msg_id = _telegram.send_buttons("How long do you have?", ["30 min", "45 min", "60 min"])
+
+        duration_payload = interrupt("waiting for duration selection")
+
+        # Remove buttons after resume
+        if msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, msg_id)
+            except Exception:
+                pass
+
+        try:
+            duration_min = int((duration_payload or "30 min").replace(" min", "").strip())
+        except (ValueError, AttributeError):
+            duration_min = 30
+
+        return {
+            "pending_picker_message_id": msg_id,
+            "duration_min": duration_min,
+        }
+
+    except Exception as e:
+        return {"messages": [f"⚠️ Duration picker failed: {e}"]}
+
+
+# ---------------------------------------------------------------------------
 # Node: on_demand
 # ---------------------------------------------------------------------------
 
 def on_demand(state: AgentState) -> AgentState:
-    """Prepare the on-demand study flow state.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        Partial state with selected topic and a status/brief-generation message.
-    """
     try:
         due_topics = _sm2.get_due_topics()
         topic = due_topics[0] if due_topics else None
@@ -332,12 +376,37 @@ def on_demand(state: AgentState) -> AgentState:
             return {"messages": ["🎉 Nothing due for review right now — enjoy your break!"]}
 
         duration_min = state.get("duration_min") or 30
+
+        # Find a free window of the requested duration
+        config = _load_config()
+        today = date.today()
+        events = _gcal.get_events(today)
+        _TZ = pytz.timezone(config["timezone"])
+        after_time = datetime.now(_TZ).time()
+        free_windows = _gap_finder.find_free_windows(events, today, config, after_time)
+
+        proposed_slot = None
+        for window in free_windows:
+            w_start = window["start"]
+            w_end = window["end"]
+            window_duration = (w_end.hour * 60 + w_end.minute) - (w_start.hour * 60 + w_start.minute)
+            if window_duration >= duration_min:
+                slot_end_min = w_start.hour * 60 + w_start.minute + duration_min
+                slot_end_h, slot_end_m = divmod(slot_end_min, 60)
+                proposed_slot = {
+                    "topic": topic["name"],
+                    "start": f"{w_start.hour:02d}:{w_start.minute:02d}",
+                    "end": f"{slot_end_h:02d}:{slot_end_m:02d}",
+                    "duration_min": duration_min,
+                }
+                break
+
         status = f"📚 Generating a {duration_min} min brief for {topic['name']}…"
         _telegram.send_message(status)
         return {
             "proposed_topic": topic["name"],
-            "has_study_plan": False,  # prevents confirm from treating stale proposed_slots as a booking flow
-            "messages": [status],
+            "proposed_slot": proposed_slot,
+            "has_study_plan": proposed_slot is not None,
         }
 
     except Exception as e:
@@ -345,96 +414,15 @@ def on_demand(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
-# Node: done_parser
-# ---------------------------------------------------------------------------
-
-def done_parser(state: AgentState) -> AgentState:
-    """Start the done-flow by prompting a rating for the next unlogged topic.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        State update with ``current_topic_id`` and ``current_topic_name`` when
-        a loggable topic is found, otherwise an empty update.
-    """
-    logger.info("done_parser: entered")
-
-    try:
-        proposed_slots = state.get("proposed_slots") or []
-        if not proposed_slots:
-            _telegram.send_message("No study sessions were planned today.")
-            return {}
-
-        # Detect mid-flow: a weak-areas prompt is still open.
-        # Check this BEFORE computing unlogged — the current topic may already be
-        # marked as logged (upsert_today_session ran in log_session), so unlogged[0]
-        # could be the next topic, not the one actually awaiting weak-area input.
-        if state.get("awaiting_weak_areas"):
-            pending_topic = state.get("current_topic_name") or "the current topic"
-            logger.info("done_parser: awaiting_weak_areas — sending reminder for %s", pending_topic)
-            _telegram.send_message(
-                f"⏳ Still waiting for your weak-areas reply on <b>{pending_topic}</b> — tap Skip or reply with text."
-            )
-            return {}
-
-        # Find topics already logged today
-        logged_names = session_repository.get_logged_topic_names_for_today()
-
-        unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
-        if not unlogged:
-            _telegram.send_message("All sessions already logged for today.")
-            return {}
-
-        slot = unlogged[0]
-        topic_name = slot["topic"]
-
-        topic_id = topic_repository.get_topic_id_by_name(topic_name)
-        if topic_id is None:
-            _telegram.send_message(f"⚠️ Topic '{topic_name}' not found in database.")
-            return {}
-
-        pending_name = state.get("current_topic_name")
-        if pending_name == topic_name:
-            logger.info("done_parser: rating already pending for %s — sending reminder", topic_name)
-            _telegram.send_message(
-                f"⏳ Still waiting for your rating on <b>{topic_name}</b> — tap a button above."
-            )
-            return {}
-
-        logger.info("done_parser: sending rating buttons for %s", topic_name)
-        _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
-        return {
-            "current_topic_id": topic_id,
-            "current_topic_name": topic_name,
-        }
-    except Exception as e:
-        logger.error("done_parser failed: %s", e, exc_info=True)
-        try:
-            _telegram.send_message(f"⚠️ Done flow failed: {e}")
-        except Exception:
-            pass
-        return {}
-
-
-# ---------------------------------------------------------------------------
 # Node: generate_brief
 # ---------------------------------------------------------------------------
 
 def generate_brief(state: AgentState) -> AgentState:
-    """Generate a study brief through Claude for the selected topic.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        State update containing the generated brief or a fallback message.
-    """
     try:
         topic = state.get("proposed_topic") or "General Study"
         duration_min = state.get("duration_min") or 30
+        chat_id = state.get("chat_id")
 
-        # Build context from weak_areas if available
         context = "General review"
         weak_areas = topic_repository.get_topic_weak_areas_by_name(topic)
         if weak_areas:
@@ -445,183 +433,29 @@ def generate_brief(state: AgentState) -> AgentState:
             duration_min=duration_min,
             context=context,
         )
-        return {"messages": state.get("messages", []) + [brief]}
+
+        if state.get("has_study_plan") and state.get("proposed_slot"):
+            # Send brief with booking buttons and wait for confirmation.
+            # Do NOT add to messages — output runs after book_events and
+            # must not re-send the brief.
+            msg_id = _telegram.send_buttons(brief, ["Yes, book them", "Skip"])
+            booking_payload = interrupt("waiting for booking confirmation")
+
+            if msg_id and chat_id:
+                try:
+                    _telegram.remove_buttons(chat_id, msg_id)
+                except Exception:
+                    pass
+
+            return {"payload": booking_payload}
+        else:
+            # No free slot found — brief is the final output; let output send it.
+            return {"messages": [brief]}
 
     except Exception as e:
         return {
-            "messages": state.get("messages", []) + [
-                f"⚠️ Could not generate brief: {e}\n"
-                "Proceeding with general study plan."
-            ]
+            "messages": [f"⚠️ Could not generate brief: {e}\nProceeding with general study plan."],
         }
-
-
-# ---------------------------------------------------------------------------
-# Node: confirm
-# ---------------------------------------------------------------------------
-
-def confirm(state: AgentState) -> AgentState:
-    """Send the assembled plan/brief to Telegram and wait for user action.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        Always an empty state update; follow-up happens on next webhook trigger.
-    """
-    messages = state.get("messages") or []
-    fallback_text = messages[-1] if messages else ""
-    try:
-        text = fallback_text or "Ready to study?"
-
-        if state.get("has_study_plan"):
-            # Daily briefing flow, needs confirmation before booking
-            _telegram.send_buttons(text, ["Yes, book them", "Skip"])
-        else:
-            # Study picker flow, no booking needed, just send the brief
-            _telegram.send_message(text)
-    except Exception as e:
-        try:
-            _telegram.send_message(f"⚠️ Button send failed: {e}\n\n{fallback_text}")
-        except Exception:
-            pass
-    return {}
-
-
-# ---------------------------------------------------------------------------
-# Node: log_session
-# ---------------------------------------------------------------------------
-
-def log_session(state: AgentState) -> AgentState:
-    """Persist today's session rating and prompt for weak areas.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        State update toggling ``awaiting_weak_areas`` on success, otherwise an
-        error message payload.
-    """
-    try:
-        topic_id = state.get("current_topic_id")
-        topic_name = state.get("current_topic_name") or "topic"
-        quality = state.get("quality_score") or 3
-
-        if not topic_id:
-            _telegram.send_message("⚠️ Cannot log session: missing topic.")
-            return {}
-
-        # Find duration from proposed_slots for this topic
-        proposed_slots = state.get("proposed_slots") or []
-        duration_min = 0
-        for slot in proposed_slots:
-            if slot["topic"] == topic_name:
-                duration_min = slot["duration_min"]
-                break
-
-        session_repository.upsert_today_session(
-            topic_id=topic_id,
-            duration_min=duration_min,
-            quality_score=quality,
-        )
-
-        _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=quality)
-
-        _telegram.send_buttons(
-            "Any weak areas to note? Reply with text or tap Skip.",
-            ["Skip"]
-        )
-        return {"awaiting_weak_areas": True}
-
-    except Exception as e:
-        return {"messages": [f"⚠️ Failed to log session: {e}"]}
-
-
-# ---------------------------------------------------------------------------
-# Node: log_weak_areas
-# ---------------------------------------------------------------------------
-
-def log_weak_areas(state: AgentState) -> AgentState:
-    """Persist weak-area notes and continue or close the done-flow loop.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        State update clearing ``awaiting_weak_areas`` and optionally pointing to
-        the next topic to rate.
-    """
-    try:
-        messages = state.get("messages") or []
-        text = messages[0].strip() if messages else ""
-        topic_id = state.get("current_topic_id")
-
-        if not topic_id:
-            _telegram.send_message("⚠️ Cannot log weak areas: missing topic.")
-            return {"awaiting_weak_areas": False}
-
-        session_id = session_repository.get_today_session_id(topic_id)
-
-        if text:
-            if session_id is not None:
-                session_repository.update_session_weak_areas(session_id, text)
-            topic_repository.update_topic_weak_areas(topic_id, text)
-        else:
-            # Skip — mark existing weak areas as resolved
-            topic_repository.update_topic_weak_areas(topic_id, None)
-
-        # Check for next unlogged slot
-        proposed_slots = state.get("proposed_slots") or []
-        logged_names = session_repository.get_logged_topic_names_for_today()
-
-        unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
-
-        if unlogged:
-            next_topic_name = unlogged[0]["topic"]
-            next_topic_id = topic_repository.get_topic_id_by_name(next_topic_name)
-
-            if next_topic_id is not None:
-                _telegram.send_buttons(
-                    f"How did {next_topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"]
-                )
-                return {
-                    "awaiting_weak_areas": False,
-                    "current_topic_id": next_topic_id,
-                    "current_topic_name": next_topic_name,
-                }
-
-        _telegram.send_message("All sessions logged for today. Great work! 💪")
-        return {"awaiting_weak_areas": False}
-
-    except Exception as e:
-        logger.error("log_weak_areas failed: %s", e, exc_info=True)
-        return {"messages": [f"⚠️ Failed to log weak areas: {e}"], "awaiting_weak_areas": False}
-
-
-# ---------------------------------------------------------------------------
-# Node: output
-# ---------------------------------------------------------------------------
-
-def output(state: AgentState) -> AgentState:
-    """Send the final Telegram message for non-confirm flows.
-
-    Used by daily_planning (no-plan / evening preview) and weekend_brief.
-    The ``skip`` trigger never reaches this node — it is short-circuited in
-    the webhook handler before graph invocation.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        Always an empty update after the side effect completes.
-    """
-    messages = state.get("messages") or []
-    if messages:
-        try:
-            _telegram.send_message(messages[-1])
-        except Exception as e:
-            logger.warning("[output] Telegram send failed: %s", e, exc_info=True)
-    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -629,18 +463,14 @@ def output(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def book_events(state: AgentState) -> AgentState:
-    """Write GCal mock events for confirmed slots and send booking confirmation.
+    payload = (state.get("payload") or "").lower().strip()
+    if payload == "skip":
+        try:
+            _telegram.send_message("Okay, no study blocks booked. See you tomorrow! 👋")
+        except Exception as e:
+            logger.warning("[book_events] Failed to send skip message: %s", e)
+        return {}
 
-    Handles both multi-slot (proposed_slots) and single-slot
-    (proposed_topic + proposed_slot) confirmation flows. Each slot is attempted
-    independently so one failure does not block the others.
-
-    Args:
-        state: Current partial agent state after the user confirmed the plan.
-
-    Returns:
-        Always an empty update after side effects complete.
-    """
     today = date.today()
     config = _load_config()
     tz = pytz.timezone(config["timezone"])
@@ -681,14 +511,6 @@ def book_events(state: AgentState) -> AgentState:
         except Exception as e:
             logger.warning("[book_events] Calendar write failed: %s", e, exc_info=True)
 
-    chat_id = state.get("chat_id")
-    message_id = state.get("message_id")
-    if chat_id and message_id:
-        try:
-            _telegram.remove_buttons(chat_id, message_id)
-        except Exception as e:
-            logger.warning("[book_events] remove_buttons failed: %s", e, exc_info=True)
-
     if booked:
         summary = "\n".join(f"  • {t}" for t in booked)
         try:
@@ -696,7 +518,6 @@ def book_events(state: AgentState) -> AgentState:
         except Exception as e:
             logger.warning("[book_events] Confirmation send failed: %s", e, exc_info=True)
     else:
-        # All calendar writes failed — tell the user so they can retry
         try:
             _telegram.send_message(
                 "⚠️ Could not book any sessions — Google Calendar may be unavailable. "
@@ -709,38 +530,206 @@ def book_events(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
+# Node: done_parser
+# ---------------------------------------------------------------------------
+
+def done_parser(state: AgentState) -> AgentState:
+    logger.info("done_parser: entered")
+
+    try:
+        proposed_slots = state.get("proposed_slots") or []
+        if not proposed_slots:
+            return {"messages": ["No study sessions were planned today."]}
+
+        logged_names = session_repository.get_logged_topic_names_for_today()
+        unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+
+        if not unlogged:
+            return {"messages": ["All sessions already logged for today."]}
+
+        slot = unlogged[0]
+        topic_name = slot["topic"]
+        topic_id = topic_repository.get_topic_id_by_name(topic_name)
+
+        if topic_id is None:
+            return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."]}
+
+        logger.info("done_parser: sending rating buttons for %s", topic_name)
+        chat_id = state.get("chat_id")
+        rating_msg_id = _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+
+        rating_payload = interrupt("waiting for rating")
+
+        if rating_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, rating_msg_id)
+            except Exception:
+                pass
+
+        score_map = {"😕 hard": 2, "😐 ok": 3, "😊 easy": 5}
+        quality = score_map.get((rating_payload or "").lower().strip(), 3)
+
+        return {
+            "current_topic_id": topic_id,
+            "current_topic_name": topic_name,
+            "quality_score": quality,
+        }
+
+    except Exception as e:
+        logger.error("done_parser failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Done flow failed: {e}"]}
+
+
+# ---------------------------------------------------------------------------
+# Node: log_session
+# ---------------------------------------------------------------------------
+
+def log_session(state: AgentState) -> AgentState:
+    try:
+        quality = state.get("quality_score")
+        topic_id = state.get("current_topic_id")
+        topic_name = state.get("current_topic_name") or "topic"
+
+        if quality is None or topic_id is None:
+            # Loop case: find next unlogged topic and get rating via interrupt
+            proposed_slots = state.get("proposed_slots") or []
+            logged_names = session_repository.get_logged_topic_names_for_today()
+            unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+
+            if not unlogged:
+                return {"messages": ["All sessions logged for today. Great work! 💪"]}
+
+            slot = unlogged[0]
+            topic_name = slot["topic"]
+            topic_id = topic_repository.get_topic_id_by_name(topic_name)
+
+            if topic_id is None:
+                return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."]}
+
+            chat_id = state.get("chat_id")
+            loop_rating_msg_id = _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+            rating_payload = interrupt("waiting for rating (loop)")
+
+            if loop_rating_msg_id and chat_id:
+                try:
+                    _telegram.remove_buttons(chat_id, loop_rating_msg_id)
+                except Exception:
+                    pass
+
+            score_map = {"😕 hard": 2, "😐 ok": 3, "😊 easy": 5}
+            quality = score_map.get((rating_payload or "").lower().strip(), 3)
+
+        # Find duration from proposed_slots
+        proposed_slots = state.get("proposed_slots") or []
+        duration_min = 0
+        for slot in proposed_slots:
+            if slot["topic"] == topic_name:
+                duration_min = slot["duration_min"]
+                break
+
+        chat_id = state.get("chat_id")
+        session_repository.upsert_today_session(
+            topic_id=topic_id,
+            duration_min=duration_min,
+            quality_score=quality,
+        )
+        _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=quality)
+
+        weak_areas_msg_id = _telegram.send_buttons(
+            "Any weak areas to note? Reply with text or tap Skip.",
+            ["Skip"]
+        )
+        weak_areas_payload = interrupt("waiting for weak areas")
+
+        if weak_areas_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, weak_areas_msg_id)
+            except Exception:
+                pass
+
+        return {
+            "current_topic_id": topic_id,
+            "current_topic_name": topic_name,
+            "quality_score": None,  # clear so next loop iteration finds next topic
+            "payload": weak_areas_payload,
+        }
+
+    except Exception as e:
+        return {"messages": [f"⚠️ Failed to log session: {e}"]}
+
+
+# ---------------------------------------------------------------------------
+# Node: log_weak_areas
+# ---------------------------------------------------------------------------
+
+def log_weak_areas(state: AgentState) -> AgentState:
+    try:
+        text = (state.get("payload") or "").strip()
+        topic_id = state.get("current_topic_id")
+
+        if not topic_id:
+            return {}
+
+        session_id = session_repository.get_today_session_id(topic_id)
+
+        if text and text.lower() != "skip":
+            if session_id is not None:
+                session_repository.update_session_weak_areas(session_id, text)
+            topic_repository.update_topic_weak_areas(topic_id, text)
+        else:
+            topic_repository.update_topic_weak_areas(topic_id, None)
+
+        # Check if more slots remain — set final message if done
+        proposed_slots = state.get("proposed_slots") or []
+        logged_names = session_repository.get_logged_topic_names_for_today()
+        unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+
+        if not unlogged:
+            return {"messages": ["All sessions logged for today. Great work! 💪"], "payload": None}
+
+        return {"payload": None}
+
+    except Exception as e:
+        logger.error("log_weak_areas failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Failed to log weak areas: {e}"], "payload": None}
+
+
+# ---------------------------------------------------------------------------
+# Node: output
+# ---------------------------------------------------------------------------
+
+def output(state: AgentState) -> AgentState:
+    messages = state.get("messages") or []
+    if messages:
+        try:
+            _telegram.send_message(messages[-1])
+        except Exception as e:
+            logger.warning("[output] Telegram send failed: %s", e, exc_info=True)
+    return {}
+
+
+# ---------------------------------------------------------------------------
 # Node: study_topic
 # ---------------------------------------------------------------------------
 
 def study_topic(state: AgentState) -> AgentState:
-    """Start the topic-picking flow by sending category buttons.
-
-    Cleans up any previously pending subtopic list before presenting
-    fresh category buttons, so abandoned /pick flows don't accumulate.
-
-    Args:
-        state: Current partial agent state.
-
-    Returns:
-        Empty state update; interaction continues through callback triggers.
-    """
     try:
-        # Clean up any leftover subtopic list from a previous abandoned /pick
+        chat_id = state.get("chat_id")
+
+        # Clean up any leftover subtopic list
         old_msg_id = state.get("pending_subtopic_message_id")
-        if old_msg_id is not None:
-            chat_id = state.get("chat_id")
+        if old_msg_id is not None and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, old_msg_id)
             except Exception:
-                pass  # already removed or expired — ignore
-        rows = topic_repository.get_inactive_topics_tier1_or2()
+                pass
 
+        rows = topic_repository.get_inactive_topics_tier1_or2()
         tier1 = [r for r in rows if r["tier"] == 1]
         available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
 
         if not available:
-            _telegram.send_message("No inactive topics available to start studying.")
-            return {}
+            return {"messages": ["No inactive topics available to start studying."], "pending_subtopic_message_id": None}
 
         categories = sorted(set(
             r["name"].split(" - ")[0] if " - " in r["name"] else "Other"
@@ -748,16 +737,27 @@ def study_topic(state: AgentState) -> AgentState:
         ))
 
         buttons = [(c, f"category:{c}") for c in categories]
-        _telegram.send_inline_buttons("Which category?", buttons)
-        return {"pending_subtopic_message_id": None}
+        cat_msg_id = _telegram.send_inline_buttons("Which category?", buttons)
+
+        category_payload = interrupt("waiting for category selection")
+
+        # Remove category buttons after resume
+        if cat_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, cat_msg_id)
+            except Exception:
+                pass
+
+        category = (category_payload or "")[len("category:"):] if (category_payload or "").startswith("category:") else category_payload
+
+        return {
+            "pending_subtopic_message_id": None,
+            "study_topic_category": category,
+        }
 
     except Exception as e:
         logger.error("study_topic failed: %s", e, exc_info=True)
-        try:
-            _telegram.send_message(f"⚠️ Failed to load topics: {e}")
-        except Exception:
-            pass
-        return {"pending_subtopic_message_id": None}
+        return {"messages": [f"⚠️ Failed to load topics: {e}"], "pending_subtopic_message_id": None}
 
 
 # ---------------------------------------------------------------------------
@@ -765,33 +765,14 @@ def study_topic(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def study_topic_category(state: AgentState) -> AgentState:
-    """Handle category selection and send matching topic buttons.
-
-    Args:
-        state: Current partial agent state containing ``study_topic_category``.
-
-    Returns:
-        Empty state update; interaction continues through callback triggers.
-    """
     try:
         category = state.get("study_topic_category")
         if not category:
-            _telegram.send_message("⚠️ No category selected.")
-            return {}
+            return {"messages": ["⚠️ No category selected."]}
 
-        # Remove the category buttons now that a selection has been made.
-        # Done here (not in the callback handler) so failures are logged and
-        # don't silently accumulate in a background executor task.
         chat_id = state.get("chat_id")
-        message_id = state.get("message_id")
-        if chat_id is not None and message_id is not None:
-            try:
-                _telegram.remove_buttons(chat_id, message_id)
-            except Exception as e:
-                logger.warning("study_topic_category: failed to remove category buttons: %s", e)
 
         rows = topic_repository.get_inactive_topics_tier1_or2()
-
         tier1 = [r for r in rows if r["tier"] == 1]
         available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
 
@@ -801,33 +782,43 @@ def study_topic_category(state: AgentState) -> AgentState:
             subtopic_rows = [r for r in available if r["name"].startswith(f"{category} - ")]
 
         if not subtopic_rows:
-            _telegram.send_message(f"No topics found in category '{category}'.")
-            return {}
+            return {"messages": [f"No topics found in category '{category}'."]}
 
         buttons = [(r["name"], f"subtopic_id:{r['id']}") for r in subtopic_rows]
         try:
-            sent_msg_id = _telegram.send_inline_buttons("Which topic?", buttons)
+            subtopic_msg_id = _telegram.send_inline_buttons("Which topic?", buttons)
         except RuntimeError as e:
             if "timed out" in str(e).lower():
-                # Telegram likely delivered the message despite the timeout — log and continue
-                logger.warning(
-                    "send_inline_buttons timed out; not treating subtopic list as delivered: %s",
-                    e,
-                )
-                try:
-                    _telegram.send_message("⚠️ Timed out while sending the topic list. Please retry /pick.")
-                except Exception:
-                    pass
-                return {}
+                logger.warning("send_inline_buttons timed out: %s", e)
+                return {"messages": ["⚠️ Timed out while sending the topic list. Please retry /pick."]}
             raise
-        return {"pending_subtopic_message_id": sent_msg_id}
+
+        subtopic_payload = interrupt("waiting for subtopic selection")
+
+        # Remove subtopic buttons after resume
+        if subtopic_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, subtopic_msg_id)
+            except Exception:
+                pass
+
+        try:
+            topic_id = int((subtopic_payload or "")[len("subtopic_id:"):])
+        except (ValueError, TypeError):
+            return {"messages": ["⚠️ Invalid topic selection."]}
+
+        resolved_name = topic_service.get_topic_name_by_id(topic_id)
+        if resolved_name is None:
+            return {"messages": [f"⚠️ Topic not found."]}
+
+        return {
+            "pending_subtopic_message_id": subtopic_msg_id,
+            "proposed_topic": resolved_name,
+        }
+
     except Exception as e:
         logger.error("study_topic_category failed: %s", e, exc_info=True)
-        try:
-            _telegram.send_message(f"⚠️ Failed to load subtopics: {e}")
-        except Exception:
-            pass
-        return {}
+        return {"messages": [f"⚠️ Failed to load subtopics: {e}"]}
 
 
 # ---------------------------------------------------------------------------
@@ -835,45 +826,87 @@ def study_topic_category(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def study_topic_confirm(state: AgentState) -> AgentState:
-    """Mark the selected topic as ``in_progress`` and notify the user.
-
-    Args:
-        state: Current partial agent state containing ``proposed_topic``.
-
-    Returns:
-        Empty state update after DB write + Telegram side effects.
-    """
     try:
         topic_name = state.get("proposed_topic")
         if not topic_name:
-            _telegram.send_message("⚠️ No topic selected.")
-            return {}
-
-        pending_subtopic_message_id = state.get("pending_subtopic_message_id")
-        if pending_subtopic_message_id is not None:
-            chat_id = state.get("chat_id")
-            try:
-                _telegram.remove_buttons(chat_id, pending_subtopic_message_id)
-            except Exception as e:
-                logger.warning("study_topic_confirm: failed to remove subtopic buttons: %s", e)
+            return {"messages": ["⚠️ No topic selected."]}
 
         updated = topic_repository.set_topic_in_progress(topic_name)
         if not updated:
-            _telegram.send_message(
-                f"⚠️ Topic '{topic_name}' not found or already in progress."
-            )
-            return {}
+            return {"messages": [f"⚠️ Topic '{topic_name}' not found or already in progress."]}
 
-        _telegram.send_message(
-            f"✅ {topic_name} added to In Progress. "
-            "It will be booked on your calendar tomorrow morning."
-        )
-        return {"pending_subtopic_message_id": None}
+        return {
+            "messages": [
+                f"✅ {topic_name} added to In Progress. "
+                "It will be booked on your calendar tomorrow morning."
+            ],
+            "pending_subtopic_message_id": None,
+        }
 
     except Exception as e:
         logger.error("study_topic_confirm failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Failed to set topic in progress: {e}"]}
+
+
+# ---------------------------------------------------------------------------
+# Node: activate_topic
+# ---------------------------------------------------------------------------
+
+def activate_topic(state: AgentState) -> AgentState:
+    try:
+        topics = topic_service.get_in_progress_topics()
+
+        if not topics:
+            return {"messages": ["No topics currently in progress."]}
+
+        chat_id = state.get("chat_id")
+        buttons = [(t["name"], f"studied:{t['id']}") for t in topics]
+        topic_msg_id = _telegram.send_inline_buttons("Which topic did you just study?", buttons)
+
         try:
-            _telegram.send_message(f"⚠️ Failed to set topic in progress: {e}")
-        except Exception:
-            pass
-        return {}
+            studied_payload = interrupt("waiting for topic selection")
+        finally:
+            # Remove buttons after resume, even if the resume payload is invalid.
+            if topic_msg_id and chat_id:
+                try:
+                    _telegram.remove_buttons(chat_id, topic_msg_id)
+                except Exception:
+                    pass
+
+        if not isinstance(studied_payload, str) or not studied_payload.startswith("studied:"):
+            return {"messages": ["⚠️ Invalid topic selection."]}
+
+        return {"payload": studied_payload}
+
+    except Exception as e:
+        logger.error("activate_topic failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Failed to load in-progress topics: {e}"]}
+
+
+# ---------------------------------------------------------------------------
+# Node: graduate_topic
+# ---------------------------------------------------------------------------
+
+def graduate_topic(state: AgentState) -> AgentState:
+    try:
+        payload = state.get("payload") or ""
+
+        if not payload.startswith("studied:"):
+            return {"messages": ["⚠️ Invalid topic selection."]}
+
+        try:
+            topic_id = int(payload[len("studied:"):])
+        except ValueError:
+            return {"messages": ["⚠️ Invalid topic id."]}
+
+        topic_name = topic_service.graduate_topic(topic_id)
+        return {
+            "messages": [
+                f"✅ {topic_name} graduated to active. "
+                "First SM-2 review scheduled for tomorrow."
+            ]
+        }
+
+    except Exception as e:
+        logger.error("graduate_topic failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Failed to graduate topic: {e}"]}

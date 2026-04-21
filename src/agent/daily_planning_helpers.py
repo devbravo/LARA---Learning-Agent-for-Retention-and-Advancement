@@ -11,7 +11,7 @@ from src.agent.formatting import (
     format_time,
     topic_due_label,
 )
-from src.agent.planning_helpers import get_prebooked_topics, get_topic_config
+from src.agent.planning_helpers import build_in_progress_study_slots, get_prebooked_topics, get_topic_config
 from src.core import gap_finder as _gap_finder
 
 if TYPE_CHECKING:
@@ -39,7 +39,33 @@ def append_calendar_lines(lines: list[str], timed_events: list[dict], empty_labe
     lines.append("")
 
 
-def append_evening_study_window_lines(
+def append_in_progress_lines(
+    lines: list[str],
+    in_progress_topics: list[str],
+    timed_events: list[dict],
+    target_date: date,
+) -> None:
+    """Append the in-progress [Study] section to a message being assembled.
+
+    Args:
+        lines: Mutable list of message lines to append to.
+        in_progress_topics: Topic names currently marked ``in_progress``.
+        timed_events: Timed calendar events for the target date.
+        target_date: Date being previewed (used for fallback slot times).
+    """
+    if not in_progress_topics:
+        return
+    slots = build_in_progress_study_slots(in_progress_topics, timed_events, target_date)
+    if slots:
+        lines.append("⏳ In Progress:")
+        for slot in slots:
+            lines.append(
+                f"• {slot['start']}–{slot['end']} [Study] {slot['topic']} ({slot['duration_min']}min)"
+            )
+        lines.append("")
+
+
+def append_evening_mock_block_lines(
     lines: list[str],
     target_date: date,
     events: list[dict],
@@ -64,7 +90,7 @@ def append_evening_study_window_lines(
     available_topics = [t for t in due_topics if t["name"] not in prebooked]
 
     if free_windows:
-        lines.append("🧠 Study windows:")
+        lines.append("🎯 Mock interview blocks:")
         for i, win in enumerate(free_windows):
             topic = available_topics[i] if i < len(available_topics) else None
             if topic is None:
@@ -76,9 +102,11 @@ def append_evening_study_window_lines(
             start_dt = datetime.combine(target_date, win["start"])
             end_dt = start_dt + timedelta(minutes=duration)
             t_end = format_time(end_dt.time())
-            lines.append(f"• {t_start}–{t_end} → {topic['name']} ({duration}min)")
+            lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
+            if topic.get("weak_areas"):
+                lines.append(f"  ⚠️ Focus on: {topic['weak_areas']}")
     else:
-        lines.append("🧠 Study windows: None found for tomorrow")
+        lines.append("🎯 Mock interview blocks: None found for tomorrow")
     lines.append("")
 
 
@@ -93,8 +121,7 @@ def append_sm2_pick_lines(lines: list[str], due_topics: list[dict]) -> None:
         lines.append("📌 SM-2 picks tomorrow:")
         for i, topic in enumerate(due_topics, 1):
             label = topic_due_label(topic)
-            ef = topic["easiness_factor"]
-            lines.append(f"• {i}. {topic['name']} — {label} (EF: {ef})")
+            lines.append(f"• {i}. {topic['name']} — {label}")
         lines.append("")
 
 
@@ -176,6 +203,7 @@ def build_evening_preview_state(
     due_topics: list[dict],
     config: dict,
     topics_config: dict,
+    in_progress_topics: list[str] | None = None,
 ) -> "AgentState":
     """Build the read-only evening preview state payload.
 
@@ -186,6 +214,7 @@ def build_evening_preview_state(
         due_topics: Topics returned by SM-2 for the target date.
         config: Runtime config values from ``config.yaml``.
         topics_config: Topic metadata loaded from ``topics.yaml``.
+        in_progress_topics: Topic names currently marked ``in_progress``.
 
     Returns:
         A partial ``AgentState`` with preview flags and a single composed message.
@@ -193,7 +222,8 @@ def build_evening_preview_state(
     day_str = f"{target_date.strftime('%A %B')} {target_date.day}"
     lines = [f"🌙 Tomorrow's plan — {day_str}", ""]
     append_calendar_lines(lines, timed_events, "📅 Your day: No meetings tomorrow")
-    append_evening_study_window_lines(
+    append_in_progress_lines(lines, in_progress_topics or [], timed_events, target_date)
+    append_evening_mock_block_lines(
         lines,
         target_date,
         events,
@@ -202,7 +232,6 @@ def build_evening_preview_state(
         config,
         topics_config,
     )
-    append_sm2_pick_lines(lines, due_topics)
     lines.append("No confirmation needed — this is your preview for tomorrow.")
     return {
         "preview_only": True,

@@ -1,15 +1,19 @@
-"""Webhook dispatch utilities: deduplication, idempotency, and safe invocation.
+"""Webhook dispatch utilities: deduplication, idempotency, and HITL-safe invocation.
 
-This module centralizes mutable in-memory state used by webhook handling:
+This module centralises mutable in-memory state used by webhook handling:
 - seen update ids (duplicate delivery guard),
 - in-flight / confirmed message ids (repeat-tap idempotency),
-- safe graph invocation that never propagates exceptions to executor threads.
+- safe graph invocation supporting both fresh triggers and Command(resume=…).
+
+The only place in the HTTP layer that reads graph state — solely to check
+has_pending_interrupt() before deciding between fresh invoke and resume.
 """
 
 import logging
-import os
 import threading
 from typing import Any
+
+from langgraph.types import Command
 
 from src.agent import graph as _graph
 
@@ -25,19 +29,13 @@ _in_flight_message_ids: set[int] = set()
 _MAX_CONFIRMED = 1000
 _confirm_lock = threading.Lock()
 
-# Per-chat in-flight lock — prevents concurrent graph invocations for the same chat_id
-# (e.g. double-delivered weak_areas webhooks)
+# Per-chat in-flight lock
 _chat_in_flight: set[int] = set()
 _chat_lock = threading.Lock()
 
 
 def is_duplicate(update_id: int) -> bool:
-    """Check whether an update id has already been processed.
-    Args:
-        update_id: Telegram ``update_id``.
-    Returns:
-        ``True`` if the id was already seen; ``False`` if newly registered.
-    """
+    """Return True if update_id was already processed; register it otherwise."""
     if update_id in _processed_updates:
         return True
     _processed_updates.add(update_id)
@@ -47,13 +45,7 @@ def is_duplicate(update_id: int) -> bool:
 
 
 def try_mark_in_flight(message_id: int) -> bool:
-    """Attempt to claim a message id for single processing.
-    Args:
-        message_id: Telegram message id associated with callback buttons.
-    Returns:
-        ``False`` when already in-flight/confirmed (repeat tap), otherwise
-        ``True`` after marking the id as in-flight.
-    """
+    """Claim message_id for single processing. Returns False on duplicate tap."""
     with _confirm_lock:
         if message_id in _confirmed_message_ids or message_id in _in_flight_message_ids:
             return False
@@ -62,10 +54,7 @@ def try_mark_in_flight(message_id: int) -> bool:
 
 
 def mark_confirmed(message_id: int) -> None:
-    """Mark a message id as confirmed and clear its in-flight state.
-    Args:
-        message_id: Telegram message id that completed successfully.
-    """
+    """Move message_id from in-flight to confirmed."""
     with _confirm_lock:
         _in_flight_message_ids.discard(message_id)
         _confirmed_message_ids.add(message_id)
@@ -74,66 +63,85 @@ def mark_confirmed(message_id: int) -> None:
 
 
 def clear_in_flight(message_id: int) -> None:
-    """Remove a message id from in-flight tracking.
-    Args:
-        message_id: Telegram message id to release, typically on error.
-    """
+    """Release message_id from in-flight tracking (e.g. on error)."""
     with _confirm_lock:
         _in_flight_message_ids.discard(message_id)
 
 
-def invoke_safe(trigger: str, chat_id: int, **kwargs: Any) -> None:
-    """Invoke the graph while preventing thread-level crashes.
-    Args:
-        trigger: Graph trigger to invoke.
-        chat_id: Telegram chat id used as LangGraph thread id.
-        **kwargs: Optional state payload forwarded to graph invocation.
-    Notes:
-        On success, eligible message ids are moved to confirmed state.
-        On failure, in-flight state is cleared and the exception is logged.
-    """
-    message_id: int | None = kwargs.get("message_id")
+def has_pending_interrupt(state: Any) -> bool:
+    """Return True when the graph is paused at an interrupt() call."""
+    tasks = getattr(state, "tasks", [])
+    return any(getattr(t, "interrupts", None) for t in tasks)
 
-    # Serialize all done-flow triggers per chat to prevent the race condition where
-    # the user taps a rating button before the previous node's checkpoint write completes,
-    # causing log_session to read a stale current_topic_id.
-    # Also prevents double-delivery of weak_areas text messages.
-    if trigger in ("done", "rate", "weak_areas", "study_topic", "study_topic_category"):
-        wait_event = threading.Event()
-        logged_wait = False
-        while True:
-            with _chat_lock:
-                if chat_id not in _chat_in_flight:
-                    _chat_in_flight.add(chat_id)
-                    break
-            if not logged_wait:
-                logger.info(
-                    "Waiting for prior %s invocation to finish for chat_id=%s",
-                    trigger, chat_id,
-                )
-                logged_wait = True
-            wait_event.wait(0.05)
+
+def resolve_trigger(payload: str) -> str:
+    """Map a command string to its graph trigger name."""
+    mapping = {
+        "/done":     "done",
+        "/study":    "study",
+        "/plan":     "daily",
+        "/pick":     "pick",
+        "/activate": "activate",
+    }
+    return mapping.get(payload.lower().strip(), payload)
+
+
+def invoke_safe(chat_id: int, payload: str, message_id: int | None = None, **kwargs: Any) -> None:
+    """Invoke the graph safely, choosing resume vs fresh based on interrupt state.
+
+    Reads graph state once to check has_pending_interrupt(). If an interrupt
+    is pending, resumes with Command(resume=payload). Otherwise resolves payload
+    to a trigger and starts a fresh invocation.
+
+    If message_id is provided (callback button tap), confirms it on success or
+    releases it on failure so the user can retry after transient errors.
+    """
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
+    # Serialize per-chat to prevent race conditions on concurrent webhooks
+    wait_event = threading.Event()
+    logged_wait = False
+    while True:
+        with _chat_lock:
+            if chat_id not in _chat_in_flight:
+                _chat_in_flight.add(chat_id)
+                break
+        if not logged_wait:
+            logger.info("Waiting for prior invocation to finish for chat_id=%s", chat_id)
+            logged_wait = True
+        wait_event.wait(0.05)
 
     try:
-        logger.info("Invoking graph: trigger=%s, chat_id=%s", trigger, chat_id)
-        _graph.invoke(trigger=trigger, chat_id=chat_id, **kwargs)
-        state_db_path = os.path.abspath("db/state.db")
-        try:
-            logger.debug("Graph invoke done, checking state.db size: %s", state_db_path)
-            logger.debug("state.db size: %s bytes", os.path.getsize(state_db_path))
-        except OSError as e:
-            logger.debug("Unable to read state.db size at %s: %s", state_db_path, e)
-        logger.info("Graph invocation complete: trigger=%s", trigger)
-        if trigger in ("confirm", "on_demand", "rate", "study_topic_confirm", "study_topic_category", "studied", "weak_areas") and message_id is not None:
+        state_snapshot = _graph.graph.get_state(config)
+
+        if has_pending_interrupt(state_snapshot):
+            logger.info("Resuming interrupted graph: chat_id=%s payload=%r", chat_id, payload)
+            _graph.graph.invoke(Command(resume=payload), config=config)
+        else:
+            trigger = resolve_trigger(payload)
+            logger.info("Fresh graph invocation: trigger=%s chat_id=%s", trigger, chat_id)
+            initial_state: dict = {"trigger": trigger, "chat_id": chat_id}
+            for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot",
+                        "quality_score", "messages", "current_topic_id", "current_topic_name",
+                        "study_topic_category"):
+                if kwargs.get(key) is not None:
+                    initial_state[key] = kwargs[key]
+            _graph.graph.invoke(initial_state, config=config)
+
+        logger.info("Graph invocation complete: chat_id=%s", chat_id)
+
+        # Confirm the button tap only after successful graph completion
+        if message_id is not None:
             mark_confirmed(message_id)
+
     except Exception as e:
         logger.error(
-            "Graph invocation failed [trigger=%s chat_id=%s]: %s",
-            trigger, chat_id, e, exc_info=True,
+            "Graph invocation failed [chat_id=%s payload=%r]: %s",
+            chat_id, payload, e, exc_info=True,
         )
+        # Release in-flight so the user can tap again after a transient error
         if message_id is not None:
             clear_in_flight(message_id)
     finally:
-        if trigger in ("done", "rate", "weak_areas", "study_topic", "study_topic_category"):
-            with _chat_lock:
-                _chat_in_flight.discard(chat_id)
+        with _chat_lock:
+            _chat_in_flight.discard(chat_id)

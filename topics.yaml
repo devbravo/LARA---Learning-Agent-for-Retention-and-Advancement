@@ -205,6 +205,10 @@ topics:
 
   # Tier 1 — Gen AI System Design
   # Gen AI System Design (broken into subtopics)
+  - name: "System Design - Fundamentals"
+    tier: 2
+    status: inactive
+    default_duration_minutes: 60
   - name: "System Design - ML System Design Framework"
     tier: 2
     status: inactive
