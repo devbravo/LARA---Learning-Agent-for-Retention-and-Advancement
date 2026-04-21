@@ -86,12 +86,15 @@ def resolve_trigger(payload: str) -> str:
     return mapping.get(payload.lower().strip(), payload)
 
 
-def invoke_safe(chat_id: int, payload: str, **kwargs: Any) -> None:
+def invoke_safe(chat_id: int, payload: str, message_id: int | None = None, **kwargs: Any) -> None:
     """Invoke the graph safely, choosing resume vs fresh based on interrupt state.
 
     Reads graph state once to check has_pending_interrupt(). If an interrupt
     is pending, resumes with Command(resume=payload). Otherwise resolves payload
     to a trigger and starts a fresh invocation.
+
+    If message_id is provided (callback button tap), confirms it on success or
+    releases it on failure so the user can retry after transient errors.
     """
     config = {"configurable": {"thread_id": str(chat_id)}}
 
@@ -127,11 +130,18 @@ def invoke_safe(chat_id: int, payload: str, **kwargs: Any) -> None:
 
         logger.info("Graph invocation complete: chat_id=%s", chat_id)
 
+        # Confirm the button tap only after successful graph completion
+        if message_id is not None:
+            mark_confirmed(message_id)
+
     except Exception as e:
         logger.error(
             "Graph invocation failed [chat_id=%s payload=%r]: %s",
             chat_id, payload, e, exc_info=True,
         )
+        # Release in-flight so the user can tap again after a transient error
+        if message_id is not None:
+            clear_in_flight(message_id)
     finally:
         with _chat_lock:
             _chat_in_flight.discard(chat_id)

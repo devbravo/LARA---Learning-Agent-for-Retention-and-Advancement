@@ -6,7 +6,7 @@ Calendar to plan around real schedule, generates study briefs via Claude API,
 books [Mock] events on Google Calendar after user confirmation, and 
 creates or rebooks [Study] events for the in-progress study flow.
 
-**Stack:** Python 3.11+, LangGraph 1.1.6, FastAPI, APScheduler, SQLite, Telegram Bot API
+**Stack:** Python 3.11+, LangGraph, FastAPI, APScheduler, SQLite, Telegram Bot API
 
 ---
 
@@ -161,9 +161,9 @@ def has_pending_interrupt(state) -> bool:
 - Bifurcation between `Command(resume=...)` and fresh `invoke`
 - `invoke_safe()` thread safety
 
-**`callback_handlers.py`** — Telegram mechanics only:
+**`callback_handlers.py`** — Telegram callback mechanics only:
 - Idempotency guards (dedup repeat taps)
-- `remove_buttons()` calls
+- Returns raw callback payload for downstream handling
 - No routing decisions
 - No graph state reads
 

@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 def handle_callback(callback_data: str, chat_id: int, message_id: int | None) -> str | None:
     """Apply idempotency guard and return callback payload for forwarding.
 
+    Marks message_id as in-flight to block repeat taps, but does NOT call
+    mark_confirmed here. Confirmation (or release on failure) happens in
+    dispatcher.invoke_safe() after the graph invocation completes, so a
+    transient error leaves the message_id retryable.
+
     Args:
         callback_data: Raw Telegram callback payload.
         chat_id: Telegram chat identifier.
@@ -33,6 +38,5 @@ def handle_callback(callback_data: str, chat_id: int, message_id: int | None) ->
                 message_id, chat_id,
             )
             return None
-        dispatcher.mark_confirmed(message_id)
 
     return callback_data

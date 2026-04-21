@@ -129,6 +129,18 @@ def route_from_on_demand(state: AgentState) -> str:
     return "generate_brief" if state.get("proposed_topic") else "output"
 
 
+def route_from_generate_brief(state: AgentState) -> str:
+    """Route to book_events only when a slot exists and user confirmed booking.
+
+    If no free slot was found (has_study_plan=False), the brief was already
+    sent directly — go straight to output with no booking step.
+    If a slot exists but user skipped, book_events handles the skip message.
+    """
+    if state.get("has_study_plan") and state.get("proposed_slot"):
+        return "book_events"
+    return "output"
+
+
 def route_from_activate_topic(state: AgentState) -> str:
     return "graduate_topic" if state.get("payload") else "output"
 
@@ -421,6 +433,9 @@ def generate_brief(state: AgentState) -> AgentState:
         )
 
         if state.get("has_study_plan") and state.get("proposed_slot"):
+            # Send brief with booking buttons and wait for confirmation.
+            # Do NOT add to messages — output runs after book_events and
+            # must not re-send the brief.
             msg_id = _telegram.send_buttons(brief, ["Yes, book them", "Skip"])
             booking_payload = interrupt("waiting for booking confirmation")
 
@@ -430,15 +445,14 @@ def generate_brief(state: AgentState) -> AgentState:
                 except Exception:
                     pass
 
-            return {"messages": [brief], "payload": booking_payload}
+            return {"payload": booking_payload}
         else:
-            _telegram.send_message(brief)
-            return {"messages": [brief], "payload": "skip"}
+            # No free slot found — brief is the final output; let output send it.
+            return {"messages": [brief]}
 
     except Exception as e:
         return {
             "messages": [f"⚠️ Could not generate brief: {e}\nProceeding with general study plan."],
-            "payload": "skip",
         }
 
 

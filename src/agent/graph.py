@@ -45,6 +45,7 @@ from src.agent.nodes import (
     route_from_daily_planning,
     route_from_done_parser,
     route_from_log_weak_areas,
+    route_from_generate_brief,
     route_from_on_demand,
     route_from_router,
     route_from_study_topic,
@@ -118,7 +119,11 @@ def build_graph(checkpointer=None):
         route_from_on_demand,
         {"generate_brief": "generate_brief", "output": "output"},
     )
-    builder.add_edge("generate_brief", "book_events")
+    builder.add_conditional_edges(
+        "generate_brief",
+        route_from_generate_brief,
+        {"book_events": "book_events", "output": "output"},
+    )
 
     # Done / logging flow
     builder.add_conditional_edges(
