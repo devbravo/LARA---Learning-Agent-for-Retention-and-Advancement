@@ -115,8 +115,6 @@ def append_evening_mock_block_lines(
         end_dt = start_dt + timedelta(minutes=duration)
         t_end = format_time(end_dt.time())
         lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
-        if topic.get("weak_areas"):
-            lines.append(f"  ⚠️ Focus on: {topic['weak_areas']}")
     if not found_any:
         lines.append("• None found for tomorrow")
     lines.append("")
@@ -187,8 +185,6 @@ def pack_mock_slots(
             t_start = format_time(cursor.time())
             t_end = format_time(end_dt.time())
             lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
-            if topic.get("weak_areas"):
-                lines.append(f" ⚠️ Focus on: {topic['weak_areas']}")
             lines.append("")
 
             slot = {
