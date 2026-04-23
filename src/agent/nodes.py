@@ -86,7 +86,9 @@ def router(state: AgentState) -> AgentState:
     trigger = state.get("trigger", "")
     if not trigger:
         return {"messages": ["⚠️ No trigger set — cannot route."]}
-    return {}
+    # Clear stale messages from any previous flow so routing guards
+    # (e.g. route_from_study_topic) don't misread checkpoint state.
+    return {"messages": []}
 
 
 def route_from_router(state: AgentState) -> str:
@@ -661,9 +663,9 @@ def done_parser(state: AgentState) -> AgentState:
         }
 
     except Exception as e:
-        logger.error("done_parser failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
+        logger.error("done_parser failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Done flow failed: {e}"]}
 
 
@@ -709,9 +711,9 @@ def select_done_topic(state: AgentState) -> AgentState:
         }
 
     except Exception as e:
-        logger.error("select_done_topic failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
+        logger.error("select_done_topic failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Topic selection failed: {e}"], "has_unlogged_sessions": False}
 
 
@@ -832,9 +834,9 @@ def log_weak_areas(state: AgentState) -> AgentState:
         }
 
     except Exception as e:
-        logger.error("log_weak_areas failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
+        logger.error("log_weak_areas failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Failed to log weak areas: {e}"], "payload": None}
 
 
@@ -890,9 +892,9 @@ def study_topic(state: AgentState) -> AgentState:
         }
 
     except Exception as e:
-        logger.error("study_topic failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
+        logger.error("study_topic failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Failed to load topics: {e}"], "pending_message_id": None}
 
 
@@ -915,6 +917,30 @@ def study_topic_category(state: AgentState) -> AgentState:
                 _telegram.remove_buttons(chat_id, cat_msg_id)
             except Exception as _e:
                 logger.debug("remove_buttons silently failed: %s", _e)
+        # If the resume payload looks like a command (e.g. user typed /pick instead
+        # of tapping a button), re-send the category picker and prompt the user to
+        # use the buttons. This avoids treating a command string as a category
+        # name (which produced messages like "No topics found in category '/pick'").
+        if not category_payload or (isinstance(category_payload, str) and category_payload.startswith("/")):
+            # Recompute available categories and re-send the picker
+            rows = topic_repository.get_inactive_topics_tier1_or2()
+            tier1 = [r for r in rows if r["tier"] == 1]
+            available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
+
+            categories = sorted(set(
+                r["name"].split(" - ")[0] if " - " in r["name"] else "Other"
+                for r in available
+            ))
+            buttons = [(c, f"category:{c}") for c in categories]
+            try:
+                new_cat_msg_id = _telegram.send_inline_buttons("Which category?", buttons)
+            except RuntimeError as e:
+                if "timed out" in str(e).lower():
+                    logger.warning("send_inline_buttons timed out: %s", e)
+                    return {"messages": ["⚠️ Timed out while sending the category list. Please retry /pick."], "pending_message_id": None}
+                raise
+
+            return {"messages": ["Please choose a category using the buttons."], "pending_message_id": new_cat_msg_id}
 
         category = (category_payload or "")[len("category:"):] \
             if (category_payload or "").startswith("category:") else category_payload
@@ -947,9 +973,9 @@ def study_topic_category(state: AgentState) -> AgentState:
         }
 
     except Exception as e:
-        logger.error("study_topic_category failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
+        logger.error("study_topic_category failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Failed to load subtopics: {e}"], "pending_message_id": None}
 
 
@@ -995,9 +1021,9 @@ def study_topic_confirm(state: AgentState) -> AgentState:
         }
 
     except Exception as e:
-        logger.error("study_topic_confirm failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
+        logger.error("study_topic_confirm failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Failed to set topic in progress: {e}"], "pending_message_id": None}
 
 
@@ -1020,9 +1046,9 @@ def activate_topic(state: AgentState) -> AgentState:
         return {"pending_message_id": topic_msg_id, "messages": []}
 
     except Exception as e:
-        logger.error("activate_topic failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
+        logger.error("activate_topic failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Failed to load in-progress topics: {e}"]}
 
 
@@ -1064,7 +1090,7 @@ def graduate_topic(state: AgentState) -> AgentState:
         }
 
     except Exception as e:
-        logger.error("graduate_topic failed: %s", e, exc_info=True)
         if isinstance(e, GraphInterrupt):
             raise
+        logger.error("graduate_topic failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Failed to graduate topic: {e}"], "pending_message_id": None}
