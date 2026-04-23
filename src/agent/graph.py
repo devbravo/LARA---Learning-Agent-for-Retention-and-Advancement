@@ -10,7 +10,7 @@ Flow (HITL pattern — interrupt() replaces awaiting_* flags):
   daily_planning (skip/no-plan/evening) → output → END
   weekend_brief             → output → END
   send_duration_picker → interrupt() → on_demand → generate_brief → interrupt() → book_events → output → END
-  done_parser → interrupt() → log_session → interrupt() → log_weak_areas → (log_session | output) → END
+  done_parser → (select_done_topic → interrupt() →)? log_session → interrupt() → log_weak_areas → output → END
   study_topic → interrupt() → study_topic_category → interrupt() → study_topic_confirm → output → END
   activate_topic → interrupt() → graduate_topic → output → END
 
@@ -49,12 +49,12 @@ from src.agent.nodes import (
     route_from_daily_planning,
     route_from_done_parser,
     route_from_generate_brief,
-    route_from_log_weak_areas,
     route_from_on_demand,
     route_from_router,
     route_from_study_topic,
     route_from_study_topic_category,
     router,
+    select_done_topic,
     send_duration_picker,
     study_topic,
     study_topic_category,
@@ -78,6 +78,7 @@ def build_graph(checkpointer=None):
     builder.add_node("send_duration_picker", send_duration_picker)
     builder.add_node("on_demand", on_demand)
     builder.add_node("done_parser", done_parser)
+    builder.add_node("select_done_topic", select_done_topic)
     builder.add_node("generate_brief", generate_brief)
     builder.add_node("await_brief_confirmation", await_brief_confirmation)
     builder.add_node("log_session", log_session)
@@ -145,14 +146,11 @@ def build_graph(checkpointer=None):
     builder.add_conditional_edges(
         "done_parser",
         route_from_done_parser,
-        {"log_session": "log_session", "output": "output"},
+        {"log_session": "log_session", "select_done_topic": "select_done_topic", "output": "output"},
     )
+    builder.add_edge("select_done_topic", "log_session")
     builder.add_edge("log_session", "log_weak_areas")
-    builder.add_conditional_edges(
-        "log_weak_areas",
-        route_from_log_weak_areas,
-        {"log_session": "log_session", "output": "output"},
-    )
+    builder.add_edge("log_weak_areas", "output")
 
     # Pick a topic flow
     builder.add_conditional_edges(

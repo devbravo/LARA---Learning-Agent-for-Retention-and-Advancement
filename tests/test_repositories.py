@@ -222,18 +222,17 @@ class SessionRepositoryTests(RepositoryDbTestCase):
     def test_legacy_utc_row_from_yesterday_is_not_found(self) -> None:
         """A UTC row whose local time is yesterday must not appear in today helpers.
 
-        We use yesterday noon UTC as the stored timestamp. For any timezone within
-        UTC-12..UTC+14 yesterday noon UTC is always in "yesterday local" (or at
-        worst yesterday local for very-east timezones), so it is unambiguously
-        outside today's local window and outside the UTC range for today local.
+        We compute "yesterday noon" in local time and convert to UTC for storage,
+        ensuring the timestamp is unambiguously outside today's local window
+        regardless of the current UTC/local clock relationship.
         """
         topic_id = self._insert_topic(name="Yesterday UTC Topic")
 
-        yesterday_noon_utc = (
-            datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
-            - timedelta(days=1)
-        )
-        studied_at_utc = yesterday_noon_utc.strftime("%Y-%m-%d %H:%M:%S")
+        tz = _tz()
+        yesterday_local_noon = (
+            datetime.now(tz) - timedelta(days=1)
+        ).replace(hour=12, minute=0, second=0, microsecond=0)
+        studied_at_utc = yesterday_local_noon.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         self._insert_session_with_studied_at(topic_id, studied_at_utc)
 

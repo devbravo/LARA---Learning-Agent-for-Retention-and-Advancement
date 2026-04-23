@@ -7,6 +7,7 @@ and node layers.
 from typing import Any
 
 from src.infrastructure.db import get_connection
+from src.repositories import session_repository
 
 
 def get_topic_name_by_id(topic_id: int) -> str | None:
@@ -185,6 +186,22 @@ def fetch_in_progress_topics_with_weak_areas() -> list[dict[str, Any]]:
                ORDER BY tier ASC, name ASC""",
         ).fetchall()
     return [{"name": r["name"], "weak_areas": r["weak_areas"]} for r in rows]
+
+
+def get_active_unlogged_topics_today() -> list[dict]:
+    """Return active topics not yet logged today, ordered by tier ASC, easiness_factor ASC.
+
+    Returns:
+        List of dicts with keys ``id`` and ``name``.
+    """
+    logged_names = session_repository.get_logged_topic_names_for_today()
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT id, name FROM topics
+               WHERE status = 'active'
+               ORDER BY tier ASC, easiness_factor ASC"""
+        ).fetchall()
+    return [{"id": row["id"], "name": row["name"]} for row in rows if row["name"] not in logged_names]
 
 
 def set_topic_in_progress(topic_name: str) -> bool:
