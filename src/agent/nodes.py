@@ -115,8 +115,16 @@ def route_from_await_daily_confirmation(state: AgentState) -> str:
 
 
 def route_from_done_parser(state: AgentState) -> str:
-    # Route to log_session when a topic was queued for rating
-    return "log_session" if state.get("has_unlogged_sessions") else "output"
+    if not state.get("has_unlogged_sessions"):
+        return "output"
+    return "log_session" if state.get("current_topic_id") is not None else "select_done_topic"
+
+
+def route_from_select_done_topic(state: AgentState) -> str:
+    """Route to output on error (messages set or no current_topic_id), else log_session."""
+    if state.get("messages") or state.get("current_topic_id") is None:
+        return "output"
+    return "log_session"
 
 
 def route_from_log_weak_areas(state: AgentState) -> str:
@@ -613,30 +621,40 @@ def done_parser(state: AgentState) -> AgentState:
     logger.info("done_parser: entered")
 
     try:
-        proposed_slots = state.get("proposed_slots") or []
-        if not proposed_slots:
-            return {"messages": ["No study sessions were planned today."], "has_unlogged_sessions": False}
-
-        logged_names = session_repository.get_logged_topic_names_for_today()
-        unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+        unlogged = topic_repository.get_active_unlogged_topics_today()
 
         if not unlogged:
-            return {"messages": ["All sessions already logged for today."], "has_unlogged_sessions": False}
+            return {"messages": ["No active sessions to log right now."], "has_unlogged_sessions": False}
 
-        slot = unlogged[0]
-        topic_name = slot["topic"]
-        topic_id = topic_repository.get_topic_id_by_name(topic_name)
+        if len(unlogged) >= 2:
+            logger.info("done_parser: %d unlogged topics — sending picker", len(unlogged))
+            topic_names = [t["name"] for t in unlogged]
+            picker_msg_id = _telegram.send_buttons("Which topic did you just finish?", topic_names)
+            return {
+                "current_topic_id": None,
+                "current_topic_name": None,
+                "quality_score": None,
+                "pending_message_id": picker_msg_id,
+                "has_unlogged_sessions": True,
+            }
 
-        if topic_id is None:
-            return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."], "has_unlogged_sessions": False}
+        # Exactly one unlogged topic — skip picker
+        topic = unlogged[0]
+        topic_id = topic["id"]
+        topic_name = topic["name"]
+
+        proposed_slots = state.get("proposed_slots") or []
+        duration_min = next(
+            (s["duration_min"] for s in proposed_slots if s["topic"] == topic_name), 0
+        )
 
         logger.info("done_parser: sending rating buttons for %s", topic_name)
-        # Send rating buttons and return — interrupt lives in log_session
         rating_msg_id = _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
 
         return {
             "current_topic_id": topic_id,
             "current_topic_name": topic_name,
+            "duration_min": duration_min,
             "quality_score": None,
             "pending_message_id": rating_msg_id,
             "has_unlogged_sessions": True,
@@ -647,6 +665,54 @@ def done_parser(state: AgentState) -> AgentState:
         if isinstance(e, GraphInterrupt):
             raise
         return {"messages": [f"⚠️ Done flow failed: {e}"]}
+
+
+# ---------------------------------------------------------------------------
+# Node: select_done_topic
+# ---------------------------------------------------------------------------
+
+def select_done_topic(state: AgentState) -> AgentState:
+    """interrupt() is first — on resume, receives selected topic name from picker button."""
+    try:
+        chat_id = state.get("chat_id")
+        picker_msg_id = state.get("pending_message_id")
+
+        # Interrupt at start — no side effects above this line
+        selected_name = interrupt("waiting for topic selection")
+
+        # Remove picker buttons after resume (idempotent)
+        if picker_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, picker_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        topic_name = (selected_name or "").strip()
+        topic_id = topic_repository.get_topic_id_by_name(topic_name)
+
+        if topic_id is None:
+            return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."], "has_unlogged_sessions": False}
+
+        proposed_slots = state.get("proposed_slots") or []
+        duration_min = next(
+            (s["duration_min"] for s in proposed_slots if s["topic"] == topic_name), 0
+        )
+
+        rating_msg_id = _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+
+        return {
+            "current_topic_id": topic_id,
+            "current_topic_name": topic_name,
+            "duration_min": duration_min,
+            "quality_score": None,
+            "pending_message_id": rating_msg_id,
+        }
+
+    except Exception as e:
+        logger.error("select_done_topic failed: %s", e, exc_info=True)
+        if isinstance(e, GraphInterrupt):
+            raise
+        return {"messages": [f"⚠️ Topic selection failed: {e}"], "has_unlogged_sessions": False}
 
 
 # ---------------------------------------------------------------------------
@@ -749,43 +815,20 @@ def log_weak_areas(state: AgentState) -> AgentState:
         else:
             topic_repository.update_topic_weak_areas(topic_id, None)
 
-        # Check if more slots remain
-        proposed_slots = state.get("proposed_slots") or []
-        logged_names = session_repository.get_logged_topic_names_for_today()
-        unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+        topic_name = state.get("current_topic_name") or "topic"
+        remaining = topic_repository.get_active_unlogged_topics_today()
 
-        if not unlogged:
-            return {
-                "messages": ["All sessions logged for today. Great work! 💪"],
-                "payload": None,
-                "pending_message_id": None,
-                "has_unlogged_sessions": False,
-            }
-
-        # More topics: send next rating buttons — interrupt lives in log_session
-        next_slot = unlogged[0]
-        next_topic_name = next_slot["topic"]
-        next_topic_id = topic_repository.get_topic_id_by_name(next_topic_name)
-
-        if next_topic_id is None:
-            return {
-                "messages": [f"⚠️ Topic '{next_topic_name}' not found in database."],
-                "payload": None,
-                "pending_message_id": None,
-                "has_unlogged_sessions": False,
-            }
-
-        rating_msg_id = _telegram.send_buttons(
-            f"How did {next_topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"]
-        )
+        if not remaining:
+            msg = f"✅ {topic_name} logged. All done for today! 💪"
+        else:
+            names = ", ".join(t["name"] for t in remaining)
+            msg = f"✅ {topic_name} logged. Still unlogged: {names}. Press /done when you're ready."
 
         return {
-            "current_topic_id": next_topic_id,
-            "current_topic_name": next_topic_name,
-            "quality_score": None,
+            "messages": [msg],
             "payload": None,
-            "pending_message_id": rating_msg_id,
-            "has_unlogged_sessions": True,
+            "pending_message_id": None,
+            "has_unlogged_sessions": False,
         }
 
     except Exception as e:
