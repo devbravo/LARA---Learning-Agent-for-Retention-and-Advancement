@@ -42,15 +42,16 @@ APScheduler ──► daily_planning (Mon–Fri morning + evening preview) / wee
 | `router` | Entry point — routes by trigger type (7 targets) |
 | `daily_planning` | Assembles morning/evening plan from calendar + SM-2 + gap finder; sends booking buttons |
 | `await_daily_confirmation` | interrupt() — waits for user to confirm or skip the daily booking proposal |
-| `weekend_brief` | Sat/Sun brief — shows due topics with weak areas and overdue indicators |
+| `weekend_brief` | Sat/Sun brief — shows due topics with overdue indicators; no weak areas displayed |
 | `send_duration_picker` | Sends duration buttons; cleans up stale picker |
 | `on_demand` | interrupt() — picks highest-priority due topic for requested duration |
 | `generate_brief` | Calls Claude API — the only LLM call; sends booking buttons when a slot is available |
 | `await_brief_confirmation` | interrupt() — waits for user to confirm or skip the on-demand booking proposal |
 | `book_events` | Writes `[Mock]` GCal events after user confirmation |
-| `done_parser` | Finds first unlogged slot; sends rating buttons; sets `has_unlogged_sessions` |
+| `done_parser` | Queries active unlogged topics from DB. 0 → message. 1 → rating buttons. 2+ → topic picker |
+| `select_done_topic` | interrupt() — receives selected topic name, sends rating buttons, routes to log_session |
 | `log_session` | interrupt() — logs session with quality score; sends weak areas prompt |
-| `log_weak_areas` | interrupt() — saves weak areas or clears on Skip; sets `has_unlogged_sessions`; loops or ends |
+| `log_weak_areas` | interrupt() — saves weak areas or clears on Skip; ends with remaining unlogged list or all-done message |
 | `study_topic` | Starts `/pick` flow, sends category inline buttons, cleans up stale lists |
 | `study_topic_category` | interrupt() — handles category tap, sends matching subtopic inline buttons |
 | `study_topic_confirm` | interrupt() — marks selected topic as `in_progress`, notifies user |
@@ -109,11 +110,12 @@ lara/
 │   │       ├── message_handlers.py    # one function per command
 │   │       └── dispatcher.py          # dedup sets, idempotency lock, invoke_safe()
 │   ├── core/
-│   │   ├── db.py            # Schema init, seed, connection helper
 │   │   ├── sm2.py           # SM-2 algorithm (pure Python)
 │   │   └── gap_finder.py    # Free window computation (pure Python)
 │   ├── infrastructure/
-│   │   └── scheduler.py     # APScheduler jobs (weekday, weekend, evening)
+│   │   ├── db.py            # Schema init, seed, connection helper
+│   │   ├── scheduler.py     # APScheduler jobs (weekday, weekend, evening)
+│   │   └── time.py          # Local timezone helpers
 │   ├── integrations/
 │   │   ├── gcal.py          # Google Calendar read + write
 │   │   ├── telegram_client.py  # send_message / send_buttons / remove_buttons
@@ -126,13 +128,19 @@ lara/
 │       └── topic_service.py # graduate_topic(), get_in_progress_topics()
 │       └── view_service.py
 └── tests/
+    ├── conftest.py
     ├── test_sm2.py
     ├── test_gap_finder.py
     ├── test_tools.py
     ├── test_study_topic.py
+    ├── test_done_flow.py
+    ├── test_graduate_topic.py
     ├── test_nodes_daily_planning.py
     ├── test_nodes_weekend_brief.py
+    ├── test_output_refactor.py
     ├── test_repositories.py
+    ├── test_topic_service.py
+    ├── test_view_service.py
     ├── test_dispatcher.py
     └── test_webhook_handler.py
 ```
@@ -180,10 +188,15 @@ WEBHOOK_SECRET=   # generate: python -c "import secrets; print(secrets.token_hex
 ### 4. Initialise the database
 
 ```bash
-python -m src.core.db
+python -m src.infrastructure.db
 ```
 
 Creates `db/learning.db`, seeds topics from `topics.yaml`, and prints them to confirm.
+
+Also reset and reseed with:
+```bash
+rm db/learning.db && python -m src.infrastructure.db
+```
 
 ### 5. Register the Telegram webhook
 
@@ -233,11 +246,11 @@ sqlite3 db/state.db "DELETE FROM checkpoints; DELETE FROM writes;"
 ## Resetting the learning database
 ```commandline
 rm db/learning.db
-python -m src.core.db
+python -m src.infrastructure.db
 ```
 ## Reseed after topic changes:
 ```commandline
-python -m src.core.db
+python -m src.infrastructure.db
 ``` 
 
 ## Change a topic's status: 
@@ -281,8 +294,9 @@ Duration callbacks (`30/45/60 min`) are also supported when that keyboard is pre
 
 ### Done flow
 
-Send `/done` after studying:
+Send `/done` after each session. Each `/done` call logs one topic.
 
+**Single unlogged topic** — goes straight to rating:
 ```
 LARA: How did Gen AI System Design go?
       [😕 Hard] [😐 OK] [😊 Easy]
@@ -294,12 +308,25 @@ LARA: Any weak areas to note? Reply with text or tap Skip.
 
 You: Trade-offs in vector DB selection
 
-LARA: How did Data Structures and Algorithms go?
+LARA: ✅ Gen AI System Design logged. All done for today! 💪
+```
+
+**Multiple unlogged topics** — shows picker first:
+```
+LARA: Which session are you logging?
+      [Gen AI System Design] [Data Structures and Algorithms]
+
+[tap Gen AI System Design]
+
+LARA: How did Gen AI System Design go?
       [😕 Hard] [😐 OK] [😊 Easy]
 
-...
+[tap 😐 OK]
 
-LARA: All sessions logged for today. Great work! 💪
+LARA: Any weak areas to note? Reply with text or tap Skip.
+      [Skip]
+
+LARA: ✅ Gen AI System Design logged. Still unlogged: Data Structures and Algorithms. Press /done when you're ready.
 ```
 
 | Button | Score | SM-2 effect |

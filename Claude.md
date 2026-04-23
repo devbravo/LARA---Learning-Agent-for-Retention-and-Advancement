@@ -49,15 +49,16 @@ live in `route_from_router`.
 | `router` | Entry point. Routes fresh triggers only. 7 targets. |
 | `daily_planning` | Assembles morning plan from calendar + SM-2 + gap finder. Sets proposed_slots. Sends booking buttons. |
 | `await_daily_confirmation` | interrupt() is first statement. Waits for user to confirm or skip the daily booking proposal. Routes to book_events or output. |
-| `weekend_brief` | Sat/Sun brief. Shows SM-2 due topics with weak areas + overdue indicators. No interrupt. |
+| `weekend_brief` | Sat/Sun brief. Shows SM-2 due topics with overdue indicators. No weak areas displayed. No interrupt. |
 | `send_duration_picker` | Sends "How long do you have?" buttons. Cleans up stale picker. |
 | `on_demand` | interrupt() is first statement. Picks highest-priority due topic for requested duration. |
 | `generate_brief` | Calls Claude API. Only node that uses an LLM. Sends booking buttons when a slot is available. |
 | `await_brief_confirmation` | interrupt() is first statement. Waits for user to confirm or skip the on-demand booking proposal. Routes to book_events or output. |
 | `book_events` | Writes GCal events after user confirms. Handles both single and multi-slot flows. |
-| `done_parser` | Finds first unlogged slot from proposed_slots. Sends rating buttons. Sets has_unlogged_sessions. |
+| `done_parser` | Queries active unlogged topics from DB. 0 → message. 1 → rating buttons direct to log_session. 2+ → topic picker buttons → select_done_topic. No interrupt(). |
+| `select_done_topic` | interrupt() is first statement. Receives selected topic name. Removes picker. Sends rating buttons. Routes to log_session. |
 | `log_session` | interrupt() is first statement. Logs session row with quality score. Updates SM-2. Sends weak areas prompt. |
-| `log_weak_areas` | interrupt() is first statement. Saves weak areas (or clears on Skip). Sets has_unlogged_sessions. Prompts for next unlogged slot or ends. |
+| `log_weak_areas` | interrupt() is first statement. Saves weak areas (or clears on Skip). Ends with "✅ logged. Still unlogged: X. Press /done when ready." or "All done! 💪". Routes to output. |
 | `study_topic` | Starts /pick flow. Sends category inline buttons. Cleans up stale subtopic lists. |
 | `study_topic_category` | interrupt() is first statement. Handles category resume. Sends matching subtopic inline buttons. |
 | `study_topic_confirm` | interrupt() is first statement. Marks selected topic as in_progress. Sets confirmation message. |
@@ -96,13 +97,16 @@ START → router → send_duration_picker → on_demand → interrupt() →
 **Done / logging (/done):**
 ```
 START → router → done_parser →
-  (has_unlogged_sessions=True) → log_session → interrupt() →
+  (0 unlogged) → output → END
+  (1 unlogged) → log_session → interrupt() →
     [resume: "😕 hard" | "😐 ok" | "😊 easy"] → log_weak_areas → interrupt() →
-      [resume: <text> | "skip"] →
-        if more unlogged slots (has_unlogged_sessions=True) → log_session → [repeat]
-        else → output → END
-  (has_unlogged_sessions=False) → output → END
+      [resume: <text> | "skip"] → output → END
+  (2+ unlogged) → select_done_topic → interrupt() →
+    [resume: topic name] → log_session → interrupt() →
+      [resume: "😕 hard" | "😐 ok" | "😊 easy"] → log_weak_areas → interrupt() →
+        [resume: <text> | "skip"] → output → END
 ```
+Each /done call logs one topic. After log_weak_areas, if more remain → "Still unlogged: X. Press /done when ready."
 
 **Pick a topic (/pick):**
 ```
@@ -188,15 +192,17 @@ def has_pending_interrupt(state) -> bool:
 
 ## Done flow — session logging
 
-Triggered by `/done`. No structured paste required.
+Triggered by `/done`. Logs one session per invocation.
 
-1. `/done` → `done_parser` finds first unlogged slot from `proposed_slots`
-2. Sends rating buttons: "How did {topic} go?" `[😕 Hard] [😐 OK] [😊 Easy]`
-3. Rating resume → `log_session` logs session row, updates SM-2, sends weak areas prompt
-4. Text resume → saved to `sessions.weak_areas` + overwrites `topics.weak_areas`
-5. Skip resume → clears `topics.weak_areas` to NULL (historical record in sessions preserved)
-6. If more unlogged slots → repeat from step 2 for next topic
-7. All logged → "All sessions logged for today. Great work! 💪"
+1. `/done` → `done_parser` queries active topics not yet logged today
+2. **0 unlogged** → "No active sessions to log right now."
+3. **1 unlogged** → sends rating buttons directly: "How did {topic} go?" `[😕 Hard] [😐 OK] [😊 Easy]`
+4. **2+ unlogged** → sends topic picker buttons → user taps topic → rating buttons sent
+5. Rating resume → `log_session` logs session row, updates SM-2, sends weak areas prompt
+6. Text resume → saved to `sessions.weak_areas` + overwrites `topics.weak_areas`
+7. Skip resume → clears `topics.weak_areas` to NULL (historical record in sessions preserved)
+8. **If more unlogged** → "✅ {topic} logged. Still unlogged: {name1}, {name2}. Press /done when you're ready."
+9. **All done** → "✅ {topic} logged. All done for today! 💪"
 
 | Button | Score | SM-2 effect |
 |---|---|---|
