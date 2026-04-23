@@ -234,24 +234,27 @@ def test_select_done_topic_sets_topic_id_on_resume():
         {"name": "DSA - Trees", "tier": 1, "status": "active"},
         {"name": "System Design", "tier": 1, "status": "active"},
     ])
-    g = _make_test_graph()
-    chat_id = 9001
-    config = {"configurable": {"thread_id": str(chat_id)}}
+    try:
+        g = _make_test_graph()
+        chat_id = 9001
+        config = {"configurable": {"thread_id": str(chat_id)}}
 
-    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
-         patch("src.repositories.session_repository.get_connection", _make_get_connection(path)), \
-         patch.object(_nodes._telegram, "send_buttons", return_value=10), \
-         patch.object(_nodes._telegram, "send_message"), \
-         patch.object(_nodes._telegram, "remove_buttons"):
-        # done trigger → done_parser sends picker (2 topics), pauses at select_done_topic
-        g.invoke({"trigger": "done", "chat_id": chat_id}, config=config)
-        # resume with topic choice → select_done_topic runs, log_session pauses
-        g.invoke(Command(resume="DSA - Trees"), config=config)
+        with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+             patch("src.repositories.session_repository.get_connection", _make_get_connection(path)), \
+             patch.object(_nodes._telegram, "send_buttons", return_value=10), \
+             patch.object(_nodes._telegram, "send_message"), \
+             patch.object(_nodes._telegram, "remove_buttons"):
+            # done trigger → done_parser sends picker (2 topics), pauses at select_done_topic
+            g.invoke({"trigger": "done", "chat_id": chat_id}, config=config)
+            # resume with topic choice → select_done_topic runs, log_session pauses
+            g.invoke(Command(resume="DSA - Trees"), config=config)
 
-    snapshot = g.get_state(config)
-    state = snapshot.values
-    assert state.get("current_topic_name") == "DSA - Trees"
-    assert state.get("current_topic_id") is not None
+        snapshot = g.get_state(config)
+        state = snapshot.values
+        assert state.get("current_topic_name") == "DSA - Trees"
+        assert state.get("current_topic_id") is not None
+    finally:
+        os.remove(path)
 
 
 def test_select_done_topic_sends_rating_buttons_on_resume():
@@ -260,21 +263,24 @@ def test_select_done_topic_sends_rating_buttons_on_resume():
         {"name": "DSA - Trees", "tier": 1, "status": "active"},
         {"name": "System Design", "tier": 1, "status": "active"},
     ])
-    g = _make_test_graph()
-    chat_id = 9002
-    config = {"configurable": {"thread_id": str(chat_id)}}
-    mock_send = MagicMock(return_value=20)
+    try:
+        g = _make_test_graph()
+        chat_id = 9002
+        config = {"configurable": {"thread_id": str(chat_id)}}
+        mock_send = MagicMock(return_value=20)
 
-    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
-         patch("src.repositories.session_repository.get_connection", _make_get_connection(path)), \
-         patch.object(_nodes._telegram, "send_buttons", mock_send), \
-         patch.object(_nodes._telegram, "send_message"), \
-         patch.object(_nodes._telegram, "remove_buttons"):
-        g.invoke({"trigger": "done", "chat_id": chat_id}, config=config)
-        mock_send.reset_mock()
-        g.invoke(Command(resume="System Design"), config=config)
+        with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+             patch("src.repositories.session_repository.get_connection", _make_get_connection(path)), \
+             patch.object(_nodes._telegram, "send_buttons", mock_send), \
+             patch.object(_nodes._telegram, "send_message"), \
+             patch.object(_nodes._telegram, "remove_buttons"):
+            g.invoke({"trigger": "done", "chat_id": chat_id}, config=config)
+            mock_send.reset_mock()
+            g.invoke(Command(resume="System Design"), config=config)
 
-    mock_send.assert_called_once_with("How did System Design go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+        mock_send.assert_called_once_with("How did System Design go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+    finally:
+        os.remove(path)
 
 
 # ---------------------------------------------------------------------------

@@ -51,6 +51,7 @@ from src.agent.nodes import (
     route_from_generate_brief,
     route_from_on_demand,
     route_from_router,
+    route_from_select_done_topic,
     route_from_study_topic,
     route_from_study_topic_category,
     router,
@@ -148,7 +149,11 @@ def build_graph(checkpointer=None):
         route_from_done_parser,
         {"log_session": "log_session", "select_done_topic": "select_done_topic", "output": "output"},
     )
-    builder.add_edge("select_done_topic", "log_session")
+    builder.add_conditional_edges(
+        "select_done_topic",
+        route_from_select_done_topic,
+        {"log_session": "log_session", "output": "output"},
+    )
     builder.add_edge("log_session", "log_weak_areas")
     builder.add_edge("log_weak_areas", "output")
 

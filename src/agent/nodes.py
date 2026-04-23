@@ -120,6 +120,13 @@ def route_from_done_parser(state: AgentState) -> str:
     return "log_session" if state.get("current_topic_id") is not None else "select_done_topic"
 
 
+def route_from_select_done_topic(state: AgentState) -> str:
+    """Route to output on error (messages set or no current_topic_id), else log_session."""
+    if state.get("messages") or state.get("current_topic_id") is None:
+        return "output"
+    return "log_session"
+
+
 def route_from_log_weak_areas(state: AgentState) -> str:
     # log_weak_areas sets has_unlogged_sessions when more topics remain
     return "log_session" if state.get("has_unlogged_sessions") else "output"
