@@ -9,7 +9,7 @@ schedule:
     misfire_grace_time: 600
   evening_brief:
     hour: 20
-    minute: 00
+    minute: 0
     misfire_grace_time: 600
 
 protected_blocks:

@@ -312,11 +312,9 @@ def weekend_brief(_state: AgentState) -> AgentState:
         if due_topics:
             lines.append(f"🎯 You have {len(due_topics)} topic(s) due for review today:")
             for topic in due_topics:
-                weak = topic.get("weak_areas")
-                focus = f" — focus: {weak}" if weak else ""
                 overdue_days = (today - date.fromisoformat(topic["next_review"])).days
                 overdue_str = f" ⚠️ overdue {overdue_days}d" if overdue_days > 0 else ""
-                lines.append(f"• {topic['name']}{overdue_str}{focus}")
+                lines.append(f"• {topic['name']}{overdue_str}")
             lines.append("")
             lines.append("What time block will you have today to tackle these?")
 
