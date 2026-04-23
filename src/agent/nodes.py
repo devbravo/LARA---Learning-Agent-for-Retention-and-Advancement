@@ -972,10 +972,11 @@ def activate_topic(state: AgentState) -> AgentState:
             return {"messages": ["No topics currently in progress."]}
 
         buttons = [(t["name"], f"studied:{t['id']}") for t in topics]
-        topic_msg_id = _telegram.send_inline_buttons("Which topic did you just study?", buttons)
+        topic_msg_id = _telegram.send_inline_buttons("Which topic are you ready to be tested on?", buttons)
 
         # Send buttons and return — interrupt lives in graduate_topic
-        return {"pending_message_id": topic_msg_id}
+        # Clear stale messages so route_from_activate_topic doesn't mis-route to output
+        return {"pending_message_id": topic_msg_id, "messages": []}
 
     except Exception as e:
         logger.error("activate_topic failed: %s", e, exc_info=True)
