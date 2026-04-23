@@ -625,13 +625,22 @@ def done_parser(state: AgentState) -> AgentState:
     try:
         unlogged = topic_repository.get_active_unlogged_topics_today()
 
+        # Scope to today's plan when proposed_slots are available
+        proposed_slots = state.get("proposed_slots") or []
+        planned_names = {s["topic"] for s in proposed_slots}
+        if planned_names:
+            unlogged = [t for t in unlogged if t["name"] in planned_names]
+
         if not unlogged:
             return {"messages": ["No active sessions to log right now."], "has_unlogged_sessions": False}
 
         if len(unlogged) >= 2:
             logger.info("done_parser: %d unlogged topics — sending picker", len(unlogged))
-            topic_names = [t["name"] for t in unlogged]
-            picker_msg_id = _telegram.send_buttons("Which topic did you just finish?", topic_names)
+            # One button per row so long topic names don't get truncated
+            picker_msg_id = _telegram.send_inline_buttons(
+                "Which topic did you just finish?",
+                [(t["name"], t["name"]) for t in unlogged],
+            )
             return {
                 "current_topic_id": None,
                 "current_topic_name": None,
@@ -818,13 +827,21 @@ def log_weak_areas(state: AgentState) -> AgentState:
             topic_repository.update_topic_weak_areas(topic_id, None)
 
         topic_name = state.get("current_topic_name") or "topic"
-        remaining = topic_repository.get_active_unlogged_topics_today()
+        all_unlogged = topic_repository.get_active_unlogged_topics_today()
+
+        # Scope to today's plan — same rule as done_parser
+        proposed_slots = state.get("proposed_slots") or []
+        planned_names = {s["topic"] for s in proposed_slots}
+        if planned_names:
+            remaining = [t for t in all_unlogged if t["name"] in planned_names]
+        else:
+            remaining = all_unlogged
 
         if not remaining:
             msg = f"✅ {topic_name} logged. All done for today! 💪"
         else:
-            names = ", ".join(t["name"] for t in remaining)
-            msg = f"✅ {topic_name} logged. Still unlogged: {names}. Press /done when you're ready."
+            bullet_list = "\n".join(f"• {t['name']}" for t in remaining)
+            msg = f"✅ {topic_name} logged. Still unlogged:\n{bullet_list}\n\nPress /done when you're ready."
 
         return {
             "messages": [msg],
