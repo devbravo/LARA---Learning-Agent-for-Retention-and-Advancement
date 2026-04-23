@@ -24,6 +24,42 @@ def _default_study_slot_datetimes(target_date: date, slot_index: int) -> tuple[d
     return start_dt, start_dt + timedelta(hours=1)
 
 
+def _has_slot_conflict(start_dt: datetime, end_dt: datetime, timed_events: list[dict]) -> bool:
+    """Return True if [start_dt, end_dt) overlaps any timed calendar event.
+
+    Both start_dt/end_dt and event datetimes are compared as naive (timezone
+    info stripped), matching the convention used by gap_finder.
+    """
+    for ev in timed_events:
+        ev_start_str = (ev.get("start") or {}).get("dateTime")
+        ev_end_str = (ev.get("end") or {}).get("dateTime")
+        if not ev_start_str or not ev_end_str:
+            continue
+        ev_start = datetime.fromisoformat(ev_start_str).replace(tzinfo=None)
+        ev_end = datetime.fromisoformat(ev_end_str).replace(tzinfo=None)
+        if start_dt < ev_end and end_dt > ev_start:
+            return True
+    return False
+
+
+def _next_free_slot(
+    from_index: int, timed_events: list[dict], target_date: date
+) -> tuple[int, tuple[datetime, datetime]] | None:
+    """Return the first (slot_index, (start, end)) pair at or after from_index
+    that does not conflict with any event in timed_events.
+
+    Returns None when no valid same-day slot remains.
+    """
+    idx = from_index
+    while True:
+        slot_range = _default_study_slot_datetimes(target_date, idx)
+        if slot_range is None:
+            return None
+        if not _has_slot_conflict(slot_range[0], slot_range[1], timed_events):
+            return idx, slot_range
+        idx += 1
+
+
 
 def is_topic_in_summary(topic_name: str, summary: str) -> bool:
     """Return whether a topic name is represented by a calendar summary.
@@ -90,29 +126,36 @@ def rebook_study_events(
         config: Parsed application configuration including timezone.
     """
     tz = pytz.timezone(config["timezone"])
+    slot_index = 0
 
-    for slot_index, topic_name in enumerate(in_progress_topics):
-        slot_range = _default_study_slot_datetimes(target_date, slot_index)
-        if slot_range is None:
-            logger.warning("Skipping [Study] rebooking for %s — no valid slot remains on %s", topic_name, target_date)
-            break
-
+    for topic_name in in_progress_topics:
         already_booked = any(
             is_topic_in_summary(topic_name, ev.get("summary", ""))
             for ev in timed_events
         )
-        if not already_booked:
-            try:
-                start_dt, end_dt = slot_range
-                start = local_datetime_str(start_dt.date(), start_dt.hour, start_dt.minute, tz)
-                end = local_datetime_str(end_dt.date(), end_dt.hour, end_dt.minute, tz)
-                _gcal.write_study_event(
-                    topic=topic_name,
-                    start=start,
-                    end=end,
-                )
-            except Exception as e:
-                logger.warning("Failed to rebook [Study] for %s: %s", topic_name, e)
+        if already_booked:
+            # The booked event is already in timed_events, so conflict detection
+            # for subsequent topics will naturally avoid its time slot.
+            continue
+
+        result = _next_free_slot(slot_index, timed_events, target_date)
+        if result is None:
+            logger.warning("Skipping [Study] rebooking for %s — no conflict-free slot remains on %s", topic_name, target_date)
+            break
+
+        slot_index, (start_dt, end_dt) = result
+        try:
+            start = local_datetime_str(start_dt.date(), start_dt.hour, start_dt.minute, tz)
+            end = local_datetime_str(end_dt.date(), end_dt.hour, end_dt.minute, tz)
+            _gcal.write_study_event(
+                topic=topic_name,
+                start=start,
+                end=end,
+            )
+        except Exception as e:
+            logger.warning("Failed to rebook [Study] for %s: %s", topic_name, e)
+
+        slot_index += 1
 
 
 
@@ -136,28 +179,31 @@ def build_missing_study_events(
         default study slots.
     """
     tz = pytz.timezone(config["timezone"])
-
     synthetic_events: list[dict[str, Any]] = []
+    slot_index = 0
 
-    for slot_index, topic_name in enumerate(in_progress_topics):
-        slot_range = _default_study_slot_datetimes(target_date, slot_index)
-        if slot_range is None:
-            logger.warning("Skipping synthetic [Study] busy event for %s — no valid slot remains on %s", topic_name, target_date)
-            break
-
+    for topic_name in in_progress_topics:
         already_booked = any(
             is_topic_in_summary(topic_name, ev.get("summary", ""))
             for ev in timed_events
         )
-        if not already_booked:
-            start_dt, end_dt = slot_range
-            synthetic_events.append(
-                {
-                    "summary": f"[Study] {topic_name}",
-                    "start": {"dateTime": local_datetime_str(start_dt.date(), start_dt.hour, start_dt.minute, tz)},
-                    "end": {"dateTime": local_datetime_str(end_dt.date(), end_dt.hour, end_dt.minute, tz)},
-                }
-            )
+        if already_booked:
+            continue
+
+        result = _next_free_slot(slot_index, timed_events, target_date)
+        if result is None:
+            logger.warning("Skipping synthetic [Study] busy event for %s — no conflict-free slot remains on %s", topic_name, target_date)
+            break
+
+        slot_index, (start_dt, end_dt) = result
+        synthetic_events.append(
+            {
+                "summary": f"[Study] {topic_name}",
+                "start": {"dateTime": local_datetime_str(start_dt.date(), start_dt.hour, start_dt.minute, tz)},
+                "end": {"dateTime": local_datetime_str(end_dt.date(), end_dt.hour, end_dt.minute, tz)},
+            }
+        )
+        slot_index += 1
 
     return synthetic_events
 
@@ -180,7 +226,9 @@ def build_in_progress_study_slots(
         A chronologically sorted list of display-ready study-slot dictionaries.
     """
     slots: list[dict[str, Any]] = []
-    for slot_index, topic_name in enumerate(in_progress_topics):
+    fallback_slot_index = 0
+
+    for topic_name in in_progress_topics:
         booked_event = next(
             (
                 ev for ev in timed_events
@@ -195,14 +243,15 @@ def build_in_progress_study_slots(
             end = format_event_time(booked_event["end"])
             duration_min = event_duration_min(booked_event) or 60
         else:
-            slot_range = _default_study_slot_datetimes(target_date, slot_index)
-            if slot_range is None:
-                logger.warning("Skipping in-progress display slot for %s — no valid slot remains on %s", topic_name, target_date)
+            result = _next_free_slot(fallback_slot_index, timed_events, target_date)
+            if result is None:
+                logger.warning("Skipping in-progress display slot for %s — no conflict-free slot remains on %s", topic_name, target_date)
                 break
-            start_dt, end_dt = slot_range
+            fallback_slot_index, (start_dt, end_dt) = result
             start = format_event_time({"dateTime": start_dt.isoformat()})
             end = format_event_time({"dateTime": end_dt.isoformat()})
             duration_min = 60
+            fallback_slot_index += 1
 
         slots.append(
             {

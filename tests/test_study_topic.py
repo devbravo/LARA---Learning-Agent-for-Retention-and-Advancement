@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 # ---------------------------------------------------------------------------
 _graph_stub = sys.modules.pop("src.agent.graph", None)
 
-from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
+from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 
 import src.agent.nodes as _nodes  # noqa: E402
@@ -78,10 +78,8 @@ def _make_get_connection(db_path: str):
 
 
 def _make_test_graph():
-    """Build an isolated graph backed by an in-memory SQLite checkpointer."""
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
-    return build_graph(checkpointer=checkpointer)
+    """Build an isolated graph backed by an in-memory checkpointer."""
+    return build_graph(checkpointer=MemorySaver())
 
 
 def _extract_categories(topic_names: list[str]) -> list[str]:
@@ -316,6 +314,36 @@ def test_study_topic_confirm_sends_confirmation_message():
     assert "DSA - Arrays" in mock_send.call_args[0][0]
 
 
+def test_pick_does_not_replay_stale_messages_from_previous_flow():
+    """Regression: stale messages left by a prior flow (e.g. evening brief) must not
+    be sent when /pick is invoked on the same thread."""
+    path = _make_topics_db([
+        {"name": "DSA - Arrays", "tier": 1, "status": "inactive"},
+    ])
+    topic_id = _get_topic_id(path, "DSA - Arrays")
+
+    g = _make_test_graph()
+    chat_id = 6099
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
+    # Seed the checkpoint with a stale message (simulates a completed evening brief).
+    g.update_state(config, {"messages": ["🌙 Evening brief from yesterday."], "trigger": "evening"})
+
+    mock_send = MagicMock()
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=10), \
+         patch.object(_nodes._telegram, "remove_buttons"), \
+         patch.object(_nodes._telegram, "send_message", mock_send):
+        g.invoke({"trigger": "pick", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume="category:DSA"), config=config)
+        g.invoke(Command(resume=f"subtopic_id:{topic_id}"), config=config)
+
+    # Only the /pick confirmation message should be sent — not the stale brief.
+    assert mock_send.call_count == 1
+    assert "DSA - Arrays" in mock_send.call_args[0][0]
+    assert "Evening brief" not in mock_send.call_args[0][0]
+
+
 def test_study_topic_confirm_no_op_when_already_in_progress():
     """study_topic_confirm sets error message state for a topic already in in_progress."""
     path = _make_topics_db([
@@ -469,8 +497,9 @@ def test_missing_study_busy_events_preserve_default_slot_order_for_unbooked_topi
 
     assert len(events) == 1
     assert events[0]["summary"] == "[Study] LLMOps - MLflow"
-    assert f"{target_date.isoformat()}T09:00:00" in events[0]["start"]["dateTime"]
-    assert f"{target_date.isoformat()}T10:00:00" in events[0]["end"]["dateTime"]
+    # Already-booked topics no longer consume a slot index, so LLMOps gets 08:00.
+    assert f"{target_date.isoformat()}T08:00:00" in events[0]["start"]["dateTime"]
+    assert f"{target_date.isoformat()}T09:00:00" in events[0]["end"]["dateTime"]
 
 
 def test_in_progress_study_slots_use_actual_booked_time_when_present():
@@ -516,8 +545,10 @@ def test_in_progress_study_slots_mix_actual_and_default_slots_chronologically():
     assert slots == [
         {
             "topic": "LLMOps - MLflow",
-            "start": "09:00",
-            "end": "10:00",
+            # Already-booked topics no longer consume a slot index,
+            # so LLMOps gets the earliest free slot (08:00).
+            "start": "08:00",
+            "end": "09:00",
             "duration_min": 60,
         },
         {
@@ -527,6 +558,33 @@ def test_in_progress_study_slots_mix_actual_and_default_slots_chronologically():
             "duration_min": 60,
         },
     ]
+
+
+def test_build_missing_study_events_skips_slot_conflicting_with_meeting():
+    """Regression: study slots must not overlap existing calendar meetings."""
+    target_date = date.today()
+    config = {"timezone": "UTC"}
+    # Meeting at 10:30–11:30 blocks the default slot 2 (10:00–11:00) and slot 3 (10:30 start).
+    # Slot 2 (10:00–11:00) overlaps the 10:30 meeting, so the third topic must land at 11:00+.
+    timed_events = [
+        {
+            "summary": "Team Standup",
+            "start": {"dateTime": f"{target_date.isoformat()}T10:30:00+00:00"},
+            "end": {"dateTime": f"{target_date.isoformat()}T11:00:00+00:00"},
+        }
+    ]
+    in_progress_topics = ["DSA - Arrays", "LLMOps - MLflow", "System Design"]
+
+    from src.agent.planning_helpers import build_missing_study_events
+
+    events = build_missing_study_events(in_progress_topics, timed_events, target_date, config)
+
+    assert len(events) == 3
+    times = {e["summary"].replace("[Study] ", ""): e["start"]["dateTime"] for e in events}
+    assert f"{target_date.isoformat()}T08:00:00" in times["DSA - Arrays"]
+    assert f"{target_date.isoformat()}T09:00:00" in times["LLMOps - MLflow"]
+    # 10:00-11:00 conflicts with the 10:30 meeting → must be pushed to 11:00
+    assert f"{target_date.isoformat()}T11:00:00" in times["System Design"]
 
 
 def test_missing_study_busy_events_stop_before_invalid_next_day_timestamps():

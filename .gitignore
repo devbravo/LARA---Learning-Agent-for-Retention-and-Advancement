@@ -20,3 +20,10 @@ logs/
 # SQLite runtime files
 *.db-wal
 *.db-shm
+
+# Images and media
+*.png
+*.jpg
+*.jpeg
+*.gif
+
