@@ -155,20 +155,26 @@ def test_done_parser_one_unlogged_sends_rating_buttons():
 # ---------------------------------------------------------------------------
 
 def test_done_parser_multiple_unlogged_sends_picker():
-    """done_parser sends a topic picker when 2+ active topics are unlogged."""
+    """done_parser sends a one-per-row topic picker when 2+ planned topics are unlogged."""
     mock_send = MagicMock(return_value=55)
     topics = [{"id": 1, "name": "DSA - Trees"}, {"id": 2, "name": "System Design"}]
+    state = {
+        "proposed_slots": [
+            {"topic": "DSA - Trees", "duration_min": 45},
+            {"topic": "System Design", "duration_min": 60},
+        ]
+    }
     with patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today",
                       return_value=topics), \
-         patch.object(_nodes._telegram, "send_buttons", mock_send):
-        result = done_parser({})
+         patch.object(_nodes._telegram, "send_inline_buttons", mock_send):
+        result = done_parser(state)
 
     assert result["has_unlogged_sessions"] is True
     assert result["current_topic_id"] is None
     assert result["pending_message_id"] == 55
     mock_send.assert_called_once_with(
         "Which topic did you just finish?",
-        ["DSA - Trees", "System Design"],
+        [("DSA - Trees", "DSA - Trees"), ("System Design", "System Design")],
     )
 
 
@@ -207,6 +213,43 @@ def test_done_parser_single_topic_defaults_duration_when_no_slot():
 
 
 # ---------------------------------------------------------------------------
+# New bug regression: picker must not show topics outside today's plan
+# ---------------------------------------------------------------------------
+
+def test_done_parser_ignores_active_topics_not_in_plan():
+    """done_parser only shows topics from proposed_slots, not all active DB topics."""
+    mock_send = MagicMock(return_value=1)
+    # DB has many active topics; only one was planned today
+    all_active = [
+        {"id": 1, "name": "DSA - Trees"},
+        {"id": 2, "name": "System Design"},
+        {"id": 3, "name": "LLMOps"},
+        {"id": 4, "name": "Gen AI"},
+    ]
+    state = {"proposed_slots": [{"topic": "DSA - Trees", "duration_min": 60}]}
+    with patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today",
+                      return_value=all_active), \
+         patch.object(_nodes._telegram, "send_buttons", mock_send):
+        result = done_parser(state)
+
+    # Only 1 topic in plan → skip picker, send rating buttons directly
+    assert result["current_topic_id"] == 1
+    assert result["current_topic_name"] == "DSA - Trees"
+    mock_send.assert_called_once_with("How did DSA - Trees go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+
+
+def test_done_parser_no_proposed_slots_falls_back_to_all_active():
+    """When no proposed_slots are stored, done_parser accepts any unlogged active topic."""
+    mock_send = MagicMock(return_value=1)
+    with patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today",
+                      return_value=[{"id": 7, "name": "DSA - Trees"}]), \
+         patch.object(_nodes._telegram, "send_buttons", mock_send):
+        result = done_parser({})  # no proposed_slots key at all
+
+    assert result["current_topic_id"] == 7
+
+
+# ---------------------------------------------------------------------------
 # 6–8. route_from_done_parser routing logic
 # ---------------------------------------------------------------------------
 
@@ -238,14 +281,19 @@ def test_select_done_topic_sets_topic_id_on_resume():
         g = _make_test_graph()
         chat_id = 9001
         config = {"configurable": {"thread_id": str(chat_id)}}
+        planned = [
+            {"topic": "DSA - Trees", "duration_min": 45},
+            {"topic": "System Design", "duration_min": 60},
+        ]
 
         with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
              patch("src.repositories.session_repository.get_connection", _make_get_connection(path)), \
              patch.object(_nodes._telegram, "send_buttons", return_value=10), \
+             patch.object(_nodes._telegram, "send_inline_buttons", return_value=10), \
              patch.object(_nodes._telegram, "send_message"), \
              patch.object(_nodes._telegram, "remove_buttons"):
-            # done trigger → done_parser sends picker (2 topics), pauses at select_done_topic
-            g.invoke({"trigger": "done", "chat_id": chat_id}, config=config)
+            # done trigger → done_parser sends picker (2 planned topics), pauses at select_done_topic
+            g.invoke({"trigger": "done", "chat_id": chat_id, "proposed_slots": planned}, config=config)
             # resume with topic choice → select_done_topic runs, log_session pauses
             g.invoke(Command(resume="DSA - Trees"), config=config)
 
@@ -267,18 +315,23 @@ def test_select_done_topic_sends_rating_buttons_on_resume():
         g = _make_test_graph()
         chat_id = 9002
         config = {"configurable": {"thread_id": str(chat_id)}}
-        mock_send = MagicMock(return_value=20)
+        mock_send_buttons = MagicMock(return_value=20)
+        planned = [
+            {"topic": "DSA - Trees", "duration_min": 45},
+            {"topic": "System Design", "duration_min": 60},
+        ]
 
         with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
              patch("src.repositories.session_repository.get_connection", _make_get_connection(path)), \
-             patch.object(_nodes._telegram, "send_buttons", mock_send), \
+             patch.object(_nodes._telegram, "send_buttons", mock_send_buttons), \
+             patch.object(_nodes._telegram, "send_inline_buttons", return_value=10), \
              patch.object(_nodes._telegram, "send_message"), \
              patch.object(_nodes._telegram, "remove_buttons"):
-            g.invoke({"trigger": "done", "chat_id": chat_id}, config=config)
-            mock_send.reset_mock()
+            g.invoke({"trigger": "done", "chat_id": chat_id, "proposed_slots": planned}, config=config)
+            mock_send_buttons.reset_mock()
             g.invoke(Command(resume="System Design"), config=config)
 
-        mock_send.assert_called_once_with("How did System Design go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+        mock_send_buttons.assert_called_once_with("How did System Design go?", ["😕 Hard", "😐 OK", "😊 Easy"])
     finally:
         os.remove(path)
 
@@ -307,9 +360,53 @@ def test_log_weak_areas_all_done_message():
 # ---------------------------------------------------------------------------
 
 def test_log_weak_areas_lists_remaining_topics():
-    """log_weak_areas names remaining unlogged topics and tells user to /done again."""
-    state = {"chat_id": 1, "pending_message_id": 5, "current_topic_id": 7, "current_topic_name": "DSA - Trees"}
-    remaining = [{"id": 2, "name": "System Design"}, {"id": 3, "name": "LangGraph"}]
+    """log_weak_areas lists only planned remaining topics as bullets, one per line."""
+    state = {
+        "chat_id": 1,
+        "pending_message_id": 5,
+        "current_topic_id": 7,
+        "current_topic_name": "DSA - Queue",
+        "proposed_slots": [
+            {"topic": "DSA - Queue", "duration_min": 60},
+            {"topic": "System Design", "duration_min": 60},
+            {"topic": "LangGraph", "duration_min": 60},
+        ],
+    }
+    # DB returns many active topics; only the planned ones should appear
+    all_active = [
+        {"id": 2, "name": "System Design"},
+        {"id": 3, "name": "LangGraph"},
+        {"id": 4, "name": "DSA - Linked Lists"},   # active but NOT in plan — must be excluded
+    ]
+    with patch("src.agent.nodes.interrupt", return_value="skip"), \
+         patch.object(_nodes._telegram, "remove_buttons"), \
+         patch.object(_nodes.session_repository, "get_today_session_id", return_value=None), \
+         patch.object(_nodes.topic_repository, "update_topic_weak_areas"), \
+         patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today", return_value=all_active):
+        result = log_weak_areas(state)
+
+    assert result["has_unlogged_sessions"] is False
+    msg = result["messages"][0]
+    assert "DSA - Queue logged" in msg
+    assert "• System Design" in msg
+    assert "• LangGraph" in msg
+    assert "DSA - Linked Lists" not in msg   # not in today's plan
+    assert "/done" in msg
+
+
+def test_log_weak_areas_remaining_topics_one_per_line():
+    """Each remaining topic appears on its own bullet line."""
+    state = {
+        "chat_id": 1,
+        "pending_message_id": 5,
+        "current_topic_id": 7,
+        "current_topic_name": "DSA - Queue",
+        "proposed_slots": [
+            {"topic": "DSA - Queue", "duration_min": 60},
+            {"topic": "System Design", "duration_min": 60},
+        ],
+    }
+    remaining = [{"id": 2, "name": "System Design"}]
     with patch("src.agent.nodes.interrupt", return_value="skip"), \
          patch.object(_nodes._telegram, "remove_buttons"), \
          patch.object(_nodes.session_repository, "get_today_session_id", return_value=None), \
@@ -317,12 +414,8 @@ def test_log_weak_areas_lists_remaining_topics():
          patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today", return_value=remaining):
         result = log_weak_areas(state)
 
-    assert result["has_unlogged_sessions"] is False
     msg = result["messages"][0]
-    assert "DSA - Trees logged" in msg
-    assert "System Design" in msg
-    assert "LangGraph" in msg
-    assert "/done" in msg
+    assert "\n• System Design\n" in msg
 
 
 # ---------------------------------------------------------------------------
