@@ -72,6 +72,36 @@ def init_db() -> None:
         else:
             logger.debug("topics table does not exist yet; skipping column migrations and creating tables")
 
+        # sessions column migrations — silent no-ops when column already exists
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN mode TEXT CHECK(mode IN ('study', 'discuss', 'mock'))")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN student_quality INTEGER CHECK(student_quality IN (2, 3, 5))")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN student_weak_areas TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN teacher_quality INTEGER CHECK(teacher_quality IN (2, 3, 5))")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN teacher_weak_areas TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN teacher_source TEXT CHECK(teacher_source IN ('claude', 'algomonster'))")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN calibration_gap INTEGER")
+        except sqlite3.OperationalError:
+            pass
+
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS topics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,13 +118,20 @@ def init_db() -> None:
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                topic_id INTEGER NOT NULL REFERENCES topics(id),
-                studied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                duration_min INTEGER,
-                quality_score INTEGER CHECK(quality_score IN (2, 3, 5)),
-                weak_areas TEXT,
-                suggestions TEXT
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic_id            INTEGER NOT NULL REFERENCES topics(id),
+                studied_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                duration_min        INTEGER,
+                mode                TEXT CHECK(mode IN ('study', 'discuss', 'mock')),
+                quality_score       INTEGER CHECK(quality_score IN (2, 3, 5)),
+                weak_areas          TEXT,
+                suggestions         TEXT,
+                student_quality     INTEGER CHECK(student_quality IN (2, 3, 5)),
+                student_weak_areas  TEXT,
+                teacher_quality     INTEGER CHECK(teacher_quality IN (2, 3, 5)),
+                teacher_weak_areas  TEXT,
+                teacher_source      TEXT CHECK(teacher_source IN ('claude', 'algomonster')),
+                calibration_gap     INTEGER
             );
         """)
 
@@ -142,7 +179,7 @@ def seed_topics() -> None:
                    tier = excluded.tier,
                    status = excluded.status,
                    topic_type = excluded.topic_type,
-                   next_review = CASE 
+                   next_review = CASE
                        WHEN excluded.status = 'active' AND topics.next_review IS NULL THEN date('now')
                        WHEN excluded.status != 'active' THEN NULL
                        ELSE topics.next_review
@@ -158,12 +195,12 @@ if __name__ == "__main__":
     init_db()
     seed_topics()
 
-    with get_connection() as db:
-        rows = db.execute(
+    with get_connection() as conn:
+        topic_rows = conn.execute(
             "SELECT id, name, tier, status, easiness_factor, interval_days, repetitions, next_review FROM topics ORDER BY tier, name"
         ).fetchall()
 
     print(f"{'ID':<4} {'Name':<35} {'Tier':<6} {'Status':<12} {'EF':<6} {'Interval':<10} {'Reps':<6} {'Next Review'}")
     print("-" * 90)
-    for row in rows:
+    for row in topic_rows:
         print(f"{row['id']:<4} {row['name']:<35} {row['tier']:<6} {row['status']:<12} {row['easiness_factor']:<6} {row['interval_days']:<10} {row['repetitions']:<6} {row['next_review']}")

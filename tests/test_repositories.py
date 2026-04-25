@@ -52,7 +52,8 @@ class RepositoryDbTestCase(unittest.TestCase):
                     duration_min INTEGER,
                     quality_score INTEGER,
                     weak_areas TEXT,
-                    suggestions TEXT
+                    suggestions TEXT,
+                    student_quality INTEGER
                 );
                 """
             )
@@ -170,7 +171,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
-                "SELECT id, duration_min, quality_score FROM sessions WHERE topic_id = ?",
+                "SELECT id, duration_min, student_quality FROM sessions WHERE topic_id = ?",
                 (topic_id,),
             ).fetchall()
         finally:
@@ -178,7 +179,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["duration_min"], 60)
-        self.assertEqual(rows[0]["quality_score"], 5)
+        self.assertEqual(rows[0]["student_quality"], 5)
 
     # ------------------------------------------------------------------
     # Legacy UTC row compat — day-boundary tests
@@ -260,7 +261,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             rows = conn.execute(
-                "SELECT id, duration_min, quality_score FROM sessions WHERE topic_id = ?",
+                "SELECT id, duration_min, student_quality FROM sessions WHERE topic_id = ?",
                 (topic_id,),
             ).fetchall()
         finally:
