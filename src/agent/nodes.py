@@ -754,7 +754,7 @@ def log_session(state: AgentState) -> AgentState:
         session_repository.upsert_today_session(
             topic_id=topic_id,
             duration_min=duration_min,
-            quality_score=quality,
+            student_quality=quality,
         )
         _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=quality)
 
@@ -827,7 +827,8 @@ def log_weak_areas(state: AgentState) -> AgentState:
         if planned_names:
             remaining = [t for t in all_unlogged if t["name"] in planned_names]
         else:
-            remaining = all_unlogged
+            due_names = {t["name"] for t in _sm2.get_due_topics()}
+            remaining = [t for t in all_unlogged if t["name"] in due_names]
 
         if not remaining:
             msg = f"✅ {topic_name} logged. All done for today! 💪"

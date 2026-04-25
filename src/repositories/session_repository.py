@@ -118,7 +118,7 @@ def update_session_weak_areas(session_id: int, weak_areas: str) -> None:
     """
     with get_connection() as conn:
         conn.execute(
-            "UPDATE sessions SET weak_areas = ? WHERE id = ?",
+            "UPDATE sessions SET student_weak_areas = ? WHERE id = ?",
             (weak_areas, session_id),
         )
 
