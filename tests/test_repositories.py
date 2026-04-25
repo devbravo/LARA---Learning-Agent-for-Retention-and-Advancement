@@ -280,18 +280,17 @@ class Sm2RepositoryTests(RepositoryDbTestCase):
         self._insert_topic(name="Inactive", tier=1, status="inactive", next_review=today)
         self._insert_topic(name="Future", tier=1, status="active", next_review=tomorrow)
 
-        rows = sm2_repository.fetch_due_topics(self.db_path, date.today())
+        rows = sm2_repository.fetch_due_topics(date.today())
         self.assertEqual([r["name"] for r in rows], ["Tier1Hard", "Tier2"])
 
     def test_fetch_and_update_sm2_state(self) -> None:
         topic_id = self._insert_topic(name="SM2", easiness_factor=2.3, interval_days=4, repetitions=2)
 
-        state = sm2_repository.fetch_sm2_state(self.db_path, topic_id)
+        state = sm2_repository.fetch_sm2_state(topic_id)
         self.assertIsNotNone(state)
         self.assertEqual(state["interval_days"], 4)
 
         sm2_repository.update_sm2_state(
-            path=self.db_path,
             topic_id=topic_id,
             easiness_factor=2.6,
             interval_days=6,
@@ -299,12 +298,12 @@ class Sm2RepositoryTests(RepositoryDbTestCase):
             next_review=(date.today() + timedelta(days=6)).isoformat(),
         )
 
-        state2 = sm2_repository.fetch_sm2_state(self.db_path, topic_id)
+        state2 = sm2_repository.fetch_sm2_state(topic_id)
         self.assertEqual(state2["easiness_factor"], 2.6)
         self.assertEqual(state2["interval_days"], 6)
         self.assertEqual(state2["repetitions"], 3)
 
-        self.assertIsNone(sm2_repository.fetch_sm2_state(self.db_path, 99999))
+        self.assertIsNone(sm2_repository.fetch_sm2_state(99999))
 
 
 if __name__ == "__main__":

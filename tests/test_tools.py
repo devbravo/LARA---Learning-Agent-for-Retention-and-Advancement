@@ -45,7 +45,7 @@ def test_get_due_topics_uses_repo_db_path():
     with patch("src.agent.tools._sm2.get_due_topics", return_value=due) as mock_due:
         result = _call_tool(tools.get_due_topics)
 
-    mock_due.assert_called_once_with(db_path=tools._DB_PATH)
+    mock_due.assert_called_once_with()
     assert result == due
 
 
@@ -104,7 +104,7 @@ def test_log_study_session_with_weak_areas_updates_topic_and_sm2():
         weak_areas="trade-offs",
     )
     mock_topic_weak.assert_called_once_with(7, "trade-offs")
-    mock_update.assert_called_once_with(db_path=tools._DB_PATH, topic_id=7, quality=3)
+    mock_update.assert_called_once_with(topic_id=7, quality=3)
 
 
 def test_log_study_session_without_weak_areas_skips_topic_update():
@@ -126,4 +126,4 @@ def test_log_study_session_without_weak_areas_skips_topic_update():
         weak_areas=None,
     )
     mock_topic_weak.assert_not_called()
-    mock_update.assert_called_once_with(db_path=tools._DB_PATH, topic_id=9, quality=5)
+    mock_update.assert_called_once_with(topic_id=9, quality=5)

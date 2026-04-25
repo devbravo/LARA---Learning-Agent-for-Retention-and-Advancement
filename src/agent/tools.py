@@ -20,7 +20,6 @@ from src.integrations import gcal as _gcal
 from src.repositories import session_repository, topic_repository
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
-_DB_PATH = str(Path(__file__).parents[2] / "db" / "learning.db")
 
 
 def _load_config() -> dict:
@@ -71,7 +70,7 @@ def get_due_topics() -> list[dict]:
 
     Returns list of topic dicts with SM-2 state fields.
     """
-    return _sm2.get_due_topics(db_path=_DB_PATH)
+    return _sm2.get_due_topics()
 
 
 # ---------------------------------------------------------------------------
@@ -138,4 +137,4 @@ def log_study_session(
         topic_repository.update_topic_weak_areas(topic_id, weak_areas)
 
     # Update SM-2 state
-    _sm2.update_topic_after_session(db_path=_DB_PATH, topic_id=topic_id, quality=quality_score)
+    _sm2.update_topic_after_session(topic_id=topic_id, quality=quality_score)
