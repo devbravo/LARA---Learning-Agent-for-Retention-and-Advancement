@@ -266,10 +266,6 @@ topics:
     tier: 2
     status: inactive
     default_duration_minutes: 30
-  - name: "RAG - Retrieval Methods"
-    tier: 2
-    status: inactive
-    default_duration_minutes: 30
   - name: "RAG - Hybrid Search"
     tier: 2
     status: inactive
@@ -293,12 +289,6 @@ topics:
     status: inactive
     default_duration_minutes: 30
   - name: "RAG - Context Window Management"
-    tier: 2
-    status: inactive
-    default_duration_minutes: 30
-
-  # RAG - Evaluation
-  - name: "RAG - Evaluation (Ragas & DeepEval)"
     tier: 2
     status: inactive
     default_duration_minutes: 30
