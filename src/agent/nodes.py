@@ -129,11 +129,6 @@ def route_from_select_done_topic(state: AgentState) -> str:
     return "log_session"
 
 
-def route_from_log_weak_areas(state: AgentState) -> str:
-    # log_weak_areas sets has_unlogged_sessions when more topics remain
-    return "log_session" if state.get("has_unlogged_sessions") else "output"
-
-
 def route_from_on_demand(state: AgentState) -> str:
     return "generate_brief" if state.get("proposed_topic") else "output"
 
@@ -527,14 +522,6 @@ def await_brief_confirmation(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def book_events(state: AgentState) -> AgentState:
-    payload = (state.get("payload") or "").lower().strip()
-    if payload == "skip":
-        try:
-            _telegram.send_message("Okay, no study blocks booked. See you tomorrow! 👋")
-        except Exception as e:
-            logger.warning("[book_events] Failed to send skip message: %s", e)
-        return {}
-
     today = date.today()
     config = _load_config()
     tz = pytz.timezone(config["timezone"])

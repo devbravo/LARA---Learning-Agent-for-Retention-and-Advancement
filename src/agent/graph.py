@@ -221,7 +221,7 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
         "chat_id": chat_id,
     }
     initial_state_dict: Any = initial_state
-    for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot",
+    for key in ("pending_message_id", "duration_min", "proposed_topic", "proposed_slot",
                 "quality_score", "messages", "current_topic_id", "current_topic_name",
                 "study_topic_category"):
         if kwargs.get(key) is not None:

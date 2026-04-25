@@ -17,13 +17,16 @@ TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
 logger = logging.getLogger(__name__)
 
 
-def get_connection() -> sqlite3.Connection:
+def get_connection(path: str | Path | None = None) -> sqlite3.Connection:
     """Create a SQLite connection configured with row-name access.
+
+    Args:
+        path: Optional path to the database file. Defaults to ``DB_PATH``.
 
     Returns:
         ``sqlite3.Connection`` with ``row_factory`` set to ``sqlite3.Row``.
     """
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(path or DB_PATH)
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -52,12 +55,13 @@ def init_db() -> None:
                 except sqlite3.OperationalError as e:
                     logger.exception("Failed adding 'status' column: %s", e)
 
-            # Ensure existing rows have a non-null status
-            if "status" in existing:
-                try:
-                    conn.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
-                except sqlite3.OperationalError as e:
-                    logger.exception("Failed updating NULL status values: %s", e)
+            # Ensure existing rows have a non-null status (runs whether column
+            # was just added or already present — guards against manual inserts
+            # that bypassed the DEFAULT).
+            try:
+                conn.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
+            except sqlite3.OperationalError as e:
+                logger.exception("Failed updating NULL status values: %s", e)
 
             if "topic_type" not in existing:
                 try:
