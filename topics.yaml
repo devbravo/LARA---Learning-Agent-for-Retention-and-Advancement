@@ -3,457 +3,536 @@ topics:
   - name: "DSA - Binary Search"
     tier: 1
     status: active
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Two Pointers"
     tier: 1
     status: active
+    topic_type: dsa
     default_duration_minutes: 15
   - name: "DSA - Sliding Window"
     tier: 1
     status: active
+    topic_type: dsa
     default_duration_minutes: 15
   - name: "DSA - Prefix Sum"
     tier: 1
     status: active
+    topic_type: dsa
     default_duration_minutes: 15
   - name: "DSA - Depth First Search"
     tier: 1
     status: inactive
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Backtracking"
     tier: 1
     status: inactive
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Breadth First Search"
     tier: 1
     status: inactive
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Graph"
     tier: 1
     status: inactive
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Priority Queue"
     tier: 2
     status: inactive
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Dynamic Programming"
     tier: 2
     status: inactive
+    topic_type: dsa
     default_duration_minutes: 30
 
- # Tier 1 — Data Structures (flagged weak in profiling)
+  # Tier 1 — Data Structures (flagged weak in profiling)
   - name: "DSA - Arrays"
     tier: 1
     status: active
+    topic_type: dsa
     default_duration_minutes: 15
   - name: "DSA - Strings"
     tier: 1
     status: active
+    topic_type: dsa
     default_duration_minutes: 15
   - name: "DSA - Linked Lists"
     tier: 1
     status: active
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Queue"
     tier: 1
     status: in_progress
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Hash Tables & Sets"
     tier: 1
     status: inactive
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Stack"
     tier: 1
     status: inactive
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Trees"
     tier: 1
     status: inactive
+    topic_type: dsa
     default_duration_minutes: 30
   - name: "DSA - Heaps"
     tier: 1
     status: inactive
+    topic_type: dsa
     default_duration_minutes: 30
-
-
 
   # LLMOps - Monitoring (scored 2/4 — TOP GAP)
   - name: "LLMOps - Alerting & Thresholds"
     tier: 1
     status: active
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLMOps - Feedback Loops & User Signals"
     tier: 1
     status: active
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLMOps - Data & Concept Drift"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLMOps - LLM Output Quality Tracking"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLMOps - Retrieval Quality Monitoring"
     tier: 1
     status: in_progress
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLMOps - Cost & Token Tracking"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
 
   # LLMOps - Observability & Evaluation
   - name: "LLMOps - Evaluation & LLM-as-Judge"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLMOps - RAG-Specific Metrics (Ragas)"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLMOps - Tracing & Instrumentation"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLMOps - Experiment Tracking"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
   - name: "LLMOps - Logging & Audit Trails"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
 
-# LLMOps - Deployment & Operations
+  # LLMOps - Deployment & Operations
   - name: "LLMOps - Deployment Patterns (canary, blue/green, shadow)"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLMOps - Rollback & Incident Handling"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
   - name: "LLMOps - A/B Testing Model Versions"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
   - name: "LLMOps - Prompt Versioning & Management"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
   - name: "LLMOps - Guardrails & Safety Layers"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
   - name: "LLMOps - CI/CD for LLM Pipelines"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLMOps - Scalability & Load Management"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
-
 
   # Coding Best Practices (scored 2/4 — TOP GAP)
   - name: "Coding - Type Hints & Docstrings"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "Coding - Error Handling & Edge Cases"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "Coding - Unit Testing & TDD"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
   - name: "Coding - Clean Code & Refactoring"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
   - name: "Coding - Code Review Practices"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
-
 
   # ML Fundamentals Breadth (flagged weak in profiling)
   - name: "ML Fundamentals - Bias, Variance & Learning Curves"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "ML Fundamentals - Data Leakage"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "ML Fundamentals - Evaluation Metrics (beyond accuracy)"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "ML Fundamentals - Overfitting Diagnostics"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "ML Fundamentals - Vision Transformers (conceptual)"
     tier: 1
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
 
-
-
-  # Tier 1 — Gen AI System Design
-  # Gen AI System Design (broken into subtopics)
+  # Tier 2 — Gen AI System Design
   - name: "System Design - Fundamentals"
     tier: 2
     status: inactive
+    topic_type: system_design
     default_duration_minutes: 60
   - name: "System Design - ML System Design Framework"
     tier: 2
     status: inactive
+    topic_type: system_design
     default_duration_minutes: 60
   - name: "System Design - Agentic RAG Architecture"
     tier: 2
     status: inactive
+    topic_type: system_design
     default_duration_minutes: 90
   - name: "System Design - Scalability & Load Balancing"
     tier: 2
     status: inactive
+    topic_type: system_design
     default_duration_minutes: 60
   - name: "System Design - Cost-aware Architecture"
     tier: 2
     status: inactive
+    topic_type: system_design
     default_duration_minutes: 45
-
 
   # Behavioral & Experience (quantified impact — Factored gap)
   - name: "Behavioral - STAR Method"
     tier: 1
     status: inactive
+    topic_type: behavioral
     default_duration_minutes: 45
   - name: "Behavioral - CodeDealers Story (quantified)"
     tier: 1
     status: inactive
+    topic_type: behavioral
     default_duration_minutes: 45
   - name: "Behavioral - Factored Finance App Story (quantified)"
     tier: 1
     status: inactive
+    topic_type: behavioral
     default_duration_minutes: 45
   - name: "Behavioral - Handling Technical Disagreements"
     tier: 1
     status: inactive
+    topic_type: behavioral
     default_duration_minutes: 30
   - name: "Behavioral - Monologue Control & Engagement"
     tier: 1
     status: inactive
+    topic_type: behavioral
     default_duration_minutes: 30
 
   # RAG - Indexing & Retrieval
   - name: "RAG - Document Parsing & Indexing"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "RAG - Chunking Strategies"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "RAG - Embedding Models"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "RAG - Vector Databases"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "RAG - Hybrid Search"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "RAG - Reranking"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "RAG - Query Transformation"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
 
-  # RAG - Generation Side (missing from original)
+  # RAG - Generation Side
   - name: "RAG - Generation & Prompting"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "RAG - Grounding & Citation"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "RAG - Context Window Management"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
 
   # RAG - Production
   - name: "RAG - Production & Latency Optimization"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 30
   - name: "RAG - Index Freshness & Updates"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
 
   # Tier 2 — Agentic Patterns
   - name: "Agentic Patterns - Tool Use"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "Agentic Patterns - ReAct"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "Agentic Patterns - Memory"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "Agentic Patterns - Planning"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "Agentic Patterns - Multi-agent"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
 
-# Agentic RAG - RAG-specific agent patterns (missing from original)
+  # Agentic RAG
   - name: "Agentic RAG - Routing Strategies"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
-
   - name: "Agentic RAG - Multi-hop Retrieval"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
-
   - name: "Agentic RAG - Self-RAG"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
-
   - name: "Agentic RAG - Corrective RAG (CRAG)"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
-
   - name: "Agentic RAG - Agent as Orchestrator"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 90
 
-
   # Tier 2 — LangGraph
-  # LangGraph (expanded)
   - name: "LangGraph - Graphs, Nodes & Edges"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
-
   - name: "LangGraph - State Management"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
-
   - name: "LangGraph - Conditional Routing"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
-
   - name: "LangGraph - Human-in-the-Loop"
     tier: 2
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
 
   # Tier 3 — LLM Internals
   - name: "LLM Internals - Attention"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLM Internals - Tokenization"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLM Internals - Fine-tuning"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLM Internals - RLHF"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLM Internals - Inference Optimization"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "LLM Internals - Prompt Engineering"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
-
 
   # LLMOps - MLOps Foundations
   - name: "LLMOps - Data Versioning & Lineage"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
-
   - name: "LLMOps - Feature Stores"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
-
   - name: "LLMOps - Model Registries"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 45
-
   - name: "LLMOps - Infrastructure as Code (IaC)"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
 
   # Tier 3 — Reinforcement Learning
   - name: "RL - Foundations"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "RL - Policy Optimization"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "RL - Value Functions"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "RL - Reward Design"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "RL - Exploration Strategy"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "RL - Training Strategy"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
   - name: "RL - Environments"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60
 
-  # Tier 3 — AWS (post-placement)
+  # Tier 3 — AWS
   - name: "AWS Solutions Architect"
     tier: 3
     status: inactive
+    topic_type: conceptual
     default_duration_minutes: 60

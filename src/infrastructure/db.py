@@ -28,29 +28,36 @@ def get_connection() -> sqlite3.Connection:
 def init_db() -> None:
     """Create required tables and apply lightweight compatibility migrations."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with get_connection() as db:
+    with get_connection() as conn:
         # Migrate existing DB: add active column if missing
         try:
-            db.execute("ALTER TABLE topics ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-
-        # Migrate existing DB: add status column if missing
-        try:
-            db.execute("ALTER TABLE topics ADD COLUMN status TEXT DEFAULT 'active'")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            db.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
+            conn.execute("ALTER TABLE topics ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
         except sqlite3.OperationalError:
             pass
 
-        db.executescript("""
+        # Migrate existing DB: add status column if missing
+        try:
+            conn.execute("ALTER TABLE topics ADD COLUMN status TEXT DEFAULT 'active'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
+        except sqlite3.OperationalError:
+            pass
+
+        # Migrate existing DB: add topic_type column if missing
+        try:
+            conn.execute("ALTER TABLE topics ADD COLUMN topic_type TEXT DEFAULT 'conceptual'")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS topics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
                 tier INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active',
+                topic_type TEXT NOT NULL DEFAULT 'conceptual',
                 easiness_factor REAL DEFAULT 2.5,
                 interval_days INTEGER DEFAULT 1,
                 repetitions INTEGER DEFAULT 0,
@@ -73,16 +80,17 @@ def init_db() -> None:
 
 def _map_status(topic: dict[str, Any]) -> dict[str, Any]:
     """Normalize topic status from legacy ``active`` to ``status``.
-
     Args:
         topic: One topic object loaded from ``topics.yaml``.
-
     Returns:
-        A copied topic mapping guaranteed to contain a ``status`` key.
+        A copied topic mapping guaranteed to contain a ``status`` key
+        and a ``topic_type`` key.
     """
     t: dict[str, Any] = dict(topic)
     if "status" not in t:
         t["status"] = "active" if t.get("active", True) else "inactive"
+    if "topic_type" not in t:
+        t["topic_type"] = "conceptual"
     return t
 
 
@@ -93,13 +101,14 @@ def seed_topics() -> None:
 
     rows = [_map_status(t) for t in config["topics"]]
 
-    with get_connection() as db:
-        db.executemany(
-            """INSERT INTO topics (name, tier, status, next_review)
-               VALUES (:name, :tier, :status, CASE WHEN :status = 'active' THEN date('now') ELSE NULL END)
+    with get_connection() as conn:
+        conn.executemany(
+            """INSERT INTO topics (name, tier, status, topic_type, next_review)
+               VALUES (:name, :tier, :status, :topic_type, CASE WHEN :status = 'active' THEN date('now') ELSE NULL END)
                ON CONFLICT(name) DO UPDATE SET
                    tier = excluded.tier,
                    status = excluded.status,
+                   topic_type = excluded.topic_type,
                    next_review = CASE 
                        WHEN excluded.status = 'active' AND topics.next_review IS NULL THEN date('now')
                        WHEN excluded.status != 'active' THEN NULL
