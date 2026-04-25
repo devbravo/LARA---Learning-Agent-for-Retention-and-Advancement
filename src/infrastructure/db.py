@@ -5,6 +5,7 @@ bootstrap operations used in development/runtime startup flows.
 """
 
 import sqlite3
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,8 @@ import yaml
 
 DB_PATH = Path(__file__).parents[2] / "db" / "learning.db"
 TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
+
+logger = logging.getLogger(__name__)
 
 
 def get_connection() -> sqlite3.Connection:
@@ -29,27 +32,41 @@ def init_db() -> None:
     """Create required tables and apply lightweight compatibility migrations."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_connection() as conn:
-        # Migrate existing DB: add active column if missing
-        try:
-            conn.execute("ALTER TABLE topics ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
-        except sqlite3.OperationalError:
-            pass
 
-        # Migrate existing DB: add status column if missing
+        # Inspect existing table structure and apply targeted migrations.
+        # We avoid broad exception swallowing by checking for column
+        # existence via PRAGMA and only running ALTER TABLE when needed.
         try:
-            conn.execute("ALTER TABLE topics ADD COLUMN status TEXT DEFAULT 'active'")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            conn.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
-        except sqlite3.OperationalError:
-            pass
+            existing = {row["name"] for row in conn.execute("PRAGMA table_info(topics)").fetchall()}
+        except sqlite3.DatabaseError as e:
+            # If PRAGMA fails for any reason, log and proceed to creation script
+            logger.exception("Failed to read topics table info; proceeding to create tables: %s", e)
+            existing = set()
 
-        # Migrate existing DB: add topic_type column if missing
-        try:
-            conn.execute("ALTER TABLE topics ADD COLUMN topic_type TEXT DEFAULT 'conceptual'")
-        except sqlite3.OperationalError:
-            pass  # column already exists
+        if existing:
+            # topics table exists; run safe, targeted migrations
+            if "status" not in existing:
+                try:
+                    conn.execute("ALTER TABLE topics ADD COLUMN status TEXT DEFAULT 'active'")
+                    logger.info("Added 'status' column to topics table")
+                except sqlite3.OperationalError as e:
+                    logger.exception("Failed adding 'status' column: %s", e)
+
+            # Ensure existing rows have a non-null status
+            if "status" in existing:
+                try:
+                    conn.execute("UPDATE topics SET status = 'active' WHERE status IS NULL")
+                except sqlite3.OperationalError as e:
+                    logger.exception("Failed updating NULL status values: %s", e)
+
+            if "topic_type" not in existing:
+                try:
+                    conn.execute("ALTER TABLE topics ADD COLUMN topic_type TEXT DEFAULT 'conceptual'")
+                    logger.info("Added 'topic_type' column to topics table")
+                except sqlite3.OperationalError as e:
+                    logger.exception("Failed adding 'topic_type' column: %s", e)
+        else:
+            logger.debug("topics table does not exist yet; skipping column migrations and creating tables")
 
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS topics (
@@ -96,15 +113,27 @@ def _map_status(topic: dict[str, Any]) -> dict[str, Any]:
 
 def seed_topics() -> None:
     """Upsert topics from ``topics.yaml`` into the ``topics`` table."""
-    with open(TOPICS_PATH) as f:
-        config = yaml.safe_load(f)
+    try:
+        with open(TOPICS_PATH) as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.error("topics.yaml not found at %s. Create the file with your topic list.", TOPICS_PATH)
+        return
+    except yaml.YAMLError as e:
+        logger.exception("Failed to parse topics.yaml (%s). Please fix YAML syntax: %s", TOPICS_PATH, e)
+        return
+
+    if not isinstance(config, dict) or "topics" not in config or not isinstance(config["topics"], list):
+        logger.error("Invalid topics.yaml structure: expected a mapping with a 'topics' list at %s", TOPICS_PATH)
+        return
 
     rows = [_map_status(t) for t in config["topics"]]
 
-    with get_connection() as conn:
-        conn.executemany(
+    try:
+        with get_connection() as conn:
+            conn.executemany(
             """INSERT INTO topics (name, tier, status, topic_type, next_review)
-               VALUES (:name, :tier, :status, :topic_type, CASE WHEN :status = 'active' THEN date('now') ELSE NULL END)
+               VALUES (:name, :tier, :status, :topic_type, CASE WHEN :status = 'active' THEN date('now') END)
                ON CONFLICT(name) DO UPDATE SET
                    tier = excluded.tier,
                    status = excluded.status,
@@ -115,7 +144,10 @@ def seed_topics() -> None:
                        ELSE topics.next_review
                    END""",
             rows,
-        )
+            )
+    except sqlite3.DatabaseError as e:
+        logger.exception("Database error while seeding topics: %s", e)
+        return
 
 
 if __name__ == "__main__":

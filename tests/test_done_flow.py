@@ -41,7 +41,7 @@ from unittest.mock import MagicMock, patch
 # ---------------------------------------------------------------------------
 _graph_stub = sys.modules.pop("src.agent.graph", None)
 
-from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
+from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 
 import src.agent.nodes as _nodes  # noqa: E402
@@ -115,8 +115,8 @@ def _make_get_connection(db_path: str):
 
 
 def _make_test_graph():
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    return build_graph(checkpointer=SqliteSaver(conn))
+    # Use the in-memory saver for tests (no persistent DB required)
+    return build_graph(checkpointer=MemorySaver())
 
 
 # ---------------------------------------------------------------------------
