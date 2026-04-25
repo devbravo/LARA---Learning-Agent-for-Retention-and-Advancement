@@ -612,11 +612,16 @@ def done_parser(state: AgentState) -> AgentState:
     try:
         unlogged = topic_repository.get_active_unlogged_topics_today()
 
-        # Scope to today's plan when proposed_slots are available
+        # Scope to today's plan when proposed_slots are available; fall back to
+        # topics actually due today so /done on a weekend (no morning plan) doesn't
+        # present every active topic.
         proposed_slots = state.get("proposed_slots") or []
         planned_names = {s["topic"] for s in proposed_slots}
         if planned_names:
             unlogged = [t for t in unlogged if t["name"] in planned_names]
+        else:
+            due_names = {t["name"] for t in _sm2.get_due_topics()}
+            unlogged = [t for t in unlogged if t["name"] in due_names]
 
         if not unlogged:
             return {"messages": ["No active sessions to log right now."], "has_unlogged_sessions": False}
