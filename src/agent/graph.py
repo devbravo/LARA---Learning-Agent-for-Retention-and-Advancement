@@ -43,6 +43,7 @@ from src.agent.nodes import (
     log_weak_areas,
     log_weak_areas_q2,
     on_demand,
+    route_from_log_weak_areas,
     output,
     route_from_activate_topic,
     route_from_await_brief_confirmation,
@@ -157,7 +158,11 @@ def build_graph(checkpointer=None):
         {"log_session": "log_session", "output": "output"},
     )
     builder.add_edge("log_session", "log_weak_areas")
-    builder.add_edge("log_weak_areas", "log_weak_areas_q2")
+    builder.add_conditional_edges(
+        "log_weak_areas",
+        route_from_log_weak_areas,
+        {"log_weak_areas_q2": "log_weak_areas_q2", "output": "output"},
+    )
     builder.add_edge("log_weak_areas_q2", "output")
 
     # Pick a topic flow

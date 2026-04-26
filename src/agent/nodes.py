@@ -179,6 +179,13 @@ def route_from_study_topic_category(state: AgentState) -> str:
     return "output" if state.get("messages") else "study_topic_confirm"
 
 
+def route_from_log_weak_areas(state: AgentState) -> str:
+    """Conceptual topics complete in Q1 and route to output; all others need Q2."""
+    if state.get("weak_areas_topic_type") == "conceptual":
+        return "output"
+    return "log_weak_areas_q2"
+
+
 # ---------------------------------------------------------------------------
 # Node: daily_planning
 # ---------------------------------------------------------------------------
@@ -794,9 +801,9 @@ def log_session(state: AgentState) -> AgentState:
                 ["Skip"],
             )
         elif topic_type == "conceptual":
-            first_msg_id = _telegram.send_inline_buttons(
-                "Confidence after this session?",
-                [("😕 Low", "😕 Low"), ("😐 Medium", "😐 Medium"), ("😊 High", "😊 High")],
+            first_msg_id = _telegram.send_buttons(
+                "What couldn't you answer? or tap Skip",
+                ["Skip"],
             )
         else:  # behavioral
             first_msg_id = _telegram.send_buttons(
@@ -858,10 +865,37 @@ def log_weak_areas(state: AgentState) -> AgentState:
                  ("All of the above", "All of the above"), ("Nothing", "Nothing")],
             )
         elif topic_type == "conceptual":
-            second_msg_id = _telegram.send_buttons(
-                "What couldn't you answer?",
-                ["Skip"],
-            )
+            weak_json_str = json.dumps({"unclear": _null_if_skip(first_text)})
+            session_id = session_repository.get_today_session_id(topic_id)
+            if session_id is not None:
+                session_repository.update_session_weak_areas(session_id, weak_json_str)
+                session_repository.update_session_student_weak_areas(session_id, weak_json_str)
+            topic_repository.update_topic_weak_areas(topic_id, weak_json_str)
+
+            topic_name = state.get("current_topic_name") or "topic"
+            all_unlogged = topic_repository.get_active_unlogged_topics_today()
+            proposed_slots = state.get("proposed_slots") or []
+            planned_names = {s["topic"] for s in proposed_slots}
+            if planned_names:
+                remaining = [t for t in all_unlogged if t["name"] in planned_names]
+            else:
+                due_names = {t["name"] for t in _sm2.get_due_topics()}
+                remaining = [t for t in all_unlogged if t["name"] in due_names]
+
+            if not remaining:
+                completion_msg = f"✅ {topic_name} logged. All done for today! 💪"
+            else:
+                bullet_list = "\n".join(f"• {t['name']}" for t in remaining)
+                completion_msg = f"✅ {topic_name} logged. Still unlogged:\n{bullet_list}\n\nPress /done when you're ready."
+
+            return {
+                "messages": [completion_msg],
+                "weak_areas_first_answer": first_text,
+                "weak_areas_topic_type": topic_type,
+                "pending_message_id": None,
+                "has_unlogged_sessions": False,
+            }
+
         else:  # behavioral
             second_msg_id = _telegram.send_inline_buttons(
                 "What felt weak?",

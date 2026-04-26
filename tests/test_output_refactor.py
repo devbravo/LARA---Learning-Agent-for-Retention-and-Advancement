@@ -224,11 +224,11 @@ def test_log_session_edge_goes_to_log_weak_areas():
 # ---------------------------------------------------------------------------
 
 def test_log_weak_areas_routes_directly_to_output():
-    """graph.py wires log_weak_areas → log_weak_areas_q2 → output (no loop)."""
+    """graph.py routes log_weak_areas conditionally: conceptual → output, others → Q2."""
     src = (Path(__file__).parents[1] / "src" / "agent" / "graph.py").read_text()
-    assert 'add_edge("log_weak_areas", "log_weak_areas_q2")' in src
+    assert "route_from_log_weak_areas" in src
+    assert '"log_weak_areas"' in src
     assert 'add_edge("log_weak_areas_q2", "output")' in src
-    assert 'route_from_log_weak_areas' not in src
 
 
 # ---------------------------------------------------------------------------
