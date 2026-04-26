@@ -5,11 +5,8 @@ for due-topic selection and post-session updates.
 """
 
 from datetime import date, timedelta
-from pathlib import Path
 
 from src.repositories import sm2_repository
-
-DB_PATH = Path(__file__).parents[2] / "db" / "learning.db"
 
 
 def calculate_next_review(
@@ -47,11 +44,10 @@ def calculate_next_review(
     return new_ef, new_interval, repetitions + 1
 
 
-def get_due_topics(db_path: str | None = None, target_date: date | None = None) -> list[dict]:
+def get_due_topics(target_date: date | None = None) -> list[dict]:
     """Return topics where next_review <= target_date and status = 'active', ordered by tier ASC, easiness_factor ASC.
 
     Args:
-        db_path: Optional path to the SQLite database. Defaults to DB_PATH.
         target_date: The date to check due topics against. Defaults to today.
                      Pass date.today() + timedelta(days=1) for tomorrow's due topics
                      (used by the evening briefing).
@@ -59,25 +55,22 @@ def get_due_topics(db_path: str | None = None, target_date: date | None = None) 
     Returns:
         List of topic rows as dictionaries.
     """
-    path = db_path or str(DB_PATH)
     if target_date is None:
         target_date = date.today()
-    return sm2_repository.fetch_due_topics(path=path, target_date=target_date)
+    return sm2_repository.fetch_due_topics(target_date=target_date)
 
 
-def update_topic_after_session(db_path: str | None = None, topic_id: int = 0, quality: int = 3) -> None:
+def update_topic_after_session(topic_id: int = 0, quality: int = 3) -> None:
     """Recompute and persist SM-2 fields for a studied topic.
 
     Args:
-        db_path: Optional path to the SQLite database. Defaults to DB_PATH.
         topic_id: Topic id to update.
         quality: Session quality score (2, 3, or 5).
 
     Raises:
         ValueError: If ``topic_id`` does not exist.
     """
-    path = db_path or str(DB_PATH)
-    row = sm2_repository.fetch_sm2_state(path=path, topic_id=topic_id)
+    row = sm2_repository.fetch_sm2_state(topic_id=topic_id)
     if row is None:
         raise ValueError(f"Topic id={topic_id} not found")
 
@@ -90,7 +83,6 @@ def update_topic_after_session(db_path: str | None = None, topic_id: int = 0, qu
     next_review = (date.today() + timedelta(days=new_interval)).isoformat()
 
     sm2_repository.update_sm2_state(
-        path=path,
         topic_id=topic_id,
         easiness_factor=new_ef,
         interval_days=new_interval,

@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from src.agent.nodes import (
@@ -184,8 +184,10 @@ def build_graph(checkpointer=None):
 
     if checkpointer is None:
         _DB_DIR.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(_STATE_DB_PATH, check_same_thread=False)
-        checkpointer = SqliteSaver(conn)
+        # Use an in-memory saver by default for local runs/tests. If you
+        # need durable persistence across restarts, pass a persistent
+        # checkpointer explicitly when calling build_graph().
+        checkpointer = MemorySaver()
 
     return builder.compile(checkpointer=checkpointer)
 
@@ -219,7 +221,7 @@ def invoke(trigger: str, chat_id: int, **kwargs) -> AgentState:
         "chat_id": chat_id,
     }
     initial_state_dict: Any = initial_state
-    for key in ("message_id", "duration_min", "proposed_topic", "proposed_slot",
+    for key in ("pending_message_id", "duration_min", "proposed_topic", "proposed_slot",
                 "quality_score", "messages", "current_topic_id", "current_topic_name",
                 "study_topic_category"):
         if kwargs.get(key) is not None:

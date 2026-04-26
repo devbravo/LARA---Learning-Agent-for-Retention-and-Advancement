@@ -129,11 +129,6 @@ def route_from_select_done_topic(state: AgentState) -> str:
     return "log_session"
 
 
-def route_from_log_weak_areas(state: AgentState) -> str:
-    # log_weak_areas sets has_unlogged_sessions when more topics remain
-    return "log_session" if state.get("has_unlogged_sessions") else "output"
-
-
 def route_from_on_demand(state: AgentState) -> str:
     return "generate_brief" if state.get("proposed_topic") else "output"
 
@@ -527,14 +522,6 @@ def await_brief_confirmation(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def book_events(state: AgentState) -> AgentState:
-    payload = (state.get("payload") or "").lower().strip()
-    if payload == "skip":
-        try:
-            _telegram.send_message("Okay, no study blocks booked. See you tomorrow! 👋")
-        except Exception as e:
-            logger.warning("[book_events] Failed to send skip message: %s", e)
-        return {}
-
     today = date.today()
     config = _load_config()
     tz = pytz.timezone(config["timezone"])
@@ -625,11 +612,16 @@ def done_parser(state: AgentState) -> AgentState:
     try:
         unlogged = topic_repository.get_active_unlogged_topics_today()
 
-        # Scope to today's plan when proposed_slots are available
+        # Scope to today's plan when proposed_slots are available; fall back to
+        # topics actually due today so /done on a weekend (no morning plan) doesn't
+        # present every active topic.
         proposed_slots = state.get("proposed_slots") or []
         planned_names = {s["topic"] for s in proposed_slots}
         if planned_names:
             unlogged = [t for t in unlogged if t["name"] in planned_names]
+        else:
+            due_names = {t["name"] for t in _sm2.get_due_topics()}
+            unlogged = [t for t in unlogged if t["name"] in due_names]
 
         if not unlogged:
             return {"messages": ["No active sessions to log right now."], "has_unlogged_sessions": False}
@@ -762,7 +754,7 @@ def log_session(state: AgentState) -> AgentState:
         session_repository.upsert_today_session(
             topic_id=topic_id,
             duration_min=duration_min,
-            quality_score=quality,
+            student_quality=quality,
         )
         _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=quality)
 
@@ -835,7 +827,8 @@ def log_weak_areas(state: AgentState) -> AgentState:
         if planned_names:
             remaining = [t for t in all_unlogged if t["name"] in planned_names]
         else:
-            remaining = all_unlogged
+            due_names = {t["name"] for t in _sm2.get_due_topics()}
+            remaining = [t for t in all_unlogged if t["name"] in due_names]
 
         if not remaining:
             msg = f"✅ {topic_name} logged. All done for today! 💪"

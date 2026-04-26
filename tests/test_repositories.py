@@ -52,7 +52,9 @@ class RepositoryDbTestCase(unittest.TestCase):
                     duration_min INTEGER,
                     quality_score INTEGER,
                     weak_areas TEXT,
-                    suggestions TEXT
+                    suggestions TEXT,
+                    student_quality INTEGER,
+                    student_weak_areas TEXT
                 );
                 """
             )
@@ -153,12 +155,12 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
-                "SELECT weak_areas FROM sessions WHERE id = ?",
+                "SELECT student_weak_areas FROM sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
         finally:
             conn.close()
-        self.assertEqual(row["weak_areas"], "caching")
+        self.assertEqual(row["student_weak_areas"], "caching")
 
     def test_upsert_today_session_updates_existing_row(self) -> None:
         topic_id = self._insert_topic(name="Agents")
@@ -170,7 +172,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
-                "SELECT id, duration_min, quality_score FROM sessions WHERE topic_id = ?",
+                "SELECT id, duration_min, student_quality FROM sessions WHERE topic_id = ?",
                 (topic_id,),
             ).fetchall()
         finally:
@@ -178,7 +180,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["duration_min"], 60)
-        self.assertEqual(rows[0]["quality_score"], 5)
+        self.assertEqual(rows[0]["student_quality"], 5)
 
     # ------------------------------------------------------------------
     # Legacy UTC row compat — day-boundary tests
@@ -260,7 +262,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             rows = conn.execute(
-                "SELECT id, duration_min, quality_score FROM sessions WHERE topic_id = ?",
+                "SELECT id, duration_min, student_quality FROM sessions WHERE topic_id = ?",
                 (topic_id,),
             ).fetchall()
         finally:
@@ -280,18 +282,17 @@ class Sm2RepositoryTests(RepositoryDbTestCase):
         self._insert_topic(name="Inactive", tier=1, status="inactive", next_review=today)
         self._insert_topic(name="Future", tier=1, status="active", next_review=tomorrow)
 
-        rows = sm2_repository.fetch_due_topics(self.db_path, date.today())
+        rows = sm2_repository.fetch_due_topics(date.today())
         self.assertEqual([r["name"] for r in rows], ["Tier1Hard", "Tier2"])
 
     def test_fetch_and_update_sm2_state(self) -> None:
         topic_id = self._insert_topic(name="SM2", easiness_factor=2.3, interval_days=4, repetitions=2)
 
-        state = sm2_repository.fetch_sm2_state(self.db_path, topic_id)
+        state = sm2_repository.fetch_sm2_state(topic_id)
         self.assertIsNotNone(state)
         self.assertEqual(state["interval_days"], 4)
 
         sm2_repository.update_sm2_state(
-            path=self.db_path,
             topic_id=topic_id,
             easiness_factor=2.6,
             interval_days=6,
@@ -299,12 +300,12 @@ class Sm2RepositoryTests(RepositoryDbTestCase):
             next_review=(date.today() + timedelta(days=6)).isoformat(),
         )
 
-        state2 = sm2_repository.fetch_sm2_state(self.db_path, topic_id)
+        state2 = sm2_repository.fetch_sm2_state(topic_id)
         self.assertEqual(state2["easiness_factor"], 2.6)
         self.assertEqual(state2["interval_days"], 6)
         self.assertEqual(state2["repetitions"], 3)
 
-        self.assertIsNone(sm2_repository.fetch_sm2_state(self.db_path, 99999))
+        self.assertIsNone(sm2_repository.fetch_sm2_state(99999))
 
 
 if __name__ == "__main__":

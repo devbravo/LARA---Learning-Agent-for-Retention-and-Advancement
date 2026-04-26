@@ -45,7 +45,7 @@ def test_get_due_topics_uses_repo_db_path():
     with patch("src.agent.tools._sm2.get_due_topics", return_value=due) as mock_due:
         result = _call_tool(tools.get_due_topics)
 
-    mock_due.assert_called_once_with(db_path=tools._DB_PATH)
+    mock_due.assert_called_once_with()
     assert result == due
 
 
@@ -79,7 +79,7 @@ def test_log_study_session_rejects_invalid_quality_score():
     with patch("src.agent.tools.session_repository.insert_session") as mock_insert, \
          patch("src.agent.tools._sm2.update_topic_after_session") as mock_update:
         with pytest.raises(ValueError):
-            _call_tool(tools.log_study_session, topic_id=1, duration_min=30, quality_score=4)
+            _call_tool(tools.log_study_session, topic_id=1, duration_min=30, student_quality=4)
 
     mock_insert.assert_not_called()
     mock_update.assert_not_called()
@@ -93,18 +93,18 @@ def test_log_study_session_with_weak_areas_updates_topic_and_sm2():
             tools.log_study_session,
             topic_id=7,
             duration_min=45,
-            quality_score=3,
+            student_quality=3,
             weak_areas="trade-offs",
         )
 
     mock_insert.assert_called_once_with(
         topic_id=7,
         duration_min=45,
-        quality_score=3,
+        student_quality=3,
         weak_areas="trade-offs",
     )
     mock_topic_weak.assert_called_once_with(7, "trade-offs")
-    mock_update.assert_called_once_with(db_path=tools._DB_PATH, topic_id=7, quality=3)
+    mock_update.assert_called_once_with(topic_id=7, quality=3)
 
 
 def test_log_study_session_without_weak_areas_skips_topic_update():
@@ -115,15 +115,15 @@ def test_log_study_session_without_weak_areas_skips_topic_update():
             tools.log_study_session,
             topic_id=9,
             duration_min=60,
-            quality_score=5,
+            student_quality=5,
             weak_areas="",
         )
 
     mock_insert.assert_called_once_with(
         topic_id=9,
         duration_min=60,
-        quality_score=5,
+        student_quality=5,
         weak_areas=None,
     )
     mock_topic_weak.assert_not_called()
-    mock_update.assert_called_once_with(db_path=tools._DB_PATH, topic_id=9, quality=5)
+    mock_update.assert_called_once_with(topic_id=9, quality=5)

@@ -20,7 +20,6 @@ from src.integrations import gcal as _gcal
 from src.repositories import session_repository, topic_repository
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
-_DB_PATH = str(Path(__file__).parents[2] / "db" / "learning.db")
 
 
 def _load_config() -> dict:
@@ -71,7 +70,7 @@ def get_due_topics() -> list[dict]:
 
     Returns list of topic dicts with SM-2 state fields.
     """
-    return _sm2.get_due_topics(db_path=_DB_PATH)
+    return _sm2.get_due_topics()
 
 
 # ---------------------------------------------------------------------------
@@ -113,29 +112,32 @@ def write_calendar_event(topic: str, start: str, end: str) -> dict:
 def log_study_session(
     topic_id: int,
     duration_min: int,
-    quality_score: int,
+    student_quality: int,
     weak_areas: str = "",
 ) -> None:
     """
     Log a completed study session and update SM-2 state for the topic.
 
     Args:
-        topic_id:     ID from the topics table.
-        duration_min: Session length in minutes.
-        quality_score: SM-2 quality rating — 2 (Hard), 3 (OK), or 5 (Easy).
-        weak_areas: Optional notes about weak concepts, mistakes, or areas to review
+        topic_id:        ID from the topics table.
+        duration_min:    Session length in minutes.
+        student_quality: Student self-assessment rating — 2 (Hard), 3 (OK), or 5 (Easy).
+        weak_areas:      Optional notes about weak concepts, mistakes, or areas to review.
     """
-    if quality_score not in (2, 3, 5):
-        raise ValueError(f"quality_score must be 2, 3, or 5 — got {quality_score}")
+    if student_quality not in (2, 3, 5):
+        raise ValueError(f"student_quality must be 2, 3, or 5 — got {student_quality}")
 
     session_repository.insert_session(
         topic_id=topic_id,
         duration_min=duration_min,
-        quality_score=quality_score,
+        student_quality=student_quality,
         weak_areas=weak_areas or None,
     )
     if weak_areas:
         topic_repository.update_topic_weak_areas(topic_id, weak_areas)
 
-    # Update SM-2 state
-    _sm2.update_topic_after_session(db_path=_DB_PATH, topic_id=topic_id, quality=quality_score)
+    # teacher_quality will be populated via MCP once the teacher signal exists;
+    # fall back to student_quality so SM-2 always advances.
+    teacher_quality = None  # populated via MCP once teacher signal exists
+    sm2_quality = teacher_quality or student_quality
+    _sm2.update_topic_after_session(topic_id=topic_id, quality=sm2_quality)

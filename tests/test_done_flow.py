@@ -41,7 +41,7 @@ from unittest.mock import MagicMock, patch
 # ---------------------------------------------------------------------------
 _graph_stub = sys.modules.pop("src.agent.graph", None)
 
-from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: E402
+from langgraph.checkpoint.memory import MemorySaver  # noqa: E402
 from langgraph.types import Command  # noqa: E402
 
 import src.agent.nodes as _nodes  # noqa: E402
@@ -115,8 +115,8 @@ def _make_get_connection(db_path: str):
 
 
 def _make_test_graph():
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    return build_graph(checkpointer=SqliteSaver(conn))
+    # Use the in-memory saver for tests (no persistent DB required)
+    return build_graph(checkpointer=MemorySaver())
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +140,8 @@ def test_done_parser_one_unlogged_sends_rating_buttons():
     mock_send = MagicMock(return_value=99)
     with patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today",
                       return_value=[{"id": 7, "name": "DSA - Trees"}]), \
+         patch.object(_nodes._sm2, "get_due_topics",
+                      return_value=[{"name": "DSA - Trees"}]), \
          patch.object(_nodes._telegram, "send_buttons", mock_send):
         result = done_parser({})
 
@@ -206,6 +208,8 @@ def test_done_parser_single_topic_defaults_duration_when_no_slot():
     """done_parser sets duration_min=0 when proposed_slots has no matching topic."""
     with patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today",
                       return_value=[{"id": 7, "name": "DSA - Trees"}]), \
+         patch.object(_nodes._sm2, "get_due_topics",
+                      return_value=[{"name": "DSA - Trees"}]), \
          patch.object(_nodes._telegram, "send_buttons", return_value=1):
         result = done_parser({"proposed_slots": []})
 
@@ -238,15 +242,21 @@ def test_done_parser_ignores_active_topics_not_in_plan():
     mock_send.assert_called_once_with("How did DSA - Trees go?", ["😕 Hard", "😐 OK", "😊 Easy"])
 
 
-def test_done_parser_no_proposed_slots_falls_back_to_all_active():
-    """When no proposed_slots are stored, done_parser accepts any unlogged active topic."""
+def test_done_parser_no_proposed_slots_falls_back_to_due_today():
+    """When no proposed_slots are stored, done_parser scopes to topics due today."""
     mock_send = MagicMock(return_value=1)
+    # DB has two active topics; only one is due today
+    all_active = [{"id": 7, "name": "DSA - Trees"}, {"id": 8, "name": "DSA - Arrays"}]
     with patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today",
-                      return_value=[{"id": 7, "name": "DSA - Trees"}]), \
+                      return_value=all_active), \
+         patch.object(_nodes._sm2, "get_due_topics",
+                      return_value=[{"name": "DSA - Arrays"}]), \
          patch.object(_nodes._telegram, "send_buttons", mock_send):
         result = done_parser({})  # no proposed_slots key at all
 
-    assert result["current_topic_id"] == 7
+    # Only the due topic should surface
+    assert result["current_topic_id"] == 8
+    assert result["current_topic_name"] == "DSA - Arrays"
 
 
 # ---------------------------------------------------------------------------

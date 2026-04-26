@@ -50,7 +50,7 @@ def get_logged_topic_names_for_today() -> set[str]:
     return {row["name"] for row in rows}
 
 
-def upsert_today_session(topic_id: int, duration_min: int, quality_score: int) -> None:
+def upsert_today_session(topic_id: int, duration_min: int, student_quality: int) -> None:
     """Insert or update today's session row for a topic (local date).
 
     Matches new local-time rows by calendar date and legacy UTC rows by the
@@ -60,7 +60,7 @@ def upsert_today_session(topic_id: int, duration_min: int, quality_score: int) -
     Args:
         topic_id: Topic primary key.
         duration_min: Session duration in minutes.
-        quality_score: Session quality score (2/3/5).
+        student_quality: Student self-assessment quality score (2/3/5).
     """
     local = local_today()
     utc_start, utc_end = _legacy_utc_range()
@@ -74,13 +74,13 @@ def upsert_today_session(topic_id: int, duration_min: int, quality_score: int) -
         ).fetchone()
         if existing:
             conn.execute(
-                "UPDATE sessions SET quality_score = ?, duration_min = ? WHERE id = ?",
-                (quality_score, duration_min, existing["id"]),
+                "UPDATE sessions SET student_quality = ?, duration_min = ? WHERE id = ?",
+                (student_quality, duration_min, existing["id"]),
             )
         else:
             conn.execute(
-                "INSERT INTO sessions (topic_id, duration_min, quality_score, studied_at) VALUES (?, ?, ?, ?)",
-                (topic_id, duration_min, quality_score, local_now()),
+                "INSERT INTO sessions (topic_id, duration_min, student_quality, studied_at) VALUES (?, ?, ?, ?)",
+                (topic_id, duration_min, student_quality, local_now()),
             )
 
 
@@ -118,24 +118,23 @@ def update_session_weak_areas(session_id: int, weak_areas: str) -> None:
     """
     with get_connection() as conn:
         conn.execute(
-            "UPDATE sessions SET weak_areas = ? WHERE id = ?",
+            "UPDATE sessions SET student_weak_areas = ? WHERE id = ?",
             (weak_areas, session_id),
         )
 
 
-def insert_session(topic_id: int, duration_min: int, quality_score: int, weak_areas: str | None) -> None:
+def insert_session(topic_id: int, duration_min: int, student_quality: int, weak_areas: str | None) -> None:
     """Insert a new session row with the current local timestamp as studied_at.
 
     Args:
         topic_id: Topic primary key.
         duration_min: Session duration in minutes.
-        quality_score: Session quality score (2/3/5).
+        student_quality: Student self-assessment quality score (2/3/5).
         weak_areas: Optional weak-areas notes.
     """
     with get_connection() as conn:
         conn.execute(
-            """INSERT INTO sessions (topic_id, duration_min, quality_score, weak_areas, studied_at)
+            """INSERT INTO sessions (topic_id, duration_min, student_quality, weak_areas, studied_at)
                VALUES (?, ?, ?, ?, ?)""",
-            (topic_id, duration_min, quality_score, weak_areas, local_now()),
+            (topic_id, duration_min, student_quality, weak_areas, local_now()),
         )
-
