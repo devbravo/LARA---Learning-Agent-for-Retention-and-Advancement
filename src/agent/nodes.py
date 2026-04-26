@@ -51,7 +51,6 @@ _DSA_ALL = ["edge_case", "time_complexity", "implementation"]
 _SYSDESIGN_ALL = ["scalability", "data_pipeline", "trade_offs", "estimation",
                   "component_selection", "latency_vs_throughput"]
 _BEHAVIORAL_ALL = ["delivery", "quantification", "structure"]
-confidence_map = {"😕 low": 1, "😐 medium": 2, "😊 high": 3}
 
 
 # WEAK AREAS HELPERS
@@ -860,7 +859,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
             )
         elif topic_type == "conceptual":
             second_msg_id = _telegram.send_buttons(
-                "What couldn't you answer? or tap Skip",
+                "What couldn't you answer?",
                 ["Skip"],
             )
         else:  # behavioral
@@ -936,10 +935,8 @@ def log_weak_areas_q2(state: AgentState) -> AgentState:
                 "breakdown": _breakdown(breakdown_text, _SYSDESIGN_ALL),
             }
         elif topic_type == "conceptual":
-            confidence_text = first_text
-            unclear_text = second_text
+            unclear_text = first_text
             weak_json = {
-                "confidence": confidence_map.get(confidence_text.lower(), 2),
                 "unclear": _null_if_skip(unclear_text),
             }
         else:  # behavioral
