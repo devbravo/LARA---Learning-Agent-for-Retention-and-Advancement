@@ -110,16 +110,30 @@ def get_today_session_id(topic_id: int) -> int | None:
 
 
 def update_session_weak_areas(session_id: int, weak_areas: str) -> None:
-    """Update weak-areas notes for a specific session row.
+    """Update legacy weak-areas column for a specific session row.
 
     Args:
         session_id: Session primary key.
-        weak_areas: Free-text weak-areas notes.
+        weak_areas: Weak-areas text (kept for backward compat with existing rows).
+    """
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE sessions SET weak_areas = ? WHERE id = ?",
+            (weak_areas, session_id),
+        )
+
+
+def update_session_student_weak_areas(session_id: int, student_weak_areas: str) -> None:
+    """Update structured student weak areas JSON for a specific session row.
+
+    Args:
+        session_id: Session primary key.
+        student_weak_areas: JSON-encoded structured weak-areas data.
     """
     with get_connection() as conn:
         conn.execute(
             "UPDATE sessions SET student_weak_areas = ? WHERE id = ?",
-            (weak_areas, session_id),
+            (student_weak_areas, session_id),
         )
 
 

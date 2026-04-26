@@ -46,7 +46,7 @@ from langgraph.types import Command  # noqa: E402
 
 import src.agent.nodes as _nodes  # noqa: E402
 from src.agent.graph import build_graph  # noqa: E402
-from src.agent.nodes import done_parser, log_weak_areas, route_from_done_parser  # noqa: E402
+from src.agent.nodes import done_parser, log_weak_areas, log_weak_areas_q2, route_from_done_parser  # noqa: E402
 from src import infrastructure  # noqa: E402
 from src.infrastructure import db as core_db  # noqa: E402
 
@@ -351,14 +351,18 @@ def test_select_done_topic_sends_rating_buttons_on_resume():
 # ---------------------------------------------------------------------------
 
 def test_log_weak_areas_all_done_message():
-    """log_weak_areas returns 'All done' when no topics remain unlogged."""
-    state = {"chat_id": 1, "pending_message_id": 5, "current_topic_id": 7, "current_topic_name": "DSA - Trees"}
+    """log_weak_areas_q2 returns 'All done' when no topics remain unlogged."""
+    state = {
+        "chat_id": 1, "pending_message_id": 5, "current_topic_id": 7,
+        "current_topic_name": "DSA - Trees", "weak_areas_first_answer": "Edge case",
+    }
     with patch("src.agent.nodes.interrupt", return_value="skip"), \
          patch.object(_nodes._telegram, "remove_buttons"), \
+         patch.object(_nodes.topic_repository, "get_topic_type_by_id", return_value="dsa"), \
          patch.object(_nodes.session_repository, "get_today_session_id", return_value=None), \
          patch.object(_nodes.topic_repository, "update_topic_weak_areas"), \
          patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today", return_value=[]):
-        result = log_weak_areas(state)
+        result = log_weak_areas_q2(state)
 
     assert result["has_unlogged_sessions"] is False
     assert "All done for today" in result["messages"][0]
@@ -370,12 +374,13 @@ def test_log_weak_areas_all_done_message():
 # ---------------------------------------------------------------------------
 
 def test_log_weak_areas_lists_remaining_topics():
-    """log_weak_areas lists only planned remaining topics as bullets, one per line."""
+    """log_weak_areas_q2 lists only planned remaining topics as bullets."""
     state = {
         "chat_id": 1,
         "pending_message_id": 5,
         "current_topic_id": 7,
         "current_topic_name": "DSA - Queue",
+        "weak_areas_first_answer": "😕 Low",
         "proposed_slots": [
             {"topic": "DSA - Queue", "duration_min": 60},
             {"topic": "System Design", "duration_min": 60},
@@ -390,10 +395,11 @@ def test_log_weak_areas_lists_remaining_topics():
     ]
     with patch("src.agent.nodes.interrupt", return_value="skip"), \
          patch.object(_nodes._telegram, "remove_buttons"), \
+         patch.object(_nodes.topic_repository, "get_topic_type_by_id", return_value="conceptual"), \
          patch.object(_nodes.session_repository, "get_today_session_id", return_value=None), \
          patch.object(_nodes.topic_repository, "update_topic_weak_areas"), \
          patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today", return_value=all_active):
-        result = log_weak_areas(state)
+        result = log_weak_areas_q2(state)
 
     assert result["has_unlogged_sessions"] is False
     msg = result["messages"][0]
@@ -411,6 +417,7 @@ def test_log_weak_areas_remaining_topics_one_per_line():
         "pending_message_id": 5,
         "current_topic_id": 7,
         "current_topic_name": "DSA - Queue",
+        "weak_areas_first_answer": "😕 Low",
         "proposed_slots": [
             {"topic": "DSA - Queue", "duration_min": 60},
             {"topic": "System Design", "duration_min": 60},
@@ -419,10 +426,11 @@ def test_log_weak_areas_remaining_topics_one_per_line():
     remaining = [{"id": 2, "name": "System Design"}]
     with patch("src.agent.nodes.interrupt", return_value="skip"), \
          patch.object(_nodes._telegram, "remove_buttons"), \
+         patch.object(_nodes.topic_repository, "get_topic_type_by_id", return_value="conceptual"), \
          patch.object(_nodes.session_repository, "get_today_session_id", return_value=None), \
          patch.object(_nodes.topic_repository, "update_topic_weak_areas"), \
          patch.object(_nodes.topic_repository, "get_active_unlogged_topics_today", return_value=remaining):
-        result = log_weak_areas(state)
+        result = log_weak_areas_q2(state)
 
     msg = result["messages"][0]
     assert "\n• System Design\n" in msg

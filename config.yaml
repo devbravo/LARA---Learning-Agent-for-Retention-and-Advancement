@@ -1,7 +1,7 @@
 schedule:
   weekday_planning:
-    hour: 6
-    minute: 44
+    hour: 7
+    minute: 0
     misfire_grace_time: 3600
   weekend_brief:
     hour: 10

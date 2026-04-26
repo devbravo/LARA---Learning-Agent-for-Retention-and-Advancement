@@ -224,9 +224,10 @@ def test_log_session_edge_goes_to_log_weak_areas():
 # ---------------------------------------------------------------------------
 
 def test_log_weak_areas_routes_directly_to_output():
-    """graph.py wires log_weak_areas → output (no loop; user re-runs /done per topic)."""
+    """graph.py wires log_weak_areas → log_weak_areas_q2 → output (no loop)."""
     src = (Path(__file__).parents[1] / "src" / "agent" / "graph.py").read_text()
-    assert 'add_edge("log_weak_areas", "output")' in src
+    assert 'add_edge("log_weak_areas", "log_weak_areas_q2")' in src
+    assert 'add_edge("log_weak_areas_q2", "output")' in src
     assert 'route_from_log_weak_areas' not in src
 
 

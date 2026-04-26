@@ -41,6 +41,7 @@ from src.agent.nodes import (
     graduate_topic,
     log_session,
     log_weak_areas,
+    log_weak_areas_q2,
     on_demand,
     output,
     route_from_activate_topic,
@@ -84,6 +85,7 @@ def build_graph(checkpointer=None):
     builder.add_node("await_brief_confirmation", await_brief_confirmation)
     builder.add_node("log_session", log_session)
     builder.add_node("log_weak_areas", log_weak_areas)
+    builder.add_node("log_weak_areas_q2", log_weak_areas_q2)
     builder.add_node("output", output)
     builder.add_node("book_events", book_events)
     builder.add_node("study_topic", study_topic)
@@ -155,7 +157,8 @@ def build_graph(checkpointer=None):
         {"log_session": "log_session", "output": "output"},
     )
     builder.add_edge("log_session", "log_weak_areas")
-    builder.add_edge("log_weak_areas", "output")
+    builder.add_edge("log_weak_areas", "log_weak_areas_q2")
+    builder.add_edge("log_weak_areas_q2", "output")
 
     # Pick a topic flow
     builder.add_conditional_edges(
