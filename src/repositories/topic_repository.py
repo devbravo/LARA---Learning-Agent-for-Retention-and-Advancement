@@ -86,6 +86,22 @@ def get_topic_id_by_name(topic_name: str) -> int | None:
     return row["id"] if row else None
 
 
+def get_topic_type_by_id(topic_id: int) -> str | None:
+    """Return topic_type for a given topic id.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        Topic type string, or ``None`` when the row does not exist.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT topic_type FROM topics WHERE id = ?", (topic_id,)
+        ).fetchone()
+    return row["topic_type"] if row else None
+
+
 def get_topic_weak_areas_by_name(topic_name: str) -> str | None:
     """Return weak-areas text for a topic name.
 

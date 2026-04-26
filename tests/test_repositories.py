@@ -155,12 +155,12 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
-                "SELECT student_weak_areas FROM sessions WHERE id = ?",
+                "SELECT weak_areas FROM sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
         finally:
             conn.close()
-        self.assertEqual(row["student_weak_areas"], "caching")
+        self.assertEqual(row["weak_areas"], "caching")
 
     def test_upsert_today_session_updates_existing_row(self) -> None:
         topic_id = self._insert_topic(name="Agents")

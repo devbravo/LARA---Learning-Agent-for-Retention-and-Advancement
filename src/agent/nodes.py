@@ -5,6 +5,7 @@ Each node receives an AgentState and returns a partial state update dict.
 All exceptions are caught and surfaced as user-friendly messages in state.
 """
 
+import json
 import pytz
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -45,6 +46,24 @@ _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
 _TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
 logger = logging.getLogger(__name__)
 
+# WEAK AREAS CONSTANTS
+_DSA_ALL = ["edge_case", "time_complexity", "implementation"]
+_SYSDESIGN_ALL = ["scalability", "data_pipeline", "trade_offs", "estimation",
+                  "component_selection", "latency_vs_throughput"]
+_BEHAVIORAL_ALL = ["delivery", "quantification", "structure"]
+
+
+# WEAK AREAS HELPERS
+def _null_if_skip(t: str) -> str | None:
+    return None if not t or t.lower() == "skip" else t
+
+def _to_key(s: str) -> str:
+    return s.lower().strip().replace(" ", "_")
+
+def _breakdown(text: str, all_values: list[str]) -> str | list[str]:
+    return all_values if text.lower().strip() == "all of the above" else _to_key(text)
+
+
 def _load_config() -> dict:
     with open(_CONFIG_PATH) as f:
         return yaml.safe_load(f)
@@ -76,6 +95,8 @@ class AgentState(TypedDict, total=False):
     study_topic_category: str | None    # selected category in /pick flow
     pending_message_id: int | None      # message_id of the one button message currently awaiting user interaction
     has_unlogged_sessions: bool | None  # True when done_parser / log_weak_areas queued a topic for rating
+    weak_areas_first_answer: str | None # Q1 answer carried from log_weak_areas to log_weak_areas_q2
+    weak_areas_topic_type: str | None    # topic_type carried from log_weak_areas to log_weak_areas_q2
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +177,13 @@ def route_from_study_topic(state: AgentState) -> str:
 
 def route_from_study_topic_category(state: AgentState) -> str:
     return "output" if state.get("messages") else "study_topic_confirm"
+
+
+def route_from_log_weak_areas(state: AgentState) -> str:
+    """Conceptual topics complete in Q1 and route to output; all others need Q2."""
+    if state.get("weak_areas_topic_type") == "conceptual":
+        return "output"
+    return "log_weak_areas_q2"
 
 
 # ---------------------------------------------------------------------------
@@ -758,18 +786,37 @@ def log_session(state: AgentState) -> AgentState:
         )
         _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=quality)
 
-        # Send weak areas prompt and return — interrupt lives in log_weak_areas
-        weak_areas_msg_id = _telegram.send_buttons(
-            "Any weak areas to note? Reply with text or tap Skip.",
-            ["Skip"]
-        )
+        # Send type-specific first structured feedback question
+        topic_type = topic_repository.get_topic_type_by_id(topic_id) or "conceptual"
+        if topic_type == "dsa":
+            first_msg_id = _telegram.send_inline_buttons(
+                "What broke down?",
+                [("Edge case", "Edge case"), ("Time complexity", "Time complexity"),
+                 ("Implementation", "Implementation"), ("All of the above", "All of the above"),
+                 ("Nothing", "Nothing")],
+            )
+        elif topic_type == "system_design":
+            first_msg_id = _telegram.send_buttons(
+                "Describe the scenario briefly, or tap Skip.",
+                ["Skip"],
+            )
+        elif topic_type == "conceptual":
+            first_msg_id = _telegram.send_buttons(
+                "What couldn't you answer? or tap Skip",
+                ["Skip"],
+            )
+        else:  # behavioral
+            first_msg_id = _telegram.send_buttons(
+                "Which story did you practice? or tap Skip.",
+                ["Skip"],
+            )
 
         return {
             "current_topic_id": topic_id,
             "current_topic_name": topic_name,
             "quality_score": quality,
             "payload": None,
-            "pending_message_id": weak_areas_msg_id,
+            "pending_message_id": first_msg_id,
         }
 
     except Exception as e:
@@ -783,27 +830,121 @@ def log_session(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def log_weak_areas(state: AgentState) -> AgentState:
-    """interrupt() is first — on resume, no side-effects run before it."""
+    """Holds interrupt 1. On resume removes Q1 buttons and sends Q2 prompt."""
     try:
         chat_id = state.get("chat_id")
-        weak_areas_msg_id = state.get("pending_message_id")
+        first_msg_id = state.get("pending_message_id")
         topic_id = state.get("current_topic_id")
 
-        # Interrupt at start — no side effects above this line
-        weak_areas_payload = interrupt("waiting for weak areas")
+        # ── INTERRUPT 1 at top — no side effects before this ────────────────
+        first_answer = interrupt("waiting for first feedback")
 
-        # Remove weak areas buttons after resume (idempotent)
-        if weak_areas_msg_id and chat_id:
+        if first_msg_id and chat_id:
             try:
-                _telegram.remove_buttons(chat_id, weak_areas_msg_id)
+                _telegram.remove_buttons(chat_id, first_msg_id)
             except Exception as _e:
                 logger.debug("remove_buttons silently failed: %s", _e)
 
-        text = (weak_areas_payload or "").strip()
+        first_text = (first_answer or "").strip()
+
+        topic_type = topic_repository.get_topic_type_by_id(topic_id) if topic_id else None
+        topic_type = topic_type or "conceptual"
+
+        if topic_type == "dsa":
+            second_msg_id = _telegram.send_buttons(
+                "Which problems did you solve? (e.g Two Sum, Valid Parentheses)",
+                ["Skip"],
+            )
+        elif topic_type == "system_design":
+            second_msg_id = _telegram.send_inline_buttons(
+                "What felt weak?",
+                [("Scalability", "Scalability"), ("Data pipeline", "Data pipeline"),
+                 ("Trade-offs", "Trade-offs"), ("Estimation", "Estimation"),
+                 ("Component selection", "Component selection"),
+                 ("Latency vs throughput", "Latency vs throughput"),
+                 ("All of the above", "All of the above"), ("Nothing", "Nothing")],
+            )
+        elif topic_type == "conceptual":
+            weak_json_str = json.dumps({"unclear": _null_if_skip(first_text)})
+            session_id = session_repository.get_today_session_id(topic_id)
+            if session_id is not None:
+                session_repository.update_session_weak_areas(session_id, weak_json_str)
+                session_repository.update_session_student_weak_areas(session_id, weak_json_str)
+            topic_repository.update_topic_weak_areas(topic_id, weak_json_str)
+
+            topic_name = state.get("current_topic_name") or "topic"
+            all_unlogged = topic_repository.get_active_unlogged_topics_today()
+            proposed_slots = state.get("proposed_slots") or []
+            planned_names = {s["topic"] for s in proposed_slots}
+            if planned_names:
+                remaining = [t for t in all_unlogged if t["name"] in planned_names]
+            else:
+                due_names = {t["name"] for t in _sm2.get_due_topics()}
+                remaining = [t for t in all_unlogged if t["name"] in due_names]
+
+            if not remaining:
+                completion_msg = f"✅ {topic_name} logged. All done for today! 💪"
+            else:
+                bullet_list = "\n".join(f"• {t['name']}" for t in remaining)
+                completion_msg = f"✅ {topic_name} logged. Still unlogged:\n{bullet_list}\n\nPress /done when you're ready."
+
+            return {
+                "messages": [completion_msg],
+                "weak_areas_first_answer": first_text,
+                "weak_areas_topic_type": topic_type,
+                "pending_message_id": None,
+                "has_unlogged_sessions": False,
+            }
+
+        else:  # behavioral
+            second_msg_id = _telegram.send_inline_buttons(
+                "What felt weak?",
+                [("Delivery", "Delivery"), ("Quantification", "Quantification"),
+                 ("Structure", "Structure"), ("All of the above", "All of the above"),
+                 ("Nothing", "Nothing")],
+            )
+
+        return {
+            "weak_areas_first_answer": first_text,
+            "weak_areas_topic_type": topic_type,
+            "pending_message_id": second_msg_id,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("log_weak_areas failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Failed to log weak areas: {e}"], "payload": None}
+
+
+# ---------------------------------------------------------------------------
+# Node: log_weak_areas_q2
+# ---------------------------------------------------------------------------
+
+def log_weak_areas_q2(state: AgentState) -> AgentState:
+    """Holds interrupt 2. Builds structured JSON and computes remaining topics."""
+    try:
+        chat_id = state.get("chat_id")
+        second_msg_id = state.get("pending_message_id")
+        topic_id = state.get("current_topic_id")
+        first_text = state.get("weak_areas_first_answer") or ""
+
+        # ── INTERRUPT 2 at top — no side effects before this ────────────────
+        second_answer = interrupt("waiting for second feedback")
+
+        if second_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, second_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        second_text = (second_answer or "").strip()
 
         if not topic_id:
             return {
                 "pending_message_id": None,
+                "weak_areas_first_answer": None,
+                "weak_areas_topic_type": None,
                 "has_unlogged_sessions": False,
                 "current_topic_id": None,
                 "current_topic_name": None,
@@ -811,17 +952,45 @@ def log_weak_areas(state: AgentState) -> AgentState:
 
         session_id = session_repository.get_today_session_id(topic_id)
 
-        if text and text.lower() != "skip":
-            if session_id is not None:
-                session_repository.update_session_weak_areas(session_id, text)
-            topic_repository.update_topic_weak_areas(topic_id, text)
-        else:
-            topic_repository.update_topic_weak_areas(topic_id, None)
+        topic_type = state.get("weak_areas_topic_type") or "conceptual"
+
+        if topic_type == "dsa":
+            breakdown_text = first_text
+            problems_text = second_text
+            weak_json = {
+                "problems": _null_if_skip(problems_text),
+                "breakdown": _breakdown(breakdown_text, _DSA_ALL),
+            }
+        elif topic_type == "system_design":
+            scenario_text = first_text
+            breakdown_text = second_text
+            weak_json = {
+                "scenario": _null_if_skip(scenario_text),
+                "breakdown": _breakdown(breakdown_text, _SYSDESIGN_ALL),
+            }
+        elif topic_type == "conceptual":
+            unclear_text = first_text
+            weak_json = {
+                "unclear": _null_if_skip(unclear_text),
+            }
+        else:  # behavioral
+            story_text = first_text
+            breakdown_text = second_text
+            weak_json = {
+                "story": _null_if_skip(story_text),
+                "breakdown": _breakdown(breakdown_text, _BEHAVIORAL_ALL),
+            }
+
+        weak_json_str = json.dumps(weak_json)
+
+        if session_id is not None:
+            session_repository.update_session_weak_areas(session_id, weak_json_str)
+            session_repository.update_session_student_weak_areas(session_id, weak_json_str)
+        topic_repository.update_topic_weak_areas(topic_id, weak_json_str)
 
         topic_name = state.get("current_topic_name") or "topic"
         all_unlogged = topic_repository.get_active_unlogged_topics_today()
 
-        # Scope to today's plan — same rule as done_parser
         proposed_slots = state.get("proposed_slots") or []
         planned_names = {s["topic"] for s in proposed_slots}
         if planned_names:
@@ -840,13 +1009,15 @@ def log_weak_areas(state: AgentState) -> AgentState:
             "messages": [msg],
             "payload": None,
             "pending_message_id": None,
+            "weak_areas_first_answer": None,
+            "weak_areas_topic_type": None,
             "has_unlogged_sessions": False,
         }
 
     except Exception as e:
         if isinstance(e, GraphInterrupt):
             raise
-        logger.error("log_weak_areas failed: %s", e, exc_info=True)
+        logger.error("log_weak_areas_q2 failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Failed to log weak areas: {e}"], "payload": None}
 
 
