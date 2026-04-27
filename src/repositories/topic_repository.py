@@ -220,6 +220,49 @@ def get_active_unlogged_topics_today() -> list[dict]:
     return [{"id": row["id"], "name": row["name"]} for row in rows if row["name"] not in logged_names]
 
 
+def get_topic_context(topic_id: int) -> dict[str, Any]:
+    """Fetch SM-2 state and last session signal for a topic.
+
+    Joins topics with sessions (latest session only) to return both the
+    SM-2 scheduling fields and the most recent student signal.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        Dict with topic SM-2 fields and last-session data (session fields
+        are ``None`` when no session exists yet).
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT
+                   t.id, t.name, t.topic_type, t.easiness_factor,
+                   t.interval_days, t.repetitions, t.next_review, t.weak_areas,
+                   s.student_quality, s.studied_at, s.student_weak_areas
+               FROM topics t
+               LEFT JOIN sessions s ON s.topic_id = t.id
+               WHERE t.id = ?
+               ORDER BY s.studied_at DESC
+               LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+    if row is None:
+        return {}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "topic_type": row["topic_type"],
+        "easiness_factor": row["easiness_factor"],
+        "interval_days": row["interval_days"],
+        "repetitions": row["repetitions"],
+        "next_review": row["next_review"],
+        "weak_areas": row["weak_areas"],
+        "student_quality": row["student_quality"],
+        "studied_at": row["studied_at"],
+        "student_weak_areas": row["student_weak_areas"],
+    }
+
+
 def set_topic_in_progress(topic_name: str) -> bool:
     """Set topic status to in_progress for an inactive topic name.
 

@@ -1,5 +1,6 @@
 """Session repository SQL helpers."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytz
@@ -135,6 +136,72 @@ def update_session_student_weak_areas(session_id: int, student_weak_areas: str) 
             "UPDATE sessions SET student_weak_areas = ? WHERE id = ?",
             (student_weak_areas, session_id),
         )
+
+
+def log_teacher_session(
+    topic_id: int,
+    teacher_quality: int,
+    teacher_weak_areas: dict,
+    teacher_source: str,
+    mode: str,
+) -> int | None:
+    """Log teacher assessment for today's session, creating a row if none exists.
+
+    Matches today's session using the same local/UTC range pattern as
+    ``upsert_today_session``. Updates teacher fields on an existing row;
+    inserts a new row with student fields null when no row exists.
+
+    Args:
+        topic_id: Topic primary key.
+        teacher_quality: Teacher quality score (2, 3, or 5).
+        teacher_weak_areas: Structured weak areas dict (serialized to JSON).
+        teacher_source: Source identifier ('claude' or 'algomonster').
+        mode: Session mode ('mock' or 'discuss').
+
+    Returns:
+        ``calibration_gap`` (student_quality − teacher_quality) when
+        student_quality is present on the row, else ``None``.
+    """
+    local = local_today()
+    utc_start, utc_end = _legacy_utc_range()
+    weak_areas_json = json.dumps(teacher_weak_areas)
+
+    with get_connection() as conn:
+        existing = conn.execute(
+            """SELECT id, student_quality FROM sessions
+               WHERE topic_id = ?
+                 AND (DATE(studied_at) = ?
+                      OR (studied_at >= ? AND studied_at < ?))""",
+            (topic_id, local, utc_start, utc_end),
+        ).fetchone()
+
+        if existing:
+            student_quality = existing["student_quality"]
+            calibration_gap = (
+                student_quality - teacher_quality if student_quality is not None else None
+            )
+            conn.execute(
+                """UPDATE sessions
+                   SET teacher_quality = ?,
+                       teacher_weak_areas = ?,
+                       teacher_source = ?,
+                       mode = ?,
+                       calibration_gap = ?
+                   WHERE id = ?""",
+                (teacher_quality, weak_areas_json, teacher_source, mode,
+                 calibration_gap, existing["id"]),
+            )
+            return calibration_gap
+        else:
+            conn.execute(
+                """INSERT INTO sessions
+                       (topic_id, studied_at, teacher_quality, teacher_weak_areas,
+                        teacher_source, mode)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (topic_id, local_now(), teacher_quality, weak_areas_json,
+                 teacher_source, mode),
+            )
+            return None
 
 
 def insert_session(topic_id: int, duration_min: int, student_quality: int, weak_areas: str | None) -> None:
