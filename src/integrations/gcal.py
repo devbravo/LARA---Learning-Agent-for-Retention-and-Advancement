@@ -17,6 +17,7 @@ load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google.auth.exceptions import RefreshError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -47,13 +48,28 @@ def _get_service() -> Any:
 
     creds = None
     if _TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(_TOKEN_PATH, SCOPES)
+        creds = Credentials.from_authorized_user_file(str(_TOKEN_PATH), SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError as e:
+                # Token is expired or revoked. Remove the stale token file so the
+                # application can prompt for re-authorization on the next run.
+                try:
+                    if _TOKEN_PATH.exists():
+                        _TOKEN_PATH.unlink()
+                except Exception:
+                    # If removal fails, continue to raise a helpful error below
+                    pass
+                raise RuntimeError(
+                    "Google credentials refresh failed: token expired or revoked. "
+                    "Remove credentials/token.json and re-authorize by running the app "
+                    "locally to complete the OAuth flow."
+                ) from e
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(_CREDENTIALS_PATH, SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(str(_CREDENTIALS_PATH), SCOPES)
             creds = flow.run_local_server(port=0)
         _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
         _TOKEN_PATH.write_text(creds.to_json())

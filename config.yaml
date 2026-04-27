@@ -1,15 +1,15 @@
 schedule:
   weekday_planning:
     hour: 7
-    minute: 0
+    minute: 11
     misfire_grace_time: 3600
   weekend_brief:
     hour: 10
     minute: 0
     misfire_grace_time: 600
   evening_brief:
-    hour: 21
-    minute: 25
+    hour: 23
+    minute: 40
     misfire_grace_time: 600
 
 protected_blocks:
