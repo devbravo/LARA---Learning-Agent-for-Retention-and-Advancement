@@ -45,6 +45,7 @@ async def main() -> None:
         port=_PORT,
         log_level="info",
         loop="asyncio",
+        forwarded_allow_ips="*"
     )
     server = uvicorn.Server(config)
 

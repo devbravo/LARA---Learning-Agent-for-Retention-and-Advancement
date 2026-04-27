@@ -6,6 +6,7 @@ google-auth-oauthlib
 langchain-anthropic
 langgraph
 langgraph-checkpoint-sqlite
+mcp[cli]
 python-dotenv
 python-telegram-bot
 pytz
