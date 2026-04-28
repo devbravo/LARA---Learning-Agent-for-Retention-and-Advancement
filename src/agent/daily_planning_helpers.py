@@ -11,8 +11,9 @@ from src.agent.formatting import (
     format_time,
     topic_due_label,
 )
-from src.agent.planning_helpers import build_in_progress_study_slots, build_missing_study_events, get_prebooked_topics, get_topic_config
+from src.agent.planning_helpers import build_in_progress_study_slots, build_missing_study_events, get_prebooked_topics
 from src.core import gap_finder as _gap_finder
+from src.repositories import topic_repository
 
 if TYPE_CHECKING:
     from src.agent.nodes import AgentState
@@ -72,7 +73,6 @@ def append_evening_mock_block_lines(
     timed_events: list[dict],
     due_topics: list[dict],
     config: dict,
-    topics_config: dict,
     in_progress_topics: list[str] | None = None,
 ) -> None:
     """Append the evening mock-interview block section.
@@ -87,7 +87,6 @@ def append_evening_mock_block_lines(
         timed_events: Timed subset of ``events``.
         due_topics: Topics returned by SM-2 for the target date.
         config: Runtime config values from ``config.yaml``.
-        topics_config: Topic metadata loaded from ``topics.yaml``.
         in_progress_topics: Topic names currently marked ``in_progress``.
     """
     # Include synthetic [Study] busy blocks so mock slots never overlap them
@@ -107,8 +106,7 @@ def append_evening_mock_block_lines(
         if topic is None:
             break
         found_any = True
-        topic_cfg = get_topic_config(topic["name"], topics_config)
-        default_duration = topic_cfg.get("default_duration_minutes", 60)
+        default_duration = topic_repository.get_default_duration_by_name(topic["name"])
         duration = min(default_duration, win["duration_min"])
         t_start = format_time(win["start"])
         start_dt = datetime.combine(target_date, win["start"])
@@ -139,7 +137,6 @@ def pack_mock_slots(
     target_date: date,
     free_windows: list[dict],
     available_topics: list[dict],
-    topics_config: dict,
     min_window_minutes: int,
     lines: list[str],
 ) -> tuple[str | None, dict | None, list[dict]]:
@@ -149,7 +146,6 @@ def pack_mock_slots(
         target_date: Date being planned.
         free_windows: Free windows returned by ``gap_finder``.
         available_topics: Due topics not already prebooked.
-        topics_config: Topic metadata loaded from ``topics.yaml``.
         min_window_minutes: Minimum remaining window size to schedule a slot.
         lines: Mutable list of message lines to append to.
 
@@ -178,8 +174,7 @@ def pack_mock_slots(
             if remaining_min < min_window_minutes:
                 break
             topic = remaining_topics[0]
-            topic_cfg = get_topic_config(topic["name"], topics_config)
-            default_duration = topic_cfg.get("default_duration_minutes", 60)
+            default_duration = topic_repository.get_default_duration_by_name(topic["name"])
             duration = min(default_duration, remaining_min)
             end_dt = cursor + timedelta(minutes=duration)
             t_start = format_time(cursor.time())
@@ -210,7 +205,6 @@ def build_evening_preview_state(
     timed_events: list[dict],
     due_topics: list[dict],
     config: dict,
-    topics_config: dict,
     in_progress_topics: list[str] | None = None,
 ) -> "AgentState":
     """Build the read-only evening preview state payload.
@@ -221,7 +215,6 @@ def build_evening_preview_state(
         timed_events: Timed subset of ``events``.
         due_topics: Topics returned by SM-2 for the target date.
         config: Runtime config values from ``config.yaml``.
-        topics_config: Topic metadata loaded from ``topics.yaml``.
         in_progress_topics: Topic names currently marked ``in_progress``.
 
     Returns:
@@ -238,7 +231,6 @@ def build_evening_preview_state(
         timed_events,
         due_topics,
         config,
-        topics_config,
         in_progress_topics=in_progress_topics or [],
     )
     lines.append("No confirmation needed — this is your preview for tomorrow.")

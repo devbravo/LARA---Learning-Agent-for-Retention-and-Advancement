@@ -187,10 +187,9 @@ def daily_planning(state: AgentState) -> AgentState:
         timed_events = [e for e in events if "dateTime" in e.get("start", {})]
 
         if is_evening:
-            topics_config = load_topics()
             in_progress_topics = topic_repository.get_in_progress_topic_names()
             evening_state = build_evening_preview_state(
-                target_date, events, timed_events, due_topics, config, topics_config,
+                target_date, events, timed_events, due_topics, config,
                 in_progress_topics=in_progress_topics,
             )
             return cast(AgentState, evening_state)
@@ -215,13 +214,11 @@ def daily_planning(state: AgentState) -> AgentState:
         append_calendar_lines(lines, timed_events, "📅 Your day: No meetings today")
 
         available_topics = [t for t in due_topics if t["name"] not in prebooked]
-        topics_config = load_topics()
         min_window_minutes = config.get("min_window_minutes", 25)
         proposed_topic, proposed_slot, proposed_slots = pack_mock_slots(
             target_date,
             free_windows,
             available_topics,
-            topics_config,
             min_window_minutes,
             lines,
         )
