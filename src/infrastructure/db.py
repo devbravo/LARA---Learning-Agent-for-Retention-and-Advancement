@@ -69,6 +69,13 @@ def init_db() -> None:
                     logger.info("Added 'topic_type' column to topics table")
                 except sqlite3.OperationalError as e:
                     logger.exception("Failed adding 'topic_type' column: %s", e)
+
+            if "default_duration_minutes" not in existing:
+                try:
+                    conn.execute("ALTER TABLE topics ADD COLUMN default_duration_minutes INTEGER NOT NULL DEFAULT 30")
+                    logger.info("Added 'default_duration_minutes' column to topics table")
+                except sqlite3.OperationalError as e:
+                    logger.exception("Failed adding 'default_duration_minutes' column: %s", e)
         else:
             logger.debug("topics table does not exist yet; skipping column migrations and creating tables")
 
@@ -109,6 +116,7 @@ def init_db() -> None:
                 tier INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active',
                 topic_type TEXT NOT NULL DEFAULT 'conceptual',
+                default_duration_minutes INTEGER NOT NULL DEFAULT 30,
                 easiness_factor REAL DEFAULT 2.5,
                 interval_days INTEGER DEFAULT 1,
                 repetitions INTEGER DEFAULT 0,
