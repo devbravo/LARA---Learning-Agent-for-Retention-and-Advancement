@@ -7,6 +7,7 @@ All exceptions are caught and surfaced as user-friendly messages in state.
 
 import json
 import pytz
+import yaml
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import cast, TypedDict
@@ -31,7 +32,7 @@ from src.agent.planning_helpers import (
     rebook_study_events,
 )
 
-from src.agent.weak_areas_helpers import null_if_skip, breakdown
+from src.agent.weak_areas_helpers import null_if_skip, breakdown, _DSA_ALL, _SYSDESIGN_ALL, _BEHAVIORAL_ALL
 
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
@@ -44,18 +45,9 @@ from src.services import topic_service
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
 
 def _load_config() -> dict:
-    import yaml
     with open(_CONFIG_PATH) as f:
         return yaml.safe_load(f)
 logger = logging.getLogger(__name__)
-
-# WEAK AREAS CONSTANTS
-_DSA_ALL = ["edge_case", "time_complexity", "implementation"]
-_SYSDESIGN_ALL = ["scalability", "data_pipeline", "trade_offs", "estimation",
-                  "component_selection", "latency_vs_throughput"]
-_BEHAVIORAL_ALL = ["delivery", "quantification", "structure"]
-
-
 
 
 

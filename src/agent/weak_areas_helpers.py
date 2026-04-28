@@ -1,4 +1,11 @@
 # WEAK AREAS HELPERS
+
+_DSA_ALL = ["edge_case", "time_complexity", "implementation"]
+_SYSDESIGN_ALL = ["scalability", "data_pipeline", "trade_offs", "estimation",
+                  "component_selection", "latency_vs_throughput"]
+_BEHAVIORAL_ALL = ["delivery", "quantification", "structure"]
+
+
 def null_if_skip(t: str) -> str | None:
     return None if not t or t.lower() == "skip" else t
 
