@@ -33,7 +33,11 @@ def _legacy_utc_range() -> tuple[str, str]:
 
 
 def get_logged_topic_names_for_today() -> set[str]:
-    """Return topic names that already have a logged session today (local date).
+    """Return topic names that already have a student-rated session today (local date).
+
+    Only counts rows where student_quality IS NOT NULL — teacher-only rows
+    created by the MCP log_session tool are not considered fully logged until
+    the student provides their rating via /done.
 
     Matches new local-time rows by calendar date and legacy UTC rows by the
     UTC window that corresponds to the current local day.
@@ -44,8 +48,9 @@ def get_logged_topic_names_for_today() -> set[str]:
         rows = conn.execute(
             """SELECT DISTINCT t.name FROM sessions s
                JOIN topics t ON t.id = s.topic_id
-               WHERE DATE(s.studied_at) = ?
-                  OR (s.studied_at >= ? AND s.studied_at < ?)""",
+               WHERE s.student_quality IS NOT NULL
+                 AND (DATE(s.studied_at) = ?
+                      OR (s.studied_at >= ? AND s.studied_at < ?))""",
             (local, utc_start, utc_end),
         ).fetchall()
     return {row["name"] for row in rows}
@@ -67,16 +72,22 @@ def upsert_today_session(topic_id: int, duration_min: int, student_quality: int)
     utc_start, utc_end = _legacy_utc_range()
     with get_connection() as conn:
         existing = conn.execute(
-            """SELECT id FROM sessions
+            """SELECT id, teacher_quality FROM sessions
                WHERE topic_id = ?
                  AND (DATE(studied_at) = ?
                       OR (studied_at >= ? AND studied_at < ?))""",
             (topic_id, local, utc_start, utc_end),
         ).fetchone()
         if existing:
+            teacher_quality = existing["teacher_quality"]
+            calibration_gap = (
+                student_quality - teacher_quality if teacher_quality is not None else None
+            )
             conn.execute(
-                "UPDATE sessions SET student_quality = ?, duration_min = ? WHERE id = ?",
-                (student_quality, duration_min, existing["id"]),
+                """UPDATE sessions
+                   SET student_quality = ?, duration_min = ?, calibration_gap = ?
+                   WHERE id = ?""",
+                (student_quality, duration_min, calibration_gap, existing["id"]),
             )
         else:
             conn.execute(
