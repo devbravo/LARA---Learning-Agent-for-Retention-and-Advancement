@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import cast, TypedDict
 
 import logging
-from src.core import sm2 as _sm2_mod
-
 from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
 
@@ -770,7 +768,7 @@ def log_session(state: AgentState) -> AgentState:
         )
         teacher_quality = session_repository.get_today_teacher_quality(topic_id)
         sm2_quality = teacher_quality if teacher_quality is not None else quality
-        _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=sm2_quality)
+        _sm2.update_topic_after_session(topic_id=topic_id, quality=sm2_quality)
 
         # Send type-specific first structured feedback question
         topic_type = topic_repository.get_topic_type_by_id(topic_id) or "conceptual"
@@ -809,6 +807,30 @@ def log_session(state: AgentState) -> AgentState:
         if isinstance(e, GraphInterrupt):
             raise
         return {"messages": [f"⚠️ Failed to log session: {e}"]}
+
+
+def _build_completion_message(topic_name: str, proposed_slots: list[dict]) -> str:
+    """Return the post-log completion message with any remaining unlogged topics.
+
+    Args:
+        topic_name: Name of the topic just logged.
+        proposed_slots: Proposed slots from state, used to scope remaining topics.
+
+    Returns:
+        Completion message string.
+    """
+    all_unlogged = topic_repository.get_active_unlogged_topics_today()
+    planned_names = {s["topic"] for s in proposed_slots}
+    if planned_names:
+        remaining = [t for t in all_unlogged if t["name"] in planned_names]
+    else:
+        due_names = {t["name"] for t in _sm2.get_due_topics()}
+        remaining = [t for t in all_unlogged if t["name"] in due_names]
+
+    if not remaining:
+        return f"✅ {topic_name} logged. All done for today! 💪"
+    bullet_list = "\n".join(f"• {t['name']}" for t in remaining)
+    return f"✅ {topic_name} logged. Still unlogged:\n{bullet_list}\n\nPress /done when you're ready."
 
 
 # ---------------------------------------------------------------------------
@@ -859,20 +881,8 @@ def log_weak_areas(state: AgentState) -> AgentState:
             topic_repository.update_topic_weak_areas(topic_id, weak_json_str)
 
             topic_name = state.get("current_topic_name") or "topic"
-            all_unlogged = topic_repository.get_active_unlogged_topics_today()
             proposed_slots = state.get("proposed_slots") or []
-            planned_names = {s["topic"] for s in proposed_slots}
-            if planned_names:
-                remaining = [t for t in all_unlogged if t["name"] in planned_names]
-            else:
-                due_names = {t["name"] for t in _sm2.get_due_topics()}
-                remaining = [t for t in all_unlogged if t["name"] in due_names]
-
-            if not remaining:
-                completion_msg = f"✅ {topic_name} logged. All done for today! 💪"
-            else:
-                bullet_list = "\n".join(f"• {t['name']}" for t in remaining)
-                completion_msg = f"✅ {topic_name} logged. Still unlogged:\n{bullet_list}\n\nPress /done when you're ready."
+            completion_msg = _build_completion_message(topic_name, proposed_slots)
 
             return {
                 "messages": [completion_msg],
@@ -975,21 +985,8 @@ def log_weak_areas_q2(state: AgentState) -> AgentState:
         topic_repository.update_topic_weak_areas(topic_id, weak_json_str)
 
         topic_name = state.get("current_topic_name") or "topic"
-        all_unlogged = topic_repository.get_active_unlogged_topics_today()
-
         proposed_slots = state.get("proposed_slots") or []
-        planned_names = {s["topic"] for s in proposed_slots}
-        if planned_names:
-            remaining = [t for t in all_unlogged if t["name"] in planned_names]
-        else:
-            due_names = {t["name"] for t in _sm2.get_due_topics()}
-            remaining = [t for t in all_unlogged if t["name"] in due_names]
-
-        if not remaining:
-            msg = f"✅ {topic_name} logged. All done for today! 💪"
-        else:
-            bullet_list = "\n".join(f"• {t['name']}" for t in remaining)
-            msg = f"✅ {topic_name} logged. Still unlogged:\n{bullet_list}\n\nPress /done when you're ready."
+        msg = _build_completion_message(topic_name, proposed_slots)
 
         return {
             "messages": [msg],
