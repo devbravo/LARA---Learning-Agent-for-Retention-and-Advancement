@@ -70,6 +70,8 @@ def _make_db(topics: list[dict], sessions: list[dict] | None = None) -> str:
             name TEXT UNIQUE NOT NULL,
             tier INTEGER NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
+            topic_type TEXT NOT NULL DEFAULT 'conceptual',
+            default_duration_minutes INTEGER NOT NULL DEFAULT 30,
             easiness_factor REAL DEFAULT 2.5,
             interval_days INTEGER DEFAULT 1,
             repetitions INTEGER DEFAULT 0,
