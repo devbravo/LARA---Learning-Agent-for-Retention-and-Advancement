@@ -29,8 +29,8 @@ load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from src.agent.state import AgentState
 from src.agent.nodes import (
-    AgentState,
     activate_topic,
     await_brief_confirmation,
     await_daily_confirmation,

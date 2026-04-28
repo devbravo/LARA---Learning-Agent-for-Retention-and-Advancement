@@ -16,7 +16,7 @@ from src.core import gap_finder as _gap_finder
 from src.repositories import topic_repository
 
 if TYPE_CHECKING:
-    from src.agent.nodes import AgentState
+    from src.agent.state import AgentState
 
 
 def append_calendar_lines(lines: list[str], timed_events: list[dict], empty_label: str) -> None:
