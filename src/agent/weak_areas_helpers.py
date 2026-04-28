@@ -12,7 +12,7 @@ def to_key(s: str) -> str:
     return s.lower().strip().replace(" ", "_")
 
 def breakdown(text: str, all_values: list[str]) -> str | list[str]:
-    return all_values if text.lower().strip() == "all of the above" else _to_key(text)
+    return all_values if text.lower().strip() == "all of the above" else to_key(text)
 
 
 def load_config() -> dict:
