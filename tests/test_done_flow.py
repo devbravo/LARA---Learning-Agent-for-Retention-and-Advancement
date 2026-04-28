@@ -82,9 +82,16 @@ def _make_db(topics: list[dict], sessions: list[dict] | None = None) -> str:
             topic_id INTEGER NOT NULL REFERENCES topics(id),
             studied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             duration_min INTEGER,
+            mode TEXT,
             quality_score INTEGER,
             weak_areas TEXT,
-            suggestions TEXT
+            suggestions TEXT,
+            student_quality INTEGER,
+            student_weak_areas TEXT,
+            teacher_quality INTEGER,
+            teacher_weak_areas TEXT,
+            teacher_source TEXT,
+            calibration_gap INTEGER
         );
     """)
     for t in topics:
@@ -98,8 +105,8 @@ def _make_db(topics: list[dict], sessions: list[dict] | None = None) -> str:
             topic_row = conn.execute("SELECT id FROM topics WHERE name = ?", (s["topic"],)).fetchone()
             if topic_row:
                 conn.execute(
-                    "INSERT INTO sessions (topic_id, duration_min, quality_score, studied_at) VALUES (?, ?, ?, ?)",
-                    (topic_row["id"], s.get("duration_min", 30), s.get("quality_score", 3), today),
+                    "INSERT INTO sessions (topic_id, duration_min, student_quality, studied_at) VALUES (?, ?, ?, ?)",
+                    (topic_row["id"], s.get("duration_min", 30), s.get("student_quality", 3), today),
                 )
     conn.commit()
     conn.close()

@@ -96,6 +96,29 @@ def upsert_today_session(topic_id: int, duration_min: int, student_quality: int)
             )
 
 
+def get_today_teacher_quality(topic_id: int) -> int | None:
+    """Return teacher_quality for today's session if present, else None.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        Teacher quality score (2, 3, or 5) or ``None`` when no teacher
+        assessment has been logged for today.
+    """
+    local = local_today()
+    utc_start, utc_end = _legacy_utc_range()
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT teacher_quality FROM sessions
+               WHERE topic_id = ?
+                 AND (DATE(studied_at) = ?
+                      OR (studied_at >= ? AND studied_at < ?))""",
+            (topic_id, local, utc_start, utc_end),
+        ).fetchone()
+    return row["teacher_quality"] if row else None
+
+
 def get_today_session_id(topic_id: int) -> int | None:
     """Return today's session id for a topic (local date).
 
