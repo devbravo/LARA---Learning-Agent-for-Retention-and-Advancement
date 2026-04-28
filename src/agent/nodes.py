@@ -32,6 +32,7 @@ from src.agent.planning_helpers import (
     rebook_study_events,
 )
 
+from src.agent import messages
 from src.agent.state import AgentState
 from src.agent.weak_areas_helpers import null_if_skip, breakdown, _DSA_ALL, _SYSDESIGN_ALL, _BEHAVIORAL_ALL
 
@@ -158,7 +159,7 @@ def daily_planning(state: AgentState) -> AgentState:
             return base_state
 
         # Send buttons and return — interrupt happens in await_daily_confirmation
-        msg_id = _telegram.send_buttons(message, ["Yes, book them", "Skip"])
+        msg_id = _telegram.send_buttons(message, messages.BOOKING_BUTTONS)
         base_state["pending_message_id"] = msg_id
         return base_state
 
@@ -271,7 +272,7 @@ def send_duration_picker(state: AgentState) -> AgentState:
             except Exception as _e:
                 logger.debug("remove_buttons silently failed: %s", _e)
 
-        msg_id = _telegram.send_buttons("How long do you have?", ["30 min", "45 min", "60 min"])
+        msg_id = _telegram.send_buttons(*messages.duration_picker())
         # Return msg_id — interrupt lives in on_demand so there's no duplicate send on resume
         return {"pending_message_id": msg_id}
 
@@ -310,7 +311,7 @@ def on_demand(state: AgentState) -> AgentState:
         topic = due_topics[0] if due_topics else None
         if topic is None:
             return {
-                "messages": ["🎉 Nothing due for review right now — enjoy your break!"],
+                "messages": [messages.nothing_due()],
                 "duration_min": duration_min,
                 "pending_message_id": None,
             }
@@ -339,7 +340,7 @@ def on_demand(state: AgentState) -> AgentState:
                 }
                 break
 
-        status = f"📚 Generating a {duration_min} min brief for {topic['name']}…"
+        status = messages.generating_brief(topic["name"], duration_min)
         _telegram.send_message(status)
         return {
             "proposed_topic": topic["name"],
@@ -377,7 +378,7 @@ def generate_brief(state: AgentState) -> AgentState:
 
         if state.get("has_study_plan") and state.get("proposed_slot"):
             # Send brief with booking buttons — interrupt lives in await_brief_confirmation
-            msg_id = _telegram.send_buttons(brief, ["Yes, book them", "Skip"])
+            msg_id = _telegram.send_buttons(brief, messages.BOOKING_BUTTONS)
             return {"pending_message_id": msg_id, "messages": []}
         else:
             # No free slot — brief is the final output
@@ -483,23 +484,13 @@ def book_events(state: AgentState) -> AgentState:
             logger.warning("[book_events] Calendar write failed: %s", e, exc_info=True)
 
     if booked or booked_study:
-        parts = []
-        if booked_study:
-            study_lines = "\n".join(f"  • {t}" for t in booked_study)
-            parts.append(f"📚 Booked {len(booked_study)} study session(s):\n{study_lines}")
-        if booked:
-            mock_lines = "\n".join(f"  • {t}" for t in booked)
-            parts.append(f"🎯 Booked {len(booked)} mock session(s):\n{mock_lines}")
         try:
-            _telegram.send_message("\n\n".join(parts))
+            _telegram.send_message(messages.booked_sessions(booked_study, booked))
         except Exception as e:
             logger.warning("[book_events] Confirmation send failed: %s", e, exc_info=True)
     else:
         try:
-            _telegram.send_message(
-                "⚠️ Could not book any sessions — Google Calendar may be unavailable. "
-                "Please try confirming again."
-            )
+            _telegram.send_message(messages.BOOKING_FAILED)
         except Exception as e:
             logger.warning("[book_events] Failed to send booking-failure notice: %s", e, exc_info=True)
 
@@ -528,15 +519,12 @@ def done_parser(state: AgentState) -> AgentState:
             unlogged = [t for t in unlogged if t["name"] in due_names]
 
         if not unlogged:
-            return {"messages": ["No active sessions to log right now."], "has_unlogged_sessions": False}
+            return {"messages": [messages.no_sessions_to_log()], "has_unlogged_sessions": False}
 
         if len(unlogged) >= 2:
             logger.info("done_parser: %d unlogged topics — sending picker", len(unlogged))
             # One button per row so long topic names don't get truncated
-            picker_msg_id = _telegram.send_inline_buttons(
-                "Which topic did you just finish?",
-                [(t["name"], t["name"]) for t in unlogged],
-            )
+            picker_msg_id = _telegram.send_inline_buttons(*messages.topic_picker(unlogged))
             return {
                 "current_topic_id": None,
                 "current_topic_name": None,
@@ -556,7 +544,7 @@ def done_parser(state: AgentState) -> AgentState:
         )
 
         logger.info("done_parser: sending rating buttons for %s", topic_name)
-        rating_msg_id = _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+        rating_msg_id = _telegram.send_buttons(*messages.rating_prompt(topic_name))
 
         return {
             "current_topic_id": topic_id,
@@ -605,7 +593,7 @@ def select_done_topic(state: AgentState) -> AgentState:
             (s["duration_min"] for s in proposed_slots if s["topic"] == topic_name), 0
         )
 
-        rating_msg_id = _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
+        rating_msg_id = _telegram.send_buttons(*messages.rating_prompt(topic_name))
 
         return {
             "current_topic_id": topic_id,
@@ -667,27 +655,13 @@ def log_session(state: AgentState) -> AgentState:
         # Send type-specific first structured feedback question
         topic_type = topic_repository.get_topic_type_by_id(topic_id) or "conceptual"
         if topic_type == "dsa":
-            first_msg_id = _telegram.send_inline_buttons(
-                "What broke down?",
-                [("Edge case", "Edge case"), ("Time complexity", "Time complexity"),
-                 ("Implementation", "Implementation"), ("All of the above", "All of the above"),
-                 ("Nothing", "Nothing")],
-            )
+            first_msg_id = _telegram.send_inline_buttons(*messages.weak_areas_q1_dsa())
         elif topic_type == "system_design":
-            first_msg_id = _telegram.send_buttons(
-                "Describe the scenario briefly, or tap Skip.",
-                ["Skip"],
-            )
+            first_msg_id = _telegram.send_buttons(*messages.weak_areas_q1_system_design())
         elif topic_type == "conceptual":
-            first_msg_id = _telegram.send_buttons(
-                "What couldn't you answer? or tap Skip",
-                ["Skip"],
-            )
+            first_msg_id = _telegram.send_buttons(*messages.weak_areas_q1_conceptual())
         else:  # behavioral
-            first_msg_id = _telegram.send_buttons(
-                "Which story did you practice? or tap Skip.",
-                ["Skip"],
-            )
+            first_msg_id = _telegram.send_buttons(*messages.weak_areas_q1_behavioral())
 
         return {
             "current_topic_id": topic_id,
@@ -722,9 +696,8 @@ def _build_completion_message(topic_name: str, proposed_slots: list[dict]) -> st
         remaining = [t for t in all_unlogged if t["name"] in due_names]
 
     if not remaining:
-        return f"✅ {topic_name} logged. All done for today! 💪"
-    bullet_list = "\n".join(f"• {t['name']}" for t in remaining)
-    return f"✅ {topic_name} logged. Still unlogged:\n{bullet_list}\n\nPress /done when you're ready."
+        return messages.completion_all_done(topic_name)
+    return messages.completion_still_unlogged(topic_name, remaining)
 
 
 # ---------------------------------------------------------------------------
@@ -753,19 +726,9 @@ def log_weak_areas(state: AgentState) -> AgentState:
         topic_type = topic_type or "conceptual"
 
         if topic_type == "dsa":
-            second_msg_id = _telegram.send_buttons(
-                "Which problems did you solve? (e.g Two Sum, Valid Parentheses)",
-                ["Skip"],
-            )
+            second_msg_id = _telegram.send_buttons(*messages.weak_areas_q2_dsa())
         elif topic_type == "system_design":
-            second_msg_id = _telegram.send_inline_buttons(
-                "What felt weak?",
-                [("Scalability", "Scalability"), ("Data pipeline", "Data pipeline"),
-                 ("Trade-offs", "Trade-offs"), ("Estimation", "Estimation"),
-                 ("Component selection", "Component selection"),
-                 ("Latency vs throughput", "Latency vs throughput"),
-                 ("All of the above", "All of the above"), ("Nothing", "Nothing")],
-            )
+            second_msg_id = _telegram.send_inline_buttons(*messages.weak_areas_q2_system_design())
         elif topic_type == "conceptual":
             weak_json_str = json.dumps({"unclear": null_if_skip(first_text)})
             session_id = session_repository.get_today_session_id(topic_id)
@@ -787,12 +750,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
             }
 
         else:  # behavioral
-            second_msg_id = _telegram.send_inline_buttons(
-                "What felt weak?",
-                [("Delivery", "Delivery"), ("Quantification", "Quantification"),
-                 ("Structure", "Structure"), ("All of the above", "All of the above"),
-                 ("Nothing", "Nothing")],
-            )
+            second_msg_id = _telegram.send_inline_buttons(*messages.weak_areas_q2_behavioral())
 
         return {
             "weak_areas_first_answer": first_text,
@@ -933,7 +891,7 @@ def study_topic(state: AgentState) -> AgentState:
         available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
 
         if not available:
-            return {"messages": ["No inactive topics available to start studying."], "pending_message_id": None}
+            return {"messages": [messages.no_inactive_topics()], "pending_message_id": None}
 
         categories = sorted(set(
             r["name"].split(" - ")[0] if " - " in r["name"] else "Other"
@@ -941,7 +899,7 @@ def study_topic(state: AgentState) -> AgentState:
         ))
 
         buttons = [(c, f"category:{c}") for c in categories]
-        cat_msg_id = _telegram.send_inline_buttons("Which category?", buttons)
+        cat_msg_id = _telegram.send_inline_buttons(messages.CATEGORY_PICKER_PROMPT, buttons)
 
         # Send buttons and return — interrupt lives in study_topic_category
         return {
@@ -991,14 +949,14 @@ def study_topic_category(state: AgentState) -> AgentState:
             ))
             buttons = [(c, f"category:{c}") for c in categories]
             try:
-                new_cat_msg_id = _telegram.send_inline_buttons("Which category?", buttons)
+                new_cat_msg_id = _telegram.send_inline_buttons(messages.CATEGORY_PICKER_PROMPT, buttons)
             except RuntimeError as e:
                 if "timed out" in str(e).lower():
                     logger.warning("send_inline_buttons timed out: %s", e)
                     return {"messages": ["⚠️ Timed out while sending the category list. Please retry /pick."], "pending_message_id": None}
                 raise
 
-            return {"messages": ["Please choose a category using the buttons."], "pending_message_id": new_cat_msg_id}
+            return {"messages": [messages.CATEGORY_PICKER_FALLBACK], "pending_message_id": new_cat_msg_id}
 
         category = (category_payload or "")[len("category:"):] \
             if (category_payload or "").startswith("category:") else category_payload
@@ -1017,7 +975,7 @@ def study_topic_category(state: AgentState) -> AgentState:
 
         buttons = [(r["name"], f"subtopic_id:{r['id']}") for r in subtopic_rows]
         try:
-            subtopic_msg_id = _telegram.send_inline_buttons("Which topic?", buttons)
+            subtopic_msg_id = _telegram.send_inline_buttons(messages.TOPIC_PICKER_PROMPT, buttons)
         except RuntimeError as e:
             if "timed out" in str(e).lower():
                 logger.warning("send_inline_buttons timed out: %s", e)
@@ -1072,8 +1030,7 @@ def study_topic_confirm(state: AgentState) -> AgentState:
 
         return {
             "messages": [
-                f"✅ {resolved_name} added to In Progress. "
-                "It will be booked on your calendar tomorrow morning."
+                messages.topic_added_to_in_progress(resolved_name)
             ],
             "pending_message_id": None,
         }
@@ -1094,10 +1051,10 @@ def activate_topic(state: AgentState) -> AgentState:
         topics = topic_service.get_in_progress_topics()
 
         if not topics:
-            return {"messages": ["No topics currently in progress."]}
+            return {"messages": [messages.no_topics_in_progress()]}
 
         buttons = [(t["name"], f"studied:{t['id']}") for t in topics]
-        topic_msg_id = _telegram.send_inline_buttons("Which topic are you ready to be tested on?", buttons)
+        topic_msg_id = _telegram.send_inline_buttons(messages.ACTIVATE_TOPIC_PROMPT, buttons)
 
         # Send buttons and return — interrupt lives in graduate_topic
         # Clear stale messages so route_from_activate_topic doesn't mis-route to output
@@ -1140,10 +1097,7 @@ def graduate_topic(state: AgentState) -> AgentState:
 
         topic_name = topic_service.graduate_topic(topic_id)
         return {
-            "messages": [
-                f"✅ {topic_name} graduated to active. "
-                "First SM-2 review scheduled for tomorrow."
-            ],
+            "messages": [messages.topic_graduated(topic_name)],
             "pending_message_id": None,
         }
 
