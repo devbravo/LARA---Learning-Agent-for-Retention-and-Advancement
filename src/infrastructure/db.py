@@ -157,6 +157,8 @@ def _map_status(topic: dict[str, Any]) -> dict[str, Any]:
         t["status"] = "active" if t.get("active", True) else "inactive"
     if "topic_type" not in t:
         t["topic_type"] = "conceptual"
+    if "default_duration_minutes" not in t:
+        t["default_duration_minutes"] = 30
     return t
 
 
@@ -181,12 +183,13 @@ def seed_topics() -> None:
     try:
         with get_connection() as conn:
             conn.executemany(
-            """INSERT INTO topics (name, tier, status, topic_type, next_review)
-               VALUES (:name, :tier, :status, :topic_type, CASE WHEN :status = 'active' THEN date('now') END)
+            """INSERT INTO topics (name, tier, status, topic_type, default_duration_minutes, next_review)
+               VALUES (:name, :tier, :status, :topic_type, :default_duration_minutes, CASE WHEN :status = 'active' THEN date('now') END)
                ON CONFLICT(name) DO UPDATE SET
                    tier = excluded.tier,
                    status = excluded.status,
                    topic_type = excluded.topic_type,
+                   default_duration_minutes = excluded.default_duration_minutes,
                    next_review = CASE
                        WHEN excluded.status = 'active' AND topics.next_review IS NULL THEN date('now')
                        WHEN excluded.status != 'active' THEN NULL
