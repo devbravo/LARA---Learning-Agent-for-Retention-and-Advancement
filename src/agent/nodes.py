@@ -784,7 +784,9 @@ def log_session(state: AgentState) -> AgentState:
             duration_min=duration_min,
             student_quality=quality,
         )
-        _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=quality)
+        teacher_quality = session_repository.get_today_teacher_quality(topic_id)
+        sm2_quality = teacher_quality if teacher_quality is not None else quality
+        _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=sm2_quality)
 
         # Send type-specific first structured feedback question
         topic_type = topic_repository.get_topic_type_by_id(topic_id) or "conceptual"

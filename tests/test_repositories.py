@@ -50,11 +50,16 @@ class RepositoryDbTestCase(unittest.TestCase):
                     topic_id INTEGER NOT NULL REFERENCES topics(id),
                     studied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     duration_min INTEGER,
+                    mode TEXT,
                     quality_score INTEGER,
                     weak_areas TEXT,
                     suggestions TEXT,
                     student_quality INTEGER,
-                    student_weak_areas TEXT
+                    student_weak_areas TEXT,
+                    teacher_quality INTEGER,
+                    teacher_weak_areas TEXT,
+                    teacher_source TEXT,
+                    calibration_gap INTEGER
                 );
                 """
             )
@@ -191,7 +196,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         conn = sqlite3.connect(self.db_path)
         try:
             cursor = conn.execute(
-                "INSERT INTO sessions (topic_id, duration_min, quality_score, studied_at) VALUES (?, ?, ?, ?)",
+                "INSERT INTO sessions (topic_id, duration_min, student_quality, studied_at) VALUES (?, ?, ?, ?)",
                 (topic_id, 30, 3, studied_at),
             )
             conn.commit()
@@ -271,6 +276,70 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         self.assertEqual(len(rows), 1, "Expected exactly one row — legacy row should be updated, not duplicated")
         self.assertEqual(rows[0][1], 60)
         self.assertEqual(rows[0][2], 5)
+
+    # ------------------------------------------------------------------
+    # get_today_teacher_quality
+    # ------------------------------------------------------------------
+
+    def test_get_today_teacher_quality_returns_none_when_no_session(self) -> None:
+        topic_id = self._insert_topic(name="No Session")
+        result = session_repository.get_today_teacher_quality(topic_id)
+        self.assertIsNone(result)
+
+    def test_get_today_teacher_quality_returns_none_when_only_student_logged(self) -> None:
+        topic_id = self._insert_topic(name="Student Only")
+        session_repository.upsert_today_session(topic_id, 30, 3)
+        result = session_repository.get_today_teacher_quality(topic_id)
+        self.assertIsNone(result)
+
+    def test_get_today_teacher_quality_returns_value_after_teacher_logs(self) -> None:
+        topic_id = self._insert_topic(name="Teacher Logged")
+        session_repository.log_teacher_session(topic_id, 2, {}, "claude", "mock")
+        result = session_repository.get_today_teacher_quality(topic_id)
+        self.assertEqual(result, 2)
+
+    def test_get_today_teacher_quality_returns_value_when_both_logged(self) -> None:
+        topic_id = self._insert_topic(name="Both Logged")
+        session_repository.upsert_today_session(topic_id, 30, 5)
+        session_repository.log_teacher_session(topic_id, 3, {}, "claude", "mock")
+        result = session_repository.get_today_teacher_quality(topic_id)
+        self.assertEqual(result, 3)
+
+    # ------------------------------------------------------------------
+    # calibration_gap written by both paths
+    # ------------------------------------------------------------------
+
+    def test_calibration_gap_set_when_student_logs_after_teacher(self) -> None:
+        """upsert_today_session computes calibration_gap when teacher row exists."""
+        topic_id = self._insert_topic(name="Teacher First")
+        session_repository.log_teacher_session(topic_id, 3, {}, "claude", "mock")
+        session_repository.upsert_today_session(topic_id, 30, 5)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT calibration_gap FROM sessions WHERE topic_id = ?", (topic_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["calibration_gap"], 2)  # 5 - 3
+
+    def test_calibration_gap_set_when_teacher_logs_after_student(self) -> None:
+        """log_teacher_session computes calibration_gap when student row exists."""
+        topic_id = self._insert_topic(name="Student First")
+        session_repository.upsert_today_session(topic_id, 30, 2)
+        session_repository.log_teacher_session(topic_id, 5, {}, "claude", "mock")
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT calibration_gap FROM sessions WHERE topic_id = ?", (topic_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["calibration_gap"], -3)  # 2 - 5
 
 
 class Sm2RepositoryTests(RepositoryDbTestCase):
