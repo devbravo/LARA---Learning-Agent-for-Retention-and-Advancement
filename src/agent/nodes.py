@@ -14,8 +14,6 @@ from typing import cast, TypedDict
 import logging
 from src.core import sm2 as _sm2_mod
 
-import yaml
-
 from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
 
@@ -34,6 +32,9 @@ from src.agent.planning_helpers import (
     get_prebooked_topics,
     rebook_study_events,
 )
+
+from src.agent.weak_areas_helpers import null_if_skip, to_key, breakdown, load_topics, load_config
+
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
 from src.integrations import claude_api as _claude
@@ -53,25 +54,7 @@ _SYSDESIGN_ALL = ["scalability", "data_pipeline", "trade_offs", "estimation",
 _BEHAVIORAL_ALL = ["delivery", "quantification", "structure"]
 
 
-# WEAK AREAS HELPERS
-def _null_if_skip(t: str) -> str | None:
-    return None if not t or t.lower() == "skip" else t
 
-def _to_key(s: str) -> str:
-    return s.lower().strip().replace(" ", "_")
-
-def _breakdown(text: str, all_values: list[str]) -> str | list[str]:
-    return all_values if text.lower().strip() == "all of the above" else _to_key(text)
-
-
-def _load_config() -> dict:
-    with open(_CONFIG_PATH) as f:
-        return yaml.safe_load(f)
-
-
-def _load_topics() -> dict:
-    with open(_TOPICS_PATH) as f:
-        return yaml.safe_load(f)
 
 
 # ---------------------------------------------------------------------------
@@ -197,14 +180,14 @@ def daily_planning(state: AgentState) -> AgentState:
 
         today = date.today()
         target_date = today + timedelta(days=1) if is_evening else today
-        config = _load_config()
+        config = load_config()
 
         events = _gcal.get_events(target_date)
         due_topics = _sm2.get_due_topics(target_date=target_date)
         timed_events = [e for e in events if "dateTime" in e.get("start", {})]
 
         if is_evening:
-            topics_config = _load_topics()
+            topics_config = load_topics()
             in_progress_topics = topic_repository.get_in_progress_topic_names()
             evening_state = build_evening_preview_state(
                 target_date, events, timed_events, due_topics, config, topics_config,
@@ -232,7 +215,7 @@ def daily_planning(state: AgentState) -> AgentState:
         append_calendar_lines(lines, timed_events, "📅 Your day: No meetings today")
 
         available_topics = [t for t in due_topics if t["name"] not in prebooked]
-        topics_config = _load_topics()
+        topics_config = load_topics()
         min_window_minutes = config.get("min_window_minutes", 25)
         proposed_topic, proposed_slot, proposed_slots = pack_mock_slots(
             target_date,
@@ -440,7 +423,7 @@ def on_demand(state: AgentState) -> AgentState:
             }
 
         # Find a free window of the requested duration
-        config = _load_config()
+        config = load_config()
         today = date.today()
         events = _gcal.get_events(today)
         _TZ = pytz.timezone(config["timezone"])
@@ -551,7 +534,7 @@ def await_brief_confirmation(state: AgentState) -> AgentState:
 
 def book_events(state: AgentState) -> AgentState:
     today = date.today()
-    config = _load_config()
+    config = load_config()
     tz = pytz.timezone(config["timezone"])
 
     # Book in-progress [Study] events first (only when user confirmed, not on Skip)
@@ -867,7 +850,7 @@ def log_weak_areas(state: AgentState) -> AgentState:
                  ("All of the above", "All of the above"), ("Nothing", "Nothing")],
             )
         elif topic_type == "conceptual":
-            weak_json_str = json.dumps({"unclear": _null_if_skip(first_text)})
+            weak_json_str = json.dumps({"unclear": null_if_skip(first_text)})
             session_id = session_repository.get_today_session_id(topic_id)
             if session_id is not None:
                 session_repository.update_session_weak_areas(session_id, weak_json_str)
@@ -960,27 +943,27 @@ def log_weak_areas_q2(state: AgentState) -> AgentState:
             breakdown_text = first_text
             problems_text = second_text
             weak_json = {
-                "problems": _null_if_skip(problems_text),
-                "breakdown": _breakdown(breakdown_text, _DSA_ALL),
+                "problems": null_if_skip(problems_text),
+                "breakdown": breakdown(breakdown_text, _DSA_ALL),
             }
         elif topic_type == "system_design":
             scenario_text = first_text
             breakdown_text = second_text
             weak_json = {
-                "scenario": _null_if_skip(scenario_text),
-                "breakdown": _breakdown(breakdown_text, _SYSDESIGN_ALL),
+                "scenario": null_if_skip(scenario_text),
+                "breakdown": breakdown(breakdown_text, _SYSDESIGN_ALL),
             }
         elif topic_type == "conceptual":
             unclear_text = first_text
             weak_json = {
-                "unclear": _null_if_skip(unclear_text),
+                "unclear": null_if_skip(unclear_text),
             }
         else:  # behavioral
             story_text = first_text
             breakdown_text = second_text
             weak_json = {
-                "story": _null_if_skip(story_text),
-                "breakdown": _breakdown(breakdown_text, _BEHAVIORAL_ALL),
+                "story": null_if_skip(story_text),
+                "breakdown": breakdown(breakdown_text, _BEHAVIORAL_ALL),
             }
 
         weak_json_str = json.dumps(weak_json)
