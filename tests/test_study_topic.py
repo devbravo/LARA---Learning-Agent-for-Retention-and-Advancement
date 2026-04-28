@@ -542,6 +542,9 @@ def test_in_progress_study_slots_mix_actual_and_default_slots_chronologically():
 
     slots = build_in_progress_study_slots(["DSA - Arrays", "LLMOps - MLflow"], timed_events, target_date)
 
+    # duration_min now comes from the DB default (30) rather than a hardcoded 60.
+    # The fallback slot window is still 1 hour wide (08:00–09:00) but the
+    # displayed duration reflects the topic's actual default_duration_minutes.
     assert slots == [
         {
             "topic": "LLMOps - MLflow",
@@ -549,13 +552,13 @@ def test_in_progress_study_slots_mix_actual_and_default_slots_chronologically():
             # so LLMOps gets the earliest free slot (08:00).
             "start": "08:00",
             "end": "09:00",
-            "duration_min": 60,
+            "duration_min": 30,
         },
         {
             "topic": "DSA - Arrays",
             "start": "14:00",
             "end": "15:00",
-            "duration_min": 60,
+            "duration_min": 60,  # real calendar event is 60 min (14:00–15:00)
         },
     ]
 
