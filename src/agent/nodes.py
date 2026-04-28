@@ -33,7 +33,7 @@ from src.agent.planning_helpers import (
     rebook_study_events,
 )
 
-from src.agent.weak_areas_helpers import null_if_skip, breakdown, load_config
+from src.agent.weak_areas_helpers import null_if_skip, breakdown
 
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
@@ -44,6 +44,11 @@ from src.repositories import session_repository, topic_repository
 from src.services import topic_service
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
+
+def _load_config() -> dict:
+    import yaml
+    with open(_CONFIG_PATH) as f:
+        return yaml.safe_load(f)
 logger = logging.getLogger(__name__)
 
 # WEAK AREAS CONSTANTS
@@ -179,7 +184,7 @@ def daily_planning(state: AgentState) -> AgentState:
 
         today = date.today()
         target_date = today + timedelta(days=1) if is_evening else today
-        config = load_config()
+        config = _load_config()
 
         events = _gcal.get_events(target_date)
         due_topics = _sm2.get_due_topics(target_date=target_date)
@@ -419,7 +424,7 @@ def on_demand(state: AgentState) -> AgentState:
             }
 
         # Find a free window of the requested duration
-        config = load_config()
+        config = _load_config()
         today = date.today()
         events = _gcal.get_events(today)
         _TZ = pytz.timezone(config["timezone"])
@@ -530,7 +535,7 @@ def await_brief_confirmation(state: AgentState) -> AgentState:
 
 def book_events(state: AgentState) -> AgentState:
     today = date.today()
-    config = load_config()
+    config = _load_config()
     tz = pytz.timezone(config["timezone"])
 
     # Book in-progress [Study] events first (only when user confirmed, not on Skip)
