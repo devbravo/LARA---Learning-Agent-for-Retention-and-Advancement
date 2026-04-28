@@ -73,23 +73,6 @@ def is_topic_in_summary(topic_name: str, summary: str) -> bool:
 
 
 
-def get_topic_config(topic_name: str, config: dict) -> dict:
-    """Return the configuration entry for a topic name.
-
-    Args:
-        topic_name: Topic display name.
-        config: Parsed ``topics.yaml`` content.
-
-    Returns:
-        The matching topic configuration dictionary, or an empty dict when the
-        topic is not configured.
-    """
-    for t in config.get("topics", []):
-        if t["name"] == topic_name:
-            return t
-    return {}
-
-
 
 def get_prebooked_topics(events: list, due_topics: list) -> set:
     """Return due topic names that already appear on the calendar.
