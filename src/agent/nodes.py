@@ -20,12 +20,12 @@ from src.agent.formatting import (
     format_time,
     local_datetime_str,
 )
-from src.agent.daily_planning_helpers import (
+from src.agent.plan_message import (
     append_calendar_lines,
     build_evening_preview_state,
     pack_mock_slots,
 )
-from src.agent.planning_helpers import (
+from src.agent.slot_builders import (
     build_in_progress_study_slots,
     build_missing_study_events,
     get_prebooked_topics,
@@ -34,7 +34,7 @@ from src.agent.planning_helpers import (
 
 from src.agent import messages
 from src.agent.state import AgentState
-from src.agent.weak_areas_helpers import null_if_skip, breakdown, _DSA_ALL, _SYSDESIGN_ALL, _BEHAVIORAL_ALL
+from src.agent.weak_areas_parser import null_if_skip, breakdown, _DSA_ALL, _SYSDESIGN_ALL, _BEHAVIORAL_ALL
 
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
@@ -437,7 +437,7 @@ def book_events(state: AgentState) -> AgentState:
         in_progress_topics = topic_repository.get_in_progress_topic_names()
         events_today = _gcal.get_events(today)
         timed_events_today = [e for e in events_today if "dateTime" in e.get("start", {})]
-        from src.agent.planning_helpers import is_topic_in_summary
+        from src.agent.slot_builders import is_topic_in_summary
         already_booked = {
             t for t in in_progress_topics
             if any(is_topic_in_summary(t, ev.get("summary", "")) for ev in timed_events_today)

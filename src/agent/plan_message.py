@@ -11,7 +11,7 @@ from src.agent.formatting import (
     format_time,
     topic_due_label,
 )
-from src.agent.planning_helpers import build_in_progress_study_slots, build_missing_study_events, get_prebooked_topics
+from src.agent.slot_builders import build_in_progress_study_slots, build_missing_study_events, get_prebooked_topics
 from src.core import gap_finder as _gap_finder
 from src.repositories import topic_repository
 
@@ -99,20 +99,30 @@ def append_evening_mock_block_lines(
     prebooked = get_prebooked_topics(timed_events, due_topics)
     available_topics = [t for t in due_topics if t["name"] not in prebooked]
 
+    min_window_minutes = config.get("min_window_minutes", 25)
+    remaining_topics = list(available_topics)
+
     lines.append("🎯 Mock interview blocks:")
     found_any = False
-    for i, win in enumerate(free_windows):
-        topic = available_topics[i] if i < len(available_topics) else None
-        if topic is None:
+    for win in free_windows:
+        if not remaining_topics:
             break
-        found_any = True
-        default_duration = topic_repository.get_default_duration_by_name(topic["name"])
-        duration = min(default_duration, win["duration_min"])
-        t_start = format_time(win["start"])
-        start_dt = datetime.combine(target_date, win["start"])
-        end_dt = start_dt + timedelta(minutes=duration)
-        t_end = format_time(end_dt.time())
-        lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
+        cursor = datetime.combine(target_date, win["start"])
+        win_end = datetime.combine(target_date, win["end"])
+        while remaining_topics:
+            remaining_min = int((win_end - cursor).total_seconds() // 60)
+            if remaining_min < min_window_minutes:
+                break
+            topic = remaining_topics[0]
+            default_duration = topic_repository.get_default_duration_by_name(topic["name"])
+            duration = min(default_duration, remaining_min)
+            end_dt = cursor + timedelta(minutes=duration)
+            t_start = format_time(cursor.time())
+            t_end = format_time(end_dt.time())
+            lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
+            found_any = True
+            cursor = end_dt
+            remaining_topics.pop(0)
     if not found_any:
         lines.append("• None found for tomorrow")
     lines.append("")
