@@ -263,6 +263,26 @@ def get_topic_context(topic_id: int) -> dict[str, Any]:
     }
 
 
+def get_default_duration_by_name(topic_name: str) -> int:
+    """Return default_duration_minutes for a topic name, falling back to 30.
+
+    Args:
+        topic_name: Topic display name (case-insensitive lookup).
+
+    Returns:
+        Default session duration in minutes, or ``30`` when the topic is
+        not found or the column has not been seeded yet.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT default_duration_minutes FROM topics WHERE name = ? COLLATE NOCASE",
+            (topic_name,),
+        ).fetchone()
+    if row is None or row["default_duration_minutes"] is None:
+        return 30
+    return row["default_duration_minutes"]
+
+
 def set_topic_in_progress(topic_name: str) -> bool:
     """Set topic status to in_progress for an inactive topic name.
 

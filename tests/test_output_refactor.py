@@ -19,7 +19,8 @@ from unittest.mock import MagicMock, patch
 
 
 from src.agent import nodes as _nodes
-from src.agent.nodes import book_events, output, route_from_router
+from src.agent.nodes import book_events, output
+from src.agent.routes import route_from_router
 
 
 # ---------------------------------------------------------------------------

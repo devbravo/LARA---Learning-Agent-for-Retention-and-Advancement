@@ -8,6 +8,7 @@ import pytz
 
 from src.integrations import gcal as _gcal
 from src.agent.formatting import event_duration_min, format_event_time, local_datetime_str
+from src.repositories import topic_repository
 
 logger = logging.getLogger(__name__)
 
@@ -71,23 +72,6 @@ def is_topic_in_summary(topic_name: str, summary: str) -> bool:
     norm_summary = summary.lower().replace(" and ", " & ")
     return norm_topic in norm_summary or norm_summary in norm_topic
 
-
-
-def get_topic_config(topic_name: str, config: dict) -> dict:
-    """Return the configuration entry for a topic name.
-
-    Args:
-        topic_name: Topic display name.
-        config: Parsed ``topics.yaml`` content.
-
-    Returns:
-        The matching topic configuration dictionary, or an empty dict when the
-        topic is not configured.
-    """
-    for t in config.get("topics", []):
-        if t["name"] == topic_name:
-            return t
-    return {}
 
 
 
@@ -238,10 +222,11 @@ def build_in_progress_study_slots(
             None,
         )
 
+        default_duration = topic_repository.get_default_duration_by_name(topic_name)
         if booked_event is not None:
             start = format_event_time(booked_event["start"])
             end = format_event_time(booked_event["end"])
-            duration_min = event_duration_min(booked_event) or 60
+            duration_min = event_duration_min(booked_event) or default_duration
         else:
             result = _next_free_slot(fallback_slot_index, timed_events, target_date)
             if result is None:
@@ -250,7 +235,7 @@ def build_in_progress_study_slots(
             fallback_slot_index, (start_dt, end_dt) = result
             start = format_event_time({"dateTime": start_dt.isoformat()})
             end = format_event_time({"dateTime": end_dt.isoformat()})
-            duration_min = 60
+            duration_min = default_duration
             fallback_slot_index += 1
 
         slots.append(

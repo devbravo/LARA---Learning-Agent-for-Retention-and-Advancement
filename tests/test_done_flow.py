@@ -46,7 +46,8 @@ from langgraph.types import Command  # noqa: E402
 
 import src.agent.nodes as _nodes  # noqa: E402
 from src.agent.graph import build_graph  # noqa: E402
-from src.agent.nodes import done_parser, log_weak_areas, log_weak_areas_q2, route_from_done_parser  # noqa: E402
+from src.agent.nodes import done_parser, log_weak_areas, log_weak_areas_q2  # noqa: E402
+from src.agent.routes import route_from_done_parser  # noqa: E402
 from src import infrastructure  # noqa: E402
 from src.infrastructure import db as core_db  # noqa: E402
 
@@ -70,6 +71,8 @@ def _make_db(topics: list[dict], sessions: list[dict] | None = None) -> str:
             name TEXT UNIQUE NOT NULL,
             tier INTEGER NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
+            topic_type TEXT NOT NULL DEFAULT 'conceptual',
+            default_duration_minutes INTEGER NOT NULL DEFAULT 30,
             easiness_factor REAL DEFAULT 2.5,
             interval_days INTEGER DEFAULT 1,
             repetitions INTEGER DEFAULT 0,

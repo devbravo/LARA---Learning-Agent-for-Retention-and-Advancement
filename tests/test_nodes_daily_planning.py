@@ -28,22 +28,17 @@ def test_daily_planning_moves_mock_slots_after_synthesized_study_blocks():
         "protected_blocks": [],
         "min_window_minutes": 25,
     }
-    topics_config = {
-        "topics": [
-            {"name": "System Design", "default_duration_minutes": 60},
-        ]
-    }
     due_topics = [
         {"name": "System Design", "easiness_factor": 2.3, "next_review": date.today().isoformat()},
     ]
 
     mock_send_buttons = MagicMock(return_value=None)
     with patch("src.agent.nodes._load_config", return_value=config), \
-         patch("src.agent.nodes._load_topics", return_value=topics_config), \
          patch("src.agent.nodes._gcal.get_events", return_value=[]), \
          patch("src.agent.nodes._sm2.get_due_topics", return_value=due_topics), \
          patch("src.agent.nodes.datetime", _MorningDateTime), \
          patch("src.agent.nodes.topic_repository.get_in_progress_topic_names", return_value=["DSA - Arrays"]), \
+         patch("src.agent.nodes.topic_repository.get_default_duration_by_name", return_value=60), \
          patch("src.agent.nodes.rebook_study_events"), \
          patch("src.agent.nodes._telegram.send_buttons", mock_send_buttons), \
          patch("src.agent.nodes.interrupt", return_value="yes, book them"):
@@ -66,16 +61,14 @@ def test_daily_planning_with_many_in_progress_topics_does_not_crash():
         "protected_blocks": [],
         "min_window_minutes": 25,
     }
-    topics_config = {"topics": []}
-
     with patch("src.agent.nodes._load_config", return_value=config), \
-         patch("src.agent.nodes._load_topics", return_value=topics_config), \
          patch("src.agent.nodes._gcal.get_events", return_value=[]), \
          patch("src.agent.nodes._sm2.get_due_topics", return_value=[]), \
          patch(
              "src.agent.nodes.topic_repository.get_in_progress_topic_names",
              return_value=[f"Topic {i}" for i in range(20)],
          ), \
+         patch("src.agent.nodes.topic_repository.get_default_duration_by_name", return_value=30), \
          patch("src.agent.nodes.rebook_study_events"):
         result = daily_planning({"trigger": "daily"})
 

@@ -381,7 +381,7 @@ def test_rebooking_fires_when_not_already_booked():
 
     mock_write = MagicMock()
     with patch.object(nodes_module._gcal, "write_study_event", mock_write):
-        from src.agent.planning_helpers import rebook_study_events
+        from src.agent.slot_builders import rebook_study_events
         rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     mock_write.assert_called_once()
@@ -402,7 +402,7 @@ def test_rebooking_fires_for_each_unbooked_in_progress_topic():
 
     mock_write = MagicMock()
     with patch.object(nodes_module._gcal, "write_study_event", mock_write):
-        from src.agent.planning_helpers import rebook_study_events
+        from src.agent.slot_builders import rebook_study_events
         rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     assert mock_write.call_count == 2
@@ -429,7 +429,7 @@ def test_rebooking_skipped_when_study_event_already_booked():
 
     mock_write = MagicMock()
     with patch.object(nodes_module._gcal, "write_study_event", mock_write):
-        from src.agent.planning_helpers import rebook_study_events
+        from src.agent.slot_builders import rebook_study_events
         rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     mock_write.assert_not_called()
@@ -452,7 +452,7 @@ def test_rebooking_skipped_for_booked_books_unbooked():
 
     mock_write = MagicMock()
     with patch.object(nodes_module._gcal, "write_study_event", mock_write):
-        from src.agent.planning_helpers import rebook_study_events
+        from src.agent.slot_builders import rebook_study_events
         rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
     mock_write.assert_called_once()
@@ -473,7 +473,7 @@ def test_missing_study_busy_events_skip_topics_already_booked_later_in_day():
         }
     ]
 
-    from src.agent.planning_helpers import build_missing_study_events
+    from src.agent.slot_builders import build_missing_study_events
 
     assert build_missing_study_events(in_progress_topics, timed_events, target_date, config) == []
 
@@ -491,7 +491,7 @@ def test_missing_study_busy_events_preserve_default_slot_order_for_unbooked_topi
         }
     ]
 
-    from src.agent.planning_helpers import build_missing_study_events
+    from src.agent.slot_builders import build_missing_study_events
 
     events = build_missing_study_events(in_progress_topics, timed_events, target_date, config)
 
@@ -513,7 +513,7 @@ def test_in_progress_study_slots_use_actual_booked_time_when_present():
         }
     ]
 
-    from src.agent.planning_helpers import build_in_progress_study_slots
+    from src.agent.slot_builders import build_in_progress_study_slots
 
     slots = build_in_progress_study_slots(["DSA - Arrays"], timed_events, target_date)
 
@@ -538,10 +538,13 @@ def test_in_progress_study_slots_mix_actual_and_default_slots_chronologically():
         }
     ]
 
-    from src.agent.planning_helpers import build_in_progress_study_slots
+    from src.agent.slot_builders import build_in_progress_study_slots
 
     slots = build_in_progress_study_slots(["DSA - Arrays", "LLMOps - MLflow"], timed_events, target_date)
 
+    # duration_min now comes from the DB default (30) rather than a hardcoded 60.
+    # The fallback slot window is still 1 hour wide (08:00–09:00) but the
+    # displayed duration reflects the topic's actual default_duration_minutes.
     assert slots == [
         {
             "topic": "LLMOps - MLflow",
@@ -549,13 +552,13 @@ def test_in_progress_study_slots_mix_actual_and_default_slots_chronologically():
             # so LLMOps gets the earliest free slot (08:00).
             "start": "08:00",
             "end": "09:00",
-            "duration_min": 60,
+            "duration_min": 30,
         },
         {
             "topic": "DSA - Arrays",
             "start": "14:00",
             "end": "15:00",
-            "duration_min": 60,
+            "duration_min": 60,  # real calendar event is 60 min (14:00–15:00)
         },
     ]
 
@@ -575,7 +578,7 @@ def test_build_missing_study_events_skips_slot_conflicting_with_meeting():
     ]
     in_progress_topics = ["DSA - Arrays", "LLMOps - MLflow", "System Design"]
 
-    from src.agent.planning_helpers import build_missing_study_events
+    from src.agent.slot_builders import build_missing_study_events
 
     events = build_missing_study_events(in_progress_topics, timed_events, target_date, config)
 
@@ -593,7 +596,7 @@ def test_missing_study_busy_events_stop_before_invalid_next_day_timestamps():
     config = {"timezone": "UTC"}
     in_progress_topics = [f"Topic {i}" for i in range(17)]
 
-    from src.agent.planning_helpers import build_missing_study_events
+    from src.agent.slot_builders import build_missing_study_events
 
     events = build_missing_study_events(in_progress_topics, [], target_date, config)
 
@@ -612,7 +615,7 @@ def test_rebook_study_events_stop_when_no_valid_same_day_slot_remains():
 
     mock_write = MagicMock()
     with patch.object(nodes_module._gcal, "write_study_event", mock_write):
-        from src.agent.planning_helpers import rebook_study_events
+        from src.agent.slot_builders import rebook_study_events
         rebook_study_events(in_progress_topics, [], target_date, config)
 
     assert mock_write.call_count == 16

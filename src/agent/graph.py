@@ -29,8 +29,8 @@ load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from src.agent.state import AgentState
 from src.agent.nodes import (
-    AgentState,
     activate_topic,
     await_brief_confirmation,
     await_daily_confirmation,
@@ -43,19 +43,7 @@ from src.agent.nodes import (
     log_weak_areas,
     log_weak_areas_q2,
     on_demand,
-    route_from_log_weak_areas,
     output,
-    route_from_activate_topic,
-    route_from_await_brief_confirmation,
-    route_from_await_daily_confirmation,
-    route_from_daily_planning,
-    route_from_done_parser,
-    route_from_generate_brief,
-    route_from_on_demand,
-    route_from_router,
-    route_from_select_done_topic,
-    route_from_study_topic,
-    route_from_study_topic_category,
     router,
     select_done_topic,
     send_duration_picker,
@@ -63,6 +51,20 @@ from src.agent.nodes import (
     study_topic_category,
     study_topic_confirm,
     weekend_brief,
+)
+from src.agent.routes import (
+    route_from_activate_topic,
+    route_from_await_brief_confirmation,
+    route_from_await_daily_confirmation,
+    route_from_daily_planning,
+    route_from_done_parser,
+    route_from_generate_brief,
+    route_from_log_weak_areas,
+    route_from_on_demand,
+    route_from_router,
+    route_from_select_done_topic,
+    route_from_study_topic,
+    route_from_study_topic_category,
 )
 
 _DB_DIR = Path(__file__).parents[2] / "db"

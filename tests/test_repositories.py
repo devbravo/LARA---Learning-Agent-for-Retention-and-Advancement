@@ -37,6 +37,8 @@ class RepositoryDbTestCase(unittest.TestCase):
                     name TEXT NOT NULL UNIQUE,
                     tier INTEGER NOT NULL,
                     status TEXT NOT NULL DEFAULT 'active',
+                    topic_type TEXT NOT NULL DEFAULT 'conceptual',
+                    default_duration_minutes INTEGER NOT NULL DEFAULT 30,
                     easiness_factor REAL DEFAULT 2.5,
                     interval_days INTEGER DEFAULT 1,
                     repetitions INTEGER DEFAULT 0,
@@ -72,6 +74,8 @@ class RepositoryDbTestCase(unittest.TestCase):
             "name": "Topic",
             "tier": 1,
             "status": "active",
+            "topic_type": "conceptual",
+            "default_duration_minutes": 30,
             "easiness_factor": 2.5,
             "interval_days": 1,
             "repetitions": 0,
@@ -84,8 +88,10 @@ class RepositoryDbTestCase(unittest.TestCase):
         try:
             cursor = conn.execute(
                 """
-                INSERT INTO topics (name, tier, status, easiness_factor, interval_days, repetitions, next_review, weak_areas)
-                VALUES (:name, :tier, :status, :easiness_factor, :interval_days, :repetitions, :next_review, :weak_areas)
+                INSERT INTO topics (name, tier, status, topic_type, default_duration_minutes,
+                                    easiness_factor, interval_days, repetitions, next_review, weak_areas)
+                VALUES (:name, :tier, :status, :topic_type, :default_duration_minutes,
+                        :easiness_factor, :interval_days, :repetitions, :next_review, :weak_areas)
                 """,
                 defaults,
             )
@@ -141,6 +147,20 @@ class TopicRepositoryTests(RepositoryDbTestCase):
 
         self.assertTrue(topic_repository.set_topic_in_progress("C"))
         self.assertFalse(topic_repository.set_topic_in_progress("C"))
+
+    def test_get_default_duration_returns_seeded_value(self) -> None:
+        self._insert_topic(name="DSA - Trees", default_duration_minutes=45)
+        result = topic_repository.get_default_duration_by_name("DSA - Trees")
+        self.assertEqual(result, 45)
+
+    def test_get_default_duration_is_case_insensitive(self) -> None:
+        self._insert_topic(name="DSA - Trees", default_duration_minutes=45)
+        result = topic_repository.get_default_duration_by_name("dsa - trees")
+        self.assertEqual(result, 45)
+
+    def test_get_default_duration_returns_30_for_unknown_topic(self) -> None:
+        result = topic_repository.get_default_duration_by_name("Nonexistent Topic")
+        self.assertEqual(result, 30)
 
 
 class SessionRepositoryTests(RepositoryDbTestCase):

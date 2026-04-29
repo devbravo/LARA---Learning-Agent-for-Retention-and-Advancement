@@ -11,11 +11,12 @@ from src.agent.formatting import (
     format_time,
     topic_due_label,
 )
-from src.agent.planning_helpers import build_in_progress_study_slots, build_missing_study_events, get_prebooked_topics, get_topic_config
+from src.agent.slot_builders import build_in_progress_study_slots, build_missing_study_events, get_prebooked_topics
 from src.core import gap_finder as _gap_finder
+from src.repositories import topic_repository
 
 if TYPE_CHECKING:
-    from src.agent.nodes import AgentState
+    from src.agent.state import AgentState
 
 
 def append_calendar_lines(lines: list[str], timed_events: list[dict], empty_label: str) -> None:
@@ -72,7 +73,6 @@ def append_evening_mock_block_lines(
     timed_events: list[dict],
     due_topics: list[dict],
     config: dict,
-    topics_config: dict,
     in_progress_topics: list[str] | None = None,
 ) -> None:
     """Append the evening mock-interview block section.
@@ -87,7 +87,6 @@ def append_evening_mock_block_lines(
         timed_events: Timed subset of ``events``.
         due_topics: Topics returned by SM-2 for the target date.
         config: Runtime config values from ``config.yaml``.
-        topics_config: Topic metadata loaded from ``topics.yaml``.
         in_progress_topics: Topic names currently marked ``in_progress``.
     """
     # Include synthetic [Study] busy blocks so mock slots never overlap them
@@ -100,21 +99,32 @@ def append_evening_mock_block_lines(
     prebooked = get_prebooked_topics(timed_events, due_topics)
     available_topics = [t for t in due_topics if t["name"] not in prebooked]
 
+    min_window_minutes = config.get("min_window_minutes", 25)
+    remaining_topics = list(available_topics)
+
     lines.append("🎯 Mock interview blocks:")
     found_any = False
-    for i, win in enumerate(free_windows):
-        topic = available_topics[i] if i < len(available_topics) else None
-        if topic is None:
+    for win in free_windows:
+        if not remaining_topics:
             break
-        found_any = True
-        topic_cfg = get_topic_config(topic["name"], topics_config)
-        default_duration = topic_cfg.get("default_duration_minutes", 60)
-        duration = min(default_duration, win["duration_min"])
-        t_start = format_time(win["start"])
-        start_dt = datetime.combine(target_date, win["start"])
-        end_dt = start_dt + timedelta(minutes=duration)
-        t_end = format_time(end_dt.time())
-        lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
+        cursor = datetime.combine(target_date, win["start"])
+        win_end = datetime.combine(target_date, win["end"])
+        while remaining_topics:
+            remaining_min = int((win_end - cursor).total_seconds() // 60)
+            if remaining_min < min_window_minutes:
+                break
+            topic = remaining_topics[0]
+            default_duration = topic_repository.get_default_duration_by_name(topic["name"])
+            if remaining_min < default_duration:
+                break
+            duration = default_duration
+            end_dt = cursor + timedelta(minutes=duration)
+            t_start = format_time(cursor.time())
+            t_end = format_time(end_dt.time())
+            lines.append(f"• {t_start}–{t_end} [Mock] {topic['name']} ({duration}min)")
+            found_any = True
+            cursor = end_dt
+            remaining_topics.pop(0)
     if not found_any:
         lines.append("• None found for tomorrow")
     lines.append("")
@@ -139,7 +149,6 @@ def pack_mock_slots(
     target_date: date,
     free_windows: list[dict],
     available_topics: list[dict],
-    topics_config: dict,
     min_window_minutes: int,
     lines: list[str],
 ) -> tuple[str | None, dict | None, list[dict]]:
@@ -149,7 +158,6 @@ def pack_mock_slots(
         target_date: Date being planned.
         free_windows: Free windows returned by ``gap_finder``.
         available_topics: Due topics not already prebooked.
-        topics_config: Topic metadata loaded from ``topics.yaml``.
         min_window_minutes: Minimum remaining window size to schedule a slot.
         lines: Mutable list of message lines to append to.
 
@@ -159,7 +167,6 @@ def pack_mock_slots(
     proposed_topic = None
     proposed_slot = None
     proposed_slots: list[dict] = []
-    max_slots = 6
 
     if not free_windows:
         lines.append("🎯 Mock interview blocks: None found today")
@@ -169,18 +176,21 @@ def pack_mock_slots(
     lines.append("🎯 Today's mock interview(s):")
     remaining_topics = list(available_topics)
     for win in free_windows:
-        if not remaining_topics or len(proposed_slots) >= max_slots:
+        if not remaining_topics:
             break
         cursor = datetime.combine(target_date, win["start"])
         win_end = datetime.combine(target_date, win["end"])
-        while remaining_topics and len(proposed_slots) < max_slots:
+        while remaining_topics:
             remaining_min = int((win_end - cursor).total_seconds() // 60)
             if remaining_min < min_window_minutes:
                 break
             topic = remaining_topics[0]
-            topic_cfg = get_topic_config(topic["name"], topics_config)
-            default_duration = topic_cfg.get("default_duration_minutes", 60)
-            duration = min(default_duration, remaining_min)
+            default_duration = topic_repository.get_default_duration_by_name(topic["name"])
+            # If the window can't fit the full session, defer to the next window
+            # rather than squeezing the topic into partial time.
+            if remaining_min < default_duration:
+                break
+            duration = default_duration
             end_dt = cursor + timedelta(minutes=duration)
             t_start = format_time(cursor.time())
             t_end = format_time(end_dt.time())
@@ -210,7 +220,6 @@ def build_evening_preview_state(
     timed_events: list[dict],
     due_topics: list[dict],
     config: dict,
-    topics_config: dict,
     in_progress_topics: list[str] | None = None,
 ) -> "AgentState":
     """Build the read-only evening preview state payload.
@@ -221,7 +230,6 @@ def build_evening_preview_state(
         timed_events: Timed subset of ``events``.
         due_topics: Topics returned by SM-2 for the target date.
         config: Runtime config values from ``config.yaml``.
-        topics_config: Topic metadata loaded from ``topics.yaml``.
         in_progress_topics: Topic names currently marked ``in_progress``.
 
     Returns:
@@ -238,7 +246,6 @@ def build_evening_preview_state(
         timed_events,
         due_topics,
         config,
-        topics_config,
         in_progress_topics=in_progress_topics or [],
     )
     lines.append("No confirmation needed — this is your preview for tomorrow.")
