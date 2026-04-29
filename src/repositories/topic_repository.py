@@ -72,18 +72,39 @@ def get_in_progress_topic_names() -> list[str]:
 def get_topic_id_by_name(topic_name: str) -> int | None:
     """Return topic id for a case-insensitive topic name.
 
+    Tries an exact match first; if that fails, falls back to a substring
+    (LIKE) search and returns the id only when exactly one topic matches.
+    Raises ``ValueError`` with candidate names when multiple topics match
+    the substring, so the caller can surface them to the user.
+
     Args:
-        topic_name: Topic display name.
+        topic_name: Topic display name (exact or partial).
 
     Returns:
         Topic id, or ``None`` when no match exists.
+
+    Raises:
+        ValueError: If the substring matches more than one topic.
     """
     with get_connection() as conn:
         row = conn.execute(
             "SELECT id FROM topics WHERE name = ? COLLATE NOCASE",
             (topic_name,),
         ).fetchone()
-    return row["id"] if row else None
+        if row:
+            return row["id"]
+        rows = conn.execute(
+            "SELECT id, name FROM topics WHERE name LIKE ? COLLATE NOCASE",
+            (f"%{topic_name}%",),
+        ).fetchall()
+    if len(rows) == 1:
+        return rows[0]["id"]
+    if len(rows) > 1:
+        candidates = ", ".join(f'"{r["name"]}"' for r in rows)
+        raise ValueError(
+            f"Ambiguous topic name '{topic_name}'. Did you mean: {candidates}?"
+        )
+    return None
 
 
 def get_topic_type_by_id(topic_id: int) -> str | None:
