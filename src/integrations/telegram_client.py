@@ -17,7 +17,7 @@ from typing import Any, Coroutine, TypeVar
 
 from dotenv import load_dotenv
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import TelegramError
+from telegram.error import TelegramError, TimedOut
 from telegram.error import BadRequest
 
 load_dotenv(Path(__file__).parents[2] / ".env", override=True)
@@ -103,10 +103,16 @@ def _run(coro: "Coroutine[Any, Any, T]") -> T:
 async def _send_message(text: str) -> None:
     """Send a plain HTML-enabled Telegram message to the default chat."""
     assert _tg_bot is not None and _tg_chat_id is not None
-    try:
-        await _tg_bot.send_message(chat_id=_tg_chat_id, text=text, parse_mode="HTML")
-    except TelegramError as e:
-        raise RuntimeError(f"Telegram send_message failed: {e}") from e
+    for attempt in range(3):
+        try:
+            await _tg_bot.send_message(chat_id=_tg_chat_id, text=text, parse_mode="HTML")
+            return
+        except TimedOut:
+            if attempt == 2:
+                raise RuntimeError("Telegram send_message failed: timed out after 3 attempts")
+            await asyncio.sleep(1)
+        except TelegramError as e:
+            raise RuntimeError(f"Telegram send_message failed: {e}") from e
 
 
 async def _send_buttons(text: str, buttons: list[str]) -> int:
@@ -123,16 +129,22 @@ async def _send_buttons(text: str, buttons: list[str]) -> int:
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(label, callback_data=label) for label in buttons]]
     )
-    try:
-        msg = await _tg_bot.send_message(
-            chat_id=_tg_chat_id,
-            text=text,
-            reply_markup=keyboard,
-            parse_mode="HTML",
-        )
-        return msg.message_id
-    except TelegramError as e:
-        raise RuntimeError(f"Telegram send_buttons failed: {e}") from e
+    for attempt in range(3):
+        try:
+            msg = await _tg_bot.send_message(
+                chat_id=_tg_chat_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+            return msg.message_id
+        except TimedOut:
+            if attempt == 2:
+                raise RuntimeError("Telegram send_buttons failed: timed out after 3 attempts")
+            await asyncio.sleep(1)
+        except TelegramError as e:
+            raise RuntimeError(f"Telegram send_buttons failed: {e}") from e
+    raise RuntimeError("Telegram send_buttons failed: unreachable")
 
 
 async def _send_inline_buttons(text: str, buttons: list[tuple[str, str]]) -> int:
@@ -150,16 +162,22 @@ async def _send_inline_buttons(text: str, buttons: list[tuple[str, str]]) -> int
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(label, callback_data=data)] for label, data in buttons]
     )
-    try:
-        msg = await _tg_bot.send_message(
-            chat_id=_tg_chat_id,
-            text=text,
-            reply_markup=keyboard,
-            parse_mode="HTML",
-        )
-        return msg.message_id
-    except TelegramError as e:
-        raise RuntimeError(f"Telegram send_inline_buttons failed: {e}") from e
+    for attempt in range(3):
+        try:
+            msg = await _tg_bot.send_message(
+                chat_id=_tg_chat_id,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+            return msg.message_id
+        except TimedOut:
+            if attempt == 2:
+                raise RuntimeError("Telegram send_inline_buttons failed: timed out after 3 attempts")
+            await asyncio.sleep(1)
+        except TelegramError as e:
+            raise RuntimeError(f"Telegram send_inline_buttons failed: {e}") from e
+    raise RuntimeError("Telegram send_inline_buttons failed: unreachable")
 
 
 async def _remove_buttons(chat_id: int, message_id: int) -> None:
