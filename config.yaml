@@ -8,8 +8,8 @@ schedule:
     minute: 0
     misfire_grace_time: 600
   evening_brief:
-    hour: 23
-    minute: 40
+    hour: 20
+    minute: 0
     misfire_grace_time: 600
 
 protected_blocks:

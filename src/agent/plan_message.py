@@ -115,7 +115,9 @@ def append_evening_mock_block_lines(
                 break
             topic = remaining_topics[0]
             default_duration = topic_repository.get_default_duration_by_name(topic["name"])
-            duration = min(default_duration, remaining_min)
+            if remaining_min < default_duration:
+                break
+            duration = default_duration
             end_dt = cursor + timedelta(minutes=duration)
             t_start = format_time(cursor.time())
             t_end = format_time(end_dt.time())
@@ -165,7 +167,6 @@ def pack_mock_slots(
     proposed_topic = None
     proposed_slot = None
     proposed_slots: list[dict] = []
-    max_slots = 6
 
     if not free_windows:
         lines.append("🎯 Mock interview blocks: None found today")
@@ -175,17 +176,21 @@ def pack_mock_slots(
     lines.append("🎯 Today's mock interview(s):")
     remaining_topics = list(available_topics)
     for win in free_windows:
-        if not remaining_topics or len(proposed_slots) >= max_slots:
+        if not remaining_topics:
             break
         cursor = datetime.combine(target_date, win["start"])
         win_end = datetime.combine(target_date, win["end"])
-        while remaining_topics and len(proposed_slots) < max_slots:
+        while remaining_topics:
             remaining_min = int((win_end - cursor).total_seconds() // 60)
             if remaining_min < min_window_minutes:
                 break
             topic = remaining_topics[0]
             default_duration = topic_repository.get_default_duration_by_name(topic["name"])
-            duration = min(default_duration, remaining_min)
+            # If the window can't fit the full session, defer to the next window
+            # rather than squeezing the topic into partial time.
+            if remaining_min < default_duration:
+                break
+            duration = default_duration
             end_dt = cursor + timedelta(minutes=duration)
             t_start = format_time(cursor.time())
             t_end = format_time(end_dt.time())
