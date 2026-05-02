@@ -189,6 +189,9 @@ TOPIC_PICKER_PROMPT = "Which topic?"
 #: Fallback shown when the user types a command instead of tapping a button.
 CATEGORY_PICKER_FALLBACK = "Please choose a category using the buttons."
 
+#: Fallback shown in start_discuss when the user types a command instead of tapping a button.
+DISCUSS_PICKER_FALLBACK = "Please use the buttons to select a topic for this discuss session."
+
 
 def no_inactive_topics() -> str:
     """Shown when /pick is triggered but no inactive topics are available."""

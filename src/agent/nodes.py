@@ -1047,22 +1047,34 @@ def study_topic_confirm(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def _weak_area_keys(raw: str | None) -> list[str]:
-    """Extract non-empty top-level keys from a stored weak_areas JSON string.
+    """Extract focus-area labels from a stored ``topics.weak_areas`` value.
+
+    ``topics.weak_areas`` is written by the /done flow as a structured dict
+    where top-level keys are schema labels (``"unclear"``, ``"breakdown"``,
+    ``"problems"``, ``"scenario"``, ``"story"``) and the *values* hold the
+    meaningful content (e.g. ``{"unclear": "CAP theorem vs PACELC"}`` or
+    ``{"breakdown": "Edge case, Time complexity"}``).  Surfacing the values
+    gives Diego actionable focus areas; surfacing the keys would only show
+    unhelpful structural labels.
+
+    Note: this is distinct from ``discuss_service._parse_weak_area_keys``,
+    which reads ``sessions.teacher_weak_areas`` — a field where the *keys*
+    are the identifiers used for repetition detection.
 
     Args:
         raw: Raw ``weak_areas`` value as stored in the topics table.
 
     Returns:
-        List of key strings with truthy values; empty list when input is None,
+        List of non-empty string values; empty list when input is None,
         empty, or not a JSON object.
     """
     if not raw or not raw.strip():
         return []
     try:
         parsed = json.loads(raw)
-        if isinstance(parsed, dict):
-            return [k for k, v in parsed.items() if v]
-        return []
+        if not isinstance(parsed, dict):
+            return [raw.strip()]
+        return [v for v in parsed.values() if v and isinstance(v, str)]
     except Exception:
         return [raw.strip()]
 
@@ -1142,7 +1154,36 @@ def start_discuss(state: AgentState) -> AgentState:
             except Exception as _e:
                 logger.debug("remove_buttons silently failed: %s", _e)
 
-        if not isinstance(selected_payload, str) or not selected_payload.startswith("discuss_topic:"):
+        # If the user typed a command instead of tapping a button, re-send the
+        # picker so they can see their options — mirrors study_topic_category.
+        if not selected_payload or (
+            isinstance(selected_payload, str) and selected_payload.startswith("/")
+        ):
+            topics = topic_repository.get_in_progress_and_active_topics()
+            if not topics:
+                return {
+                    "messages": ["No topics in progress or active to discuss."],
+                    "pending_message_id": None,
+                }
+            buttons = [(t["name"], f"discuss_topic:{t['id']}") for t in topics]
+            try:
+                new_picker_id = _telegram.send_inline_buttons(
+                    "Which topic are you discussing?", buttons
+                )
+            except RuntimeError as e:
+                if "timed out" in str(e).lower():
+                    logger.warning("start_discuss: send_inline_buttons timed out: %s", e)
+                    return {
+                        "messages": ["⚠️ Timed out sending the topic list. Type /discuss to try again."],
+                        "pending_message_id": None,
+                    }
+                raise
+            return {
+                "messages": [messages.DISCUSS_PICKER_FALLBACK],
+                "pending_message_id": new_picker_id,
+            }
+
+        if not selected_payload.startswith("discuss_topic:"):
             return {"messages": ["⚠️ Invalid topic selection."], "pending_message_id": None}
 
         try:
