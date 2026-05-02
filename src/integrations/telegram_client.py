@@ -227,6 +227,31 @@ def remove_buttons(chat_id: int, message_id: int) -> None:
     _run(_remove_buttons(chat_id, message_id))
 
 
+def get_chat_id() -> int:
+    """Return the configured Telegram chat id.
+
+    Reads directly from the environment so it can be called before the
+    background Telegram loop is initialised — safe to use from service-layer
+    code that needs the chat id before sending the first message.
+
+    Returns:
+        Integer chat id from ``TELEGRAM_CHAT_ID`` environment variable.
+
+    Raises:
+        EnvironmentError: If the environment variable is not set, or is set
+            to a value that cannot be parsed as an integer.
+    """
+    chat_id_str = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not chat_id_str:
+        raise EnvironmentError("Missing required env var: TELEGRAM_CHAT_ID")
+    try:
+        return int(chat_id_str)
+    except ValueError as exc:
+        raise EnvironmentError(
+            f"Invalid TELEGRAM_CHAT_ID: must be an integer, got {chat_id_str!r}."
+        ) from exc
+
+
 if __name__ == "__main__":
     send_message("Learning Manager online ✅")
     print("Message sent.")

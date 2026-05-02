@@ -10,13 +10,15 @@ from src.agent.state import AgentState
 def route_from_router(state: AgentState) -> str:
     trigger = state.get("trigger", "")
     mapping = {
-        "daily":    "daily_planning",
-        "evening":  "daily_planning",
-        "weekend":  "weekend_brief",
-        "study":    "send_duration_picker",
-        "done":     "done_parser",
-        "pick":     "study_topic",
-        "activate": "activate_topic",
+        "daily":                "daily_planning",
+        "evening":              "daily_planning",
+        "weekend":              "weekend_brief",
+        "study":                "send_duration_picker",
+        "done":                 "done_parser",
+        "pick":                 "study_topic",
+        "activate":             "activate_topic",
+        "discuss":              "discuss_parser",
+        "discuss_ready_confirm": "notify_discuss_ready",
     }
     return mapping.get(trigger, "output")
 
@@ -79,3 +81,21 @@ def route_from_log_weak_areas(state: AgentState) -> str:
     if state.get("weak_areas_topic_type") == "conceptual":
         return "output"
     return "log_weak_areas_q2"
+
+
+def route_from_discuss_parser(state: AgentState) -> str:
+    """Route to output when a message is set (single-topic or error); else start_discuss."""
+    return "output" if state.get("messages") else "start_discuss"
+
+
+def route_from_graduate_topic(state: AgentState) -> str:
+    """Route to confirm_graduate when a soft-warning button was sent; else output.
+
+    ``graduate_topic`` signals a pending soft-guard prompt by setting
+    ``pending_message_id`` with an empty ``messages`` list.  Any other
+    outcome (activation completed, hard block, or error) leaves ``messages``
+    non-empty so we go straight to output.
+    """
+    if state.get("pending_message_id") is not None and not state.get("messages"):
+        return "confirm_graduate"
+    return "output"

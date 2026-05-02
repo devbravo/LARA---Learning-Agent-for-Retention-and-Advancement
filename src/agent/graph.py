@@ -12,7 +12,11 @@ Flow (HITL pattern — interrupt() replaces awaiting_* flags):
   send_duration_picker → interrupt() → on_demand → generate_brief → interrupt() → book_events → output → END
   done_parser → (select_done_topic → interrupt() →)? log_session → interrupt() → log_weak_areas → output → END
   study_topic → interrupt() → study_topic_category → interrupt() → study_topic_confirm → output → END
-  activate_topic → interrupt() → graduate_topic → output → END
+  activate_topic → interrupt() → graduate_topic → output → END  (normal / hard block)
+  activate_topic → interrupt() → graduate_topic → interrupt() → confirm_graduate → output → END  (soft guard)
+  discuss_parser → output → END  (single topic or error)
+  discuss_parser → interrupt() → start_discuss → output → END  (multiple topics)
+  discuss_ready_confirm → notify_discuss_ready → interrupt() → await_discuss_activation → output → END
 
 Checkpointer: SqliteSaver backed by db/state.db.
 Thread ID: chat_id from state (one thread per user).
@@ -34,19 +38,24 @@ from src.agent.nodes import (
     activate_topic,
     await_brief_confirmation,
     await_daily_confirmation,
+    await_discuss_activation,
     book_events,
+    confirm_graduate,
     daily_planning,
+    discuss_parser,
     done_parser,
     generate_brief,
     graduate_topic,
     log_session,
     log_weak_areas,
     log_weak_areas_q2,
+    notify_discuss_ready,
     on_demand,
     output,
     router,
     select_done_topic,
     send_duration_picker,
+    start_discuss,
     study_topic,
     study_topic_category,
     study_topic_confirm,
@@ -57,8 +66,10 @@ from src.agent.routes import (
     route_from_await_brief_confirmation,
     route_from_await_daily_confirmation,
     route_from_daily_planning,
+    route_from_discuss_parser,
     route_from_done_parser,
     route_from_generate_brief,
+    route_from_graduate_topic,
     route_from_log_weak_areas,
     route_from_on_demand,
     route_from_router,
@@ -96,6 +107,11 @@ def build_graph(checkpointer=None):
     builder.add_node("study_topic_confirm", study_topic_confirm)
     builder.add_node("activate_topic", activate_topic)
     builder.add_node("graduate_topic", graduate_topic)
+    builder.add_node("confirm_graduate", confirm_graduate)
+    builder.add_node("discuss_parser", discuss_parser)
+    builder.add_node("start_discuss", start_discuss)
+    builder.add_node("notify_discuss_ready", notify_discuss_ready)
+    builder.add_node("await_discuss_activation", await_discuss_activation)
 
     # Entry point
     builder.add_edge(START, "router")
@@ -105,13 +121,15 @@ def build_graph(checkpointer=None):
         "router",
         route_from_router,
         {
-            "daily_planning":       "daily_planning",
-            "weekend_brief":        "weekend_brief",
-            "send_duration_picker": "send_duration_picker",
-            "done_parser":          "done_parser",
-            "study_topic":          "study_topic",
-            "activate_topic":       "activate_topic",
-            "output":               "output",
+            "daily_planning":        "daily_planning",
+            "weekend_brief":         "weekend_brief",
+            "send_duration_picker":  "send_duration_picker",
+            "done_parser":           "done_parser",
+            "study_topic":           "study_topic",
+            "activate_topic":        "activate_topic",
+            "discuss_parser":        "discuss_parser",
+            "notify_discuss_ready":  "notify_discuss_ready",
+            "output":                "output",
         },
     )
 
@@ -186,7 +204,24 @@ def build_graph(checkpointer=None):
         route_from_activate_topic,
         {"graduate_topic": "graduate_topic", "output": "output"},
     )
-    builder.add_edge("graduate_topic", "output")
+    builder.add_conditional_edges(
+        "graduate_topic",
+        route_from_graduate_topic,
+        {"confirm_graduate": "confirm_graduate", "output": "output"},
+    )
+    builder.add_edge("confirm_graduate", "output")
+
+    # Discuss flow
+    builder.add_conditional_edges(
+        "discuss_parser",
+        route_from_discuss_parser,
+        {"start_discuss": "start_discuss", "output": "output"},
+    )
+    builder.add_edge("start_discuss", "output")
+
+    # Discuss-ready activation flow (invoked from assess_discuss_readiness service)
+    builder.add_edge("notify_discuss_ready", "await_discuss_activation")
+    builder.add_edge("await_discuss_activation", "output")
 
     # Shared terminal
     builder.add_edge("book_events", "output")

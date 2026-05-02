@@ -47,6 +47,50 @@ def graduate_topic_to_active(topic_id: int) -> bool:
     return cursor.rowcount > 0
 
 
+def activate_topic_from_discuss(topic_id: int) -> bool:
+    """Set a topic active after a successful discuss-readiness assessment.
+
+    Like ``graduate_topic_to_active`` but sets ``next_review`` to *today*
+    so that the first SM-2 mock session is scheduled immediately rather than
+    deferred to tomorrow.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        ``True`` when a row was updated, else ``False``.
+    """
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """UPDATE topics
+               SET status = 'active',
+                   repetitions = 0,
+                   easiness_factor = 2.5,
+                   next_review = date('now'),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (topic_id,),
+        )
+    return cursor.rowcount > 0
+
+
+def get_topic_status_by_id(topic_id: int) -> str | None:
+    """Return the current status of a topic.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        Status string (e.g. ``'in_progress'``, ``'discussing'``, ``'active'``),
+        or ``None`` when the row does not exist.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM topics WHERE id = ?", (topic_id,)
+        ).fetchone()
+    return row["status"] if row else None
+
+
 def get_in_progress_topics() -> list[dict[str, int | str]]:
     """Return in-progress topics ordered by tier and name.
 
