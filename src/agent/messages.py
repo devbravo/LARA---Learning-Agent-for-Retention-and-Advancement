@@ -5,7 +5,16 @@ Nodes call these functions to get (text, buttons) tuples and
 then pass the results straight to the telegram client.
 
 No external I/O happens in this module — every function is pure.
+
+HTML-escaping convention
+------------------------
+``telegram_client`` always sends with ``parse_mode="HTML"``.  Any value
+interpolated into a message string that originates from user input or DB
+free-text (topic names, weak-area labels, etc.) **must** be wrapped with
+``html.escape()`` to prevent broken or injected markup.
 """
+
+import html as _html
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -212,4 +221,73 @@ def topic_graduated(topic_name: str) -> str:
     return (
         f"✅ {topic_name} graduated to active. "
         "First SM-2 review scheduled for tomorrow."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Discuss-mode readiness  (assess_discuss_readiness)
+# ---------------------------------------------------------------------------
+
+def discuss_ready(topic_name: str, is_reentry: bool = False) -> str:
+    """Readiness notification after a strong discuss session.
+
+    Args:
+        topic_name: Display name of the topic.
+        is_reentry: ``True`` when the topic already has prior mock history
+            (i.e. it is returning through discuss rather than graduating for
+            the first time).  Re-entry topics are already active in SM-2 so
+            the activation step does not apply.
+
+    Returns:
+        Plain-text notification string (no buttons — the activation flow is
+        handled separately via ``/activate``).
+    """
+    name = _html.escape(topic_name)
+    if is_reentry:
+        return (
+            f"✅ {name} looks strong again — no repeated gaps and quality is solid. "
+            "Ready for a mock session whenever you are."
+        )
+    return (
+        f"✅ {name} looks ready for its first mock — no repeated gaps and quality is strong. "
+        "Use /activate when you're ready to move it into SM-2."
+    )
+
+
+def discuss_not_ready(topic_name: str, weak_areas: list[str]) -> str:
+    """Message when quality or gaps are insufficient for a mock session."""
+    if weak_areas:
+        bullet_list = "\n".join(f"  • {_html.escape(area)}" for area in weak_areas)
+        return (
+            f"📖 {_html.escape(topic_name)} isn't ready yet. Focus on these areas before the next discuss:\n"
+            f"{bullet_list}"
+        )
+    return f"📖 {_html.escape(topic_name)} isn't ready yet. Keep discussing before moving to mock."
+
+
+def discuss_go_back_to_study(
+    topic_name: str,
+    repeated_weak_areas: list[str],
+    was_moved: bool = True,
+) -> str:
+    """Message when repeated gaps indicate the topic needs more study.
+
+    Args:
+        topic_name: Display name of the topic.
+        repeated_weak_areas: Dimension names that recurred across sessions.
+        was_moved: ``True`` when the topic status was successfully changed to
+            ``in_progress``.  ``False`` when the topic was already ``active``
+            (or ``in_progress``) so no status change occurred — the message
+            is adjusted to avoid falsely claiming the topic was moved.
+    """
+    name = _html.escape(topic_name)
+    bullet_list = "\n".join(f"  • {_html.escape(area)}" for area in repeated_weak_areas)
+    if was_moved:
+        return (
+            f"🔄 {name} moved back to In Progress — the following gaps are recurring "
+            f"and need more study before discussing again:\n{bullet_list}"
+        )
+    return (
+        f"⚠️ {name} has recurring gaps that need more study before the next discuss session:\n"
+        f"{bullet_list}"
     )
