@@ -304,13 +304,15 @@ def get_mock_sessions(topic_id: int, limit: int = 5) -> list[dict]:
 
     Returns:
         List of dicts with keys ``quality`` (COALESCE of teacher/student/legacy
-        quality), ``teacher_weak_areas``, and ``studied_at``, ordered by
+        quality scores), ``weak_areas`` (COALESCE of ``teacher_weak_areas`` and
+        the legacy ``weak_areas`` column), and ``studied_at``, ordered by
         ``studied_at`` DESC.
     """
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT COALESCE(teacher_quality, student_quality, quality_score) AS quality,
-                      teacher_weak_areas, studied_at
+                      COALESCE(teacher_weak_areas, weak_areas) AS weak_areas,
+                      studied_at
                FROM sessions
                WHERE topic_id = ? AND (mode = 'mock' OR mode IS NULL)
                ORDER BY studied_at DESC

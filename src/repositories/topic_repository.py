@@ -348,17 +348,27 @@ def set_topic_discussing(topic_id: int) -> None:
         )
 
 
-def set_topic_back_to_in_progress(topic_id: int) -> None:
+def set_topic_back_to_in_progress(topic_id: int) -> bool:
     """Return a topic from 'discussing' back to 'in_progress'.
+
+    Only acts when the topic's current status is 'discussing', preventing
+    accidental overwrites of active or in_progress topics.
 
     Args:
         topic_id: Topic primary key.
+
+    Returns:
+        ``True`` when a row was updated, ``False`` when no discussing topic
+        with that id exists.
     """
     with get_connection() as conn:
-        conn.execute(
-            "UPDATE topics SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        cursor = conn.execute(
+            """UPDATE topics
+               SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND status = 'discussing'""",
             (topic_id,),
         )
+    return cursor.rowcount > 0
 
 
 def get_in_progress_and_active_topics() -> list[dict[str, Any]]:

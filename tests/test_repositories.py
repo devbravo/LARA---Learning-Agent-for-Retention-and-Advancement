@@ -484,8 +484,30 @@ class DiscussingTopicRepositoryTests(RepositoryDbTestCase):
             conn.close()
         self.assertEqual(row["status"], "in_progress")
 
-    def test_set_topic_back_to_in_progress_nonexistent_id_is_noop(self) -> None:
-        topic_repository.set_topic_back_to_in_progress(99999)
+    def test_set_topic_back_to_in_progress_returns_true_on_success(self) -> None:
+        tid = self._insert_topic(name="T2", tier=1, status="discussing")
+        self.assertTrue(topic_repository.set_topic_back_to_in_progress(tid))
+
+    def test_set_topic_back_to_in_progress_returns_false_for_nonexistent_id(self) -> None:
+        self.assertFalse(topic_repository.set_topic_back_to_in_progress(99999))
+
+    def test_set_topic_back_to_in_progress_does_not_overwrite_active_status(self) -> None:
+        tid = self._insert_topic(name="ActiveTopic", tier=1, status="active")
+        result = topic_repository.set_topic_back_to_in_progress(tid)
+        self.assertFalse(result)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT status FROM topics WHERE id = ?", (tid,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["status"], "active")
+
+    def test_set_topic_back_to_in_progress_does_not_overwrite_in_progress_status(self) -> None:
+        tid = self._insert_topic(name="IPTopic", tier=1, status="in_progress")
+        result = topic_repository.set_topic_back_to_in_progress(tid)
+        self.assertFalse(result)
 
     def test_set_then_restore_roundtrip(self) -> None:
         tid = self._insert_topic(name="RT", tier=1, status="in_progress")
@@ -554,17 +576,18 @@ class DiscussSessionRepositoryTests(RepositoryDbTestCase):
     def _insert_session_raw(self, topic_id: int, **kwargs) -> int:
         """Bypass the repository and insert a session row directly."""
         fields = {"topic_id": topic_id, "mode": None, "teacher_quality": None,
-                  "teacher_weak_areas": None, "student_quality": None,
-                  "quality_score": None, "studied_at": "2025-01-01 10:00:00"}
+                  "teacher_weak_areas": None, "weak_areas": None,
+                  "student_quality": None, "quality_score": None,
+                  "studied_at": "2025-01-01 10:00:00"}
         fields.update(kwargs)
         conn = sqlite3.connect(self.db_path)
         try:
             cursor = conn.execute(
                 """INSERT INTO sessions
                        (topic_id, mode, teacher_quality, teacher_weak_areas,
-                        student_quality, quality_score, studied_at)
+                        weak_areas, student_quality, quality_score, studied_at)
                    VALUES (:topic_id, :mode, :teacher_quality, :teacher_weak_areas,
-                           :student_quality, :quality_score, :studied_at)""",
+                           :weak_areas, :student_quality, :quality_score, :studied_at)""",
                 fields,
             )
             conn.commit()
@@ -701,9 +724,27 @@ class DiscussSessionRepositoryTests(RepositoryDbTestCase):
 
     def test_get_mock_sessions_includes_null_mode_legacy_rows(self) -> None:
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode=None, student_quality=3)
+        self._insert_session_raw(tid, mode=None, student_quality=3,
+                                  weak_areas="timing, confidence")
         rows = session_repository.get_mock_sessions(tid)
         self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["weak_areas"], "timing, confidence")
+
+    def test_get_mock_sessions_legacy_weak_areas_not_lost_when_no_teacher_weak_areas(self) -> None:
+        """Legacy weak_areas column must surface when teacher_weak_areas is NULL."""
+        tid = self._insert_topic(name="T2")
+        self._insert_session_raw(tid, mode=None, student_quality=3,
+                                  weak_areas="legacy gap", teacher_weak_areas=None)
+        rows = session_repository.get_mock_sessions(tid)
+        self.assertEqual(rows[0]["weak_areas"], "legacy gap")
+
+    def test_get_mock_sessions_teacher_weak_areas_takes_priority_over_legacy(self) -> None:
+        """teacher_weak_areas wins when both columns are populated."""
+        tid = self._insert_topic(name="T3")
+        self._insert_session_raw(tid, mode="mock", student_quality=3,
+                                  weak_areas="old", teacher_weak_areas='{"new": "data"}')
+        rows = session_repository.get_mock_sessions(tid)
+        self.assertEqual(rows[0]["weak_areas"], '{"new": "data"}')
 
     def test_get_mock_sessions_coalesces_teacher_quality_first(self) -> None:
         tid = self._insert_topic(name="T")
