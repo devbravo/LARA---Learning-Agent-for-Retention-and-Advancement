@@ -46,13 +46,11 @@ async def main() -> None:
         log_level="info",
         loop="asyncio",
         forwarded_allow_ips="*",
-        # SSE connections (used by the MCP /mcp mount) are long-lived and never
-        # close naturally. Without a timeout uvicorn waits indefinitely, then the
-        # forced task-cancellation causes Starlette's error middleware to try a
-        # second http.response.start on an already-started SSE stream — producing
-        # a noisy RuntimeError on every Ctrl-C. Setting timeout to 0 tells uvicorn
-        # to close all in-flight connections immediately on shutdown, skipping the
-        # drain phase that triggers the double-response conflict.
+        # Close all in-flight connections immediately on shutdown.
+        # MCP now uses stateless Streamable HTTP (no persistent SSE streams),
+        # so drain-phase conflicts are no longer a concern, but keeping this at
+        # 0 ensures clean shutdown without waiting on any stray long-running
+        # webhook or scheduler requests.
         timeout_graceful_shutdown=0,
     )
     server = uvicorn.Server(config)

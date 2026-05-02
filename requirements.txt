@@ -6,7 +6,7 @@ google-auth-oauthlib
 langchain-anthropic
 langgraph
 langgraph-checkpoint-sqlite
-mcp[cli]
+mcp[cli]>=1.27.0
 python-dotenv
 python-telegram-bot
 pytz

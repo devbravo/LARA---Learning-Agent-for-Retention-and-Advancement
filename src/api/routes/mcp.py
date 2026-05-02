@@ -4,7 +4,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from src.repositories import session_repository, topic_repository
 
-mcp = FastMCP("LARA")
+mcp = FastMCP("LARA", stateless_http=True)
 
 
 @mcp.tool(
@@ -49,4 +49,4 @@ def log_session(
     return {"success": True, "calibration_gap": calibration_gap}
 
 
-mcp_app = mcp.sse_app()
+mcp_app = mcp.streamable_http_app()
