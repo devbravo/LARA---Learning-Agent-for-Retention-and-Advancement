@@ -397,6 +397,393 @@ class Sm2RepositoryTests(RepositoryDbTestCase):
         self.assertIsNone(sm2_repository.fetch_sm2_state(99999))
 
 
+class DiscussingTopicRepositoryTests(RepositoryDbTestCase):
+    """Tests for the discussing-status topic repository functions."""
+
+    # ------------------------------------------------------------------
+    # get_discussing_topics
+    # ------------------------------------------------------------------
+
+    def test_get_discussing_topics_returns_discussing_only(self) -> None:
+        self._insert_topic(name="D1", tier=1, status="discussing")
+        self._insert_topic(name="D2", tier=2, status="discussing")
+        self._insert_topic(name="Active", tier=1, status="active")
+        self._insert_topic(name="InProgress", tier=1, status="in_progress")
+
+        result = topic_repository.get_discussing_topics()
+        names = [t["name"] for t in result]
+        self.assertIn("D1", names)
+        self.assertIn("D2", names)
+        self.assertNotIn("Active", names)
+        self.assertNotIn("InProgress", names)
+
+    def test_get_discussing_topics_empty_when_none(self) -> None:
+        self._insert_topic(name="Active", tier=1, status="active")
+        self.assertEqual(topic_repository.get_discussing_topics(), [])
+
+    def test_get_discussing_topics_ordered_by_tier_then_name(self) -> None:
+        self._insert_topic(name="Z", tier=1, status="discussing")
+        self._insert_topic(name="A", tier=2, status="discussing")
+        self._insert_topic(name="M", tier=1, status="discussing")
+
+        names = [t["name"] for t in topic_repository.get_discussing_topics()]
+        self.assertEqual(names, ["M", "Z", "A"])
+
+    def test_get_discussing_topics_returns_id_and_name(self) -> None:
+        tid = self._insert_topic(name="D", tier=1, status="discussing")
+        result = topic_repository.get_discussing_topics()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["id"], tid)
+        self.assertEqual(result[0]["name"], "D")
+
+    # ------------------------------------------------------------------
+    # set_topic_discussing
+    # ------------------------------------------------------------------
+
+    def test_set_topic_discussing_changes_status(self) -> None:
+        tid = self._insert_topic(name="T", tier=1, status="in_progress")
+        topic_repository.set_topic_discussing(tid)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT status FROM topics WHERE id = ?", (tid,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["status"], "discussing")
+
+    def test_set_topic_discussing_nonexistent_id_is_noop(self) -> None:
+        # Should not raise even when the id doesn't exist
+        topic_repository.set_topic_discussing(99999)
+
+    def test_set_topic_discussing_from_active_status(self) -> None:
+        tid = self._insert_topic(name="ActiveTopic", tier=1, status="active")
+        topic_repository.set_topic_discussing(tid)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT status FROM topics WHERE id = ?", (tid,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["status"], "discussing")
+
+    # ------------------------------------------------------------------
+    # set_topic_back_to_in_progress
+    # ------------------------------------------------------------------
+
+    def test_set_topic_back_to_in_progress_changes_status(self) -> None:
+        tid = self._insert_topic(name="T", tier=1, status="discussing")
+        topic_repository.set_topic_back_to_in_progress(tid)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT status FROM topics WHERE id = ?", (tid,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["status"], "in_progress")
+
+    def test_set_topic_back_to_in_progress_nonexistent_id_is_noop(self) -> None:
+        topic_repository.set_topic_back_to_in_progress(99999)
+
+    def test_set_then_restore_roundtrip(self) -> None:
+        tid = self._insert_topic(name="RT", tier=1, status="in_progress")
+        topic_repository.set_topic_discussing(tid)
+        topic_repository.set_topic_back_to_in_progress(tid)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT status FROM topics WHERE id = ?", (tid,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["status"], "in_progress")
+
+    # ------------------------------------------------------------------
+    # get_in_progress_and_active_topics
+    # ------------------------------------------------------------------
+
+    def test_get_in_progress_and_active_topics_includes_both_statuses(self) -> None:
+        self._insert_topic(name="Active", tier=1, status="active")
+        self._insert_topic(name="InProgress", tier=1, status="in_progress")
+        self._insert_topic(name="Inactive", tier=1, status="inactive")
+        self._insert_topic(name="Discussing", tier=1, status="discussing")
+
+        names = [t["name"] for t in topic_repository.get_in_progress_and_active_topics()]
+        self.assertIn("Active", names)
+        self.assertIn("InProgress", names)
+        self.assertNotIn("Inactive", names)
+        self.assertNotIn("Discussing", names)
+
+    def test_get_in_progress_and_active_topics_empty_when_none(self) -> None:
+        self._insert_topic(name="Inactive", tier=1, status="inactive")
+        self.assertEqual(topic_repository.get_in_progress_and_active_topics(), [])
+
+    def test_get_in_progress_and_active_topics_ordered_by_tier_then_name(self) -> None:
+        self._insert_topic(name="Z", tier=1, status="active")
+        self._insert_topic(name="A", tier=2, status="in_progress")
+        self._insert_topic(name="M", tier=1, status="in_progress")
+
+        names = [t["name"] for t in topic_repository.get_in_progress_and_active_topics()]
+        self.assertEqual(names, ["M", "Z", "A"])
+
+    # ------------------------------------------------------------------
+    # fetch_in_progress_topics_with_weak_areas (updated to include discussing)
+    # ------------------------------------------------------------------
+
+    def test_fetch_in_progress_with_weak_areas_includes_discussing(self) -> None:
+        self._insert_topic(name="IP", tier=1, status="in_progress", weak_areas="area1")
+        self._insert_topic(name="DIS", tier=1, status="discussing", weak_areas="area2")
+        self._insert_topic(name="ACT", tier=1, status="active", weak_areas="area3")
+
+        names = [t["name"] for t in topic_repository.fetch_in_progress_topics_with_weak_areas()]
+        self.assertIn("IP", names)
+        self.assertIn("DIS", names)
+        self.assertNotIn("ACT", names)
+
+    def test_fetch_in_progress_with_weak_areas_excludes_inactive(self) -> None:
+        self._insert_topic(name="INACT", tier=1, status="inactive", weak_areas="area")
+        names = [t["name"] for t in topic_repository.fetch_in_progress_topics_with_weak_areas()]
+        self.assertNotIn("INACT", names)
+
+
+class DiscussSessionRepositoryTests(RepositoryDbTestCase):
+    """Tests for discuss-mode session repository functions."""
+
+    def _insert_session_raw(self, topic_id: int, **kwargs) -> int:
+        """Bypass the repository and insert a session row directly."""
+        fields = {"topic_id": topic_id, "mode": None, "teacher_quality": None,
+                  "teacher_weak_areas": None, "student_quality": None,
+                  "quality_score": None, "studied_at": "2025-01-01 10:00:00"}
+        fields.update(kwargs)
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                """INSERT INTO sessions
+                       (topic_id, mode, teacher_quality, teacher_weak_areas,
+                        student_quality, quality_score, studied_at)
+                   VALUES (:topic_id, :mode, :teacher_quality, :teacher_weak_areas,
+                           :student_quality, :quality_score, :studied_at)""",
+                fields,
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
+    # insert_discuss_session
+    # ------------------------------------------------------------------
+
+    def test_insert_discuss_session_stores_all_fields(self) -> None:
+        tid = self._insert_topic(name="T")
+        session_repository.insert_discuss_session(tid, 3, '{"gap": "weak"}')
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT * FROM sessions WHERE topic_id = ?", (tid,)).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["mode"], "discuss")
+        self.assertEqual(row["teacher_quality"], 3)
+        self.assertEqual(row["teacher_weak_areas"], '{"gap": "weak"}')
+        self.assertIsNotNone(row["studied_at"])
+
+    def test_insert_discuss_session_does_not_set_student_quality(self) -> None:
+        tid = self._insert_topic(name="T")
+        session_repository.insert_discuss_session(tid, 5, "{}")
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT student_quality FROM sessions WHERE topic_id = ?", (tid,)).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNone(row["student_quality"])
+
+    # ------------------------------------------------------------------
+    # get_discuss_session_count
+    # ------------------------------------------------------------------
+
+    def test_get_discuss_session_count_returns_zero_when_no_sessions(self) -> None:
+        tid = self._insert_topic(name="T")
+        self.assertEqual(session_repository.get_discuss_session_count(tid), 0)
+
+    def test_get_discuss_session_count_returns_zero_for_nonexistent_topic(self) -> None:
+        self.assertEqual(session_repository.get_discuss_session_count(99999), 0)
+
+    def test_get_discuss_session_count_counts_only_discuss_mode(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="discuss")
+        self._insert_session_raw(tid, mode="discuss")
+        self._insert_session_raw(tid, mode="mock")
+        self._insert_session_raw(tid, mode=None)
+
+        self.assertEqual(session_repository.get_discuss_session_count(tid), 2)
+
+    def test_get_discuss_session_count_correct_across_topics(self) -> None:
+        t1 = self._insert_topic(name="T1")
+        t2 = self._insert_topic(name="T2")
+        self._insert_session_raw(t1, mode="discuss")
+        self._insert_session_raw(t2, mode="discuss")
+        self._insert_session_raw(t2, mode="discuss")
+
+        self.assertEqual(session_repository.get_discuss_session_count(t1), 1)
+        self.assertEqual(session_repository.get_discuss_session_count(t2), 2)
+
+    # ------------------------------------------------------------------
+    # get_discuss_sessions
+    # ------------------------------------------------------------------
+
+    def test_get_discuss_sessions_returns_empty_when_none(self) -> None:
+        tid = self._insert_topic(name="T")
+        self.assertEqual(session_repository.get_discuss_sessions(tid), [])
+
+    def test_get_discuss_sessions_excludes_mock_and_null_mode(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="mock", teacher_quality=5)
+        self._insert_session_raw(tid, mode=None, teacher_quality=3)
+
+        self.assertEqual(session_repository.get_discuss_sessions(tid), [])
+
+    def test_get_discuss_sessions_returns_correct_fields(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="discuss", teacher_quality=3,
+                                  teacher_weak_areas='{"x": "y"}', studied_at="2025-06-01 10:00:00")
+
+        rows = session_repository.get_discuss_sessions(tid)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["teacher_quality"], 3)
+        self.assertEqual(rows[0]["teacher_weak_areas"], '{"x": "y"}')
+        self.assertEqual(rows[0]["studied_at"], "2025-06-01 10:00:00")
+
+    def test_get_discuss_sessions_ordered_most_recent_first(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="discuss", teacher_quality=2, studied_at="2025-01-01 10:00:00")
+        self._insert_session_raw(tid, mode="discuss", teacher_quality=5, studied_at="2025-06-01 10:00:00")
+
+        rows = session_repository.get_discuss_sessions(tid)
+        self.assertEqual(rows[0]["teacher_quality"], 5)
+        self.assertEqual(rows[1]["teacher_quality"], 2)
+
+    def test_get_discuss_sessions_respects_limit(self) -> None:
+        tid = self._insert_topic(name="T")
+        for i in range(7):
+            self._insert_session_raw(tid, mode="discuss",
+                                      studied_at=f"2025-0{i % 9 + 1}-01 10:00:00")
+
+        self.assertEqual(len(session_repository.get_discuss_sessions(tid, limit=3)), 3)
+
+    def test_get_discuss_sessions_default_limit_is_five(self) -> None:
+        tid = self._insert_topic(name="T")
+        for i in range(7):
+            self._insert_session_raw(tid, mode="discuss",
+                                      studied_at=f"2025-0{i % 9 + 1}-01 10:00:00")
+
+        self.assertEqual(len(session_repository.get_discuss_sessions(tid)), 5)
+
+    # ------------------------------------------------------------------
+    # get_mock_sessions
+    # ------------------------------------------------------------------
+
+    def test_get_mock_sessions_returns_empty_when_none(self) -> None:
+        tid = self._insert_topic(name="T")
+        self.assertEqual(session_repository.get_mock_sessions(tid), [])
+
+    def test_get_mock_sessions_excludes_discuss_mode(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="discuss", teacher_quality=5)
+        self.assertEqual(session_repository.get_mock_sessions(tid), [])
+
+    def test_get_mock_sessions_includes_null_mode_legacy_rows(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode=None, student_quality=3)
+        rows = session_repository.get_mock_sessions(tid)
+        self.assertEqual(len(rows), 1)
+
+    def test_get_mock_sessions_coalesces_teacher_quality_first(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="mock", teacher_quality=5,
+                                  student_quality=2, quality_score=3)
+        rows = session_repository.get_mock_sessions(tid)
+        self.assertEqual(rows[0]["quality"], 5)
+
+    def test_get_mock_sessions_coalesces_student_quality_when_no_teacher(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="mock", teacher_quality=None,
+                                  student_quality=2, quality_score=3)
+        rows = session_repository.get_mock_sessions(tid)
+        self.assertEqual(rows[0]["quality"], 2)
+
+    def test_get_mock_sessions_coalesces_quality_score_as_last_resort(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="mock", teacher_quality=None,
+                                  student_quality=None, quality_score=3)
+        rows = session_repository.get_mock_sessions(tid)
+        self.assertEqual(rows[0]["quality"], 3)
+
+    def test_get_mock_sessions_quality_is_none_when_all_null(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="mock", teacher_quality=None,
+                                  student_quality=None, quality_score=None)
+        rows = session_repository.get_mock_sessions(tid)
+        self.assertIsNone(rows[0]["quality"])
+
+    def test_get_mock_sessions_ordered_most_recent_first(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="mock", teacher_quality=2, studied_at="2025-01-01 10:00:00")
+        self._insert_session_raw(tid, mode="mock", teacher_quality=5, studied_at="2025-06-01 10:00:00")
+
+        rows = session_repository.get_mock_sessions(tid)
+        # quality is the COALESCE alias — most recent (teacher_quality=5) should be first
+        self.assertEqual(rows[0]["quality"], 5)
+        self.assertEqual(rows[1]["quality"], 2)
+
+    def test_get_mock_sessions_respects_limit(self) -> None:
+        tid = self._insert_topic(name="T")
+        for i in range(7):
+            self._insert_session_raw(tid, mode="mock",
+                                      studied_at=f"2025-0{i % 9 + 1}-01 10:00:00")
+        self.assertEqual(len(session_repository.get_mock_sessions(tid, limit=2)), 2)
+
+    # ------------------------------------------------------------------
+    # has_mock_history
+    # ------------------------------------------------------------------
+
+    def test_has_mock_history_false_when_no_sessions(self) -> None:
+        tid = self._insert_topic(name="T")
+        self.assertFalse(session_repository.has_mock_history(tid))
+
+    def test_has_mock_history_false_for_nonexistent_topic(self) -> None:
+        self.assertFalse(session_repository.has_mock_history(99999))
+
+    def test_has_mock_history_true_for_mock_mode(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="mock")
+        self.assertTrue(session_repository.has_mock_history(tid))
+
+    def test_has_mock_history_true_for_null_mode_legacy_row(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode=None)
+        self.assertTrue(session_repository.has_mock_history(tid))
+
+    def test_has_mock_history_false_when_only_discuss_sessions(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="discuss")
+        self._insert_session_raw(tid, mode="discuss")
+        self.assertFalse(session_repository.has_mock_history(tid))
+
+    def test_has_mock_history_true_when_mixed_modes(self) -> None:
+        tid = self._insert_topic(name="T")
+        self._insert_session_raw(tid, mode="discuss")
+        self._insert_session_raw(tid, mode="mock")
+        self.assertTrue(session_repository.has_mock_history(tid))
+
+
 if __name__ == "__main__":
     unittest.main()
 

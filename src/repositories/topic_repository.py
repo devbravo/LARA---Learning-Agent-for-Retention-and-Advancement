@@ -210,7 +210,7 @@ def fetch_due_today_topics(today_str: str) -> list[dict[str, Any]]:
 
 
 def fetch_in_progress_topics_with_weak_areas() -> list[dict[str, Any]]:
-    """Fetch in-progress topics with their weak areas.
+    """Fetch in-progress and discussing topics with their weak areas.
 
     Returns:
         List of dicts with ``name`` and ``weak_areas``, ordered by tier
@@ -219,7 +219,7 @@ def fetch_in_progress_topics_with_weak_areas() -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT name, weak_areas FROM topics
-               WHERE status = 'in_progress'
+               WHERE status IN ('in_progress', 'discussing')
                ORDER BY tier ASC, name ASC""",
         ).fetchall()
     return [{"name": r["name"], "weak_areas": r["weak_areas"]} for r in rows]
@@ -320,4 +320,58 @@ def set_topic_in_progress(topic_name: str) -> bool:
             (topic_name,),
         )
     return cursor.rowcount > 0
+
+
+def get_discussing_topics() -> list[dict[str, Any]]:
+    """Return all topics where status = 'discussing', ordered by tier and name.
+
+    Returns:
+        List of dicts with keys ``id`` and ``name``.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name FROM topics WHERE status = 'discussing' ORDER BY tier ASC, name ASC"
+        ).fetchall()
+    return [{"id": row["id"], "name": row["name"]} for row in rows]
+
+
+def set_topic_discussing(topic_id: int) -> None:
+    """Set a topic's status to 'discussing'.
+
+    Args:
+        topic_id: Topic primary key.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE topics SET status = 'discussing', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (topic_id,),
+        )
+
+
+def set_topic_back_to_in_progress(topic_id: int) -> None:
+    """Return a topic from 'discussing' back to 'in_progress'.
+
+    Args:
+        topic_id: Topic primary key.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE topics SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (topic_id,),
+        )
+
+
+def get_in_progress_and_active_topics() -> list[dict[str, Any]]:
+    """Return topics eligible as discuss targets (status 'in_progress' or 'active').
+
+    Returns:
+        List of dicts with keys ``id`` and ``name``, ordered by tier then name.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT id, name FROM topics
+               WHERE status IN ('in_progress', 'active')
+               ORDER BY tier ASC, name ASC""",
+        ).fetchall()
+    return [{"id": row["id"], "name": row["name"]} for row in rows]
 
