@@ -1215,6 +1215,104 @@ def start_discuss(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
+# Node: notify_discuss_ready
+# ---------------------------------------------------------------------------
+
+def notify_discuss_ready(state: AgentState) -> AgentState:
+    """Send the discuss-readiness activation buttons.
+
+    Reads ``current_topic_name`` from state (stored by
+    ``assess_discuss_readiness`` when it invokes the graph).  The interrupt
+    lives in ``await_discuss_activation`` — this node is side-effect only.
+
+    Args:
+        state: Current agent state.
+
+    Returns:
+        Partial state update with ``pending_message_id`` set and
+        ``messages`` cleared.
+    """
+    try:
+        topic_name = state.get("current_topic_name") or "topic"
+        msg_id = _telegram.send_buttons(
+            messages.discuss_ready_prompt(topic_name),
+            messages.DISCUSS_ACTIVATION_BUTTONS,
+        )
+        return {"pending_message_id": msg_id, "messages": []}
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("notify_discuss_ready failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Could not send activation prompt: {e}"]}
+
+
+# ---------------------------------------------------------------------------
+# Node: await_discuss_activation
+# ---------------------------------------------------------------------------
+
+def await_discuss_activation(state: AgentState) -> AgentState:
+    """Wait for the user to confirm or defer discuss-readiness activation.
+
+    ``interrupt()`` is the very first statement so re-runs on resume are
+    side-effect-free.
+
+    Handles two resume values:
+    - ``"Yes, activate"`` — activates the topic via
+      ``topic_repository.activate_topic_from_discuss`` with
+      ``next_review = today`` so SM-2 schedules the first mock immediately.
+    - Anything else (``"Not yet"``) — sends a no-rush message without
+      changing the topic status.
+
+    Args:
+        state: Current agent state (must contain ``current_topic_id`` and
+            ``current_topic_name``).
+
+    Returns:
+        Partial state update with ``messages`` set and
+        ``pending_message_id`` cleared.
+    """
+    try:
+        chat_id = state.get("chat_id")
+        msg_id = state.get("pending_message_id")
+        topic_id = state.get("current_topic_id")
+        topic_name = state.get("current_topic_name") or "topic"
+
+        # Interrupt at start — no side effects above this line
+        payload = interrupt("waiting for activation confirmation")
+
+        if msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        if (payload or "").strip().lower() == "yes, activate":
+            if topic_id is None:
+                return {
+                    "messages": ["⚠️ No topic selected for activation."],
+                    "pending_message_id": None,
+                }
+            topic_repository.activate_topic_from_discuss(topic_id)
+            return {
+                "messages": [messages.discuss_activated(topic_name)],
+                "pending_message_id": None,
+            }
+
+        # "Not yet" or any other payload
+        return {
+            "messages": [messages.discuss_not_yet()],
+            "pending_message_id": None,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("await_discuss_activation failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Activation failed: {e}"], "pending_message_id": None}
+
+
+# ---------------------------------------------------------------------------
 # Node: activate_topic
 # ---------------------------------------------------------------------------
 
@@ -1244,7 +1342,18 @@ def activate_topic(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def graduate_topic(state: AgentState) -> AgentState:
-    """interrupt() is first — no duplicate topic list on resume."""
+    """interrupt() is first — no duplicate topic list on resume.
+
+    Applies two pre-activation guards before promoting the topic:
+
+    - **Hard block** (``discussing`` status): the topic is mid-discuss; the
+      user must wait for Claude's readiness assessment.
+    - **Soft guard** (``in_progress``, zero discuss sessions): warns the user
+      they haven't discussed this topic yet and offers ["Yes, activate",
+      "Do discuss first"]; routes to ``confirm_graduate`` for the response.
+
+    All other cases proceed with normal activation.
+    """
     try:
         chat_id = state.get("chat_id")
         topic_msg_id = state.get("pending_message_id")
@@ -1267,6 +1376,34 @@ def graduate_topic(state: AgentState) -> AgentState:
         except ValueError:
             return {"messages": ["⚠️ Invalid topic id."], "pending_message_id": None}
 
+        topic_name = topic_repository.get_topic_name_by_id(topic_id)
+        if topic_name is None:
+            return {"messages": ["⚠️ Topic not found."], "pending_message_id": None}
+
+        # --- Pre-activation guards ---
+        status = topic_repository.get_topic_status_by_id(topic_id)
+
+        if status == "discussing":
+            # Hard block: activating mid-discuss would break the readiness flow.
+            return {
+                "messages": [messages.activate_discussing_block(topic_name)],
+                "pending_message_id": None,
+            }
+
+        if status == "in_progress":
+            discuss_count = session_repository.get_discuss_session_count(topic_id)
+            if discuss_count == 0:
+                # Soft guard: topic has never been discussed; ask for confirmation.
+                prompt, buttons = messages.activate_no_discuss_warning(topic_name)
+                guard_msg_id = _telegram.send_buttons(prompt, buttons)
+                return {
+                    "current_topic_id": topic_id,
+                    "current_topic_name": topic_name,
+                    "pending_message_id": guard_msg_id,
+                    "messages": [],
+                }
+
+        # Normal activation (in_progress with prior discuss sessions, or any other status).
         topic_name = topic_service.graduate_topic(topic_id)
         return {
             "messages": [messages.topic_graduated(topic_name)],
@@ -1278,3 +1415,71 @@ def graduate_topic(state: AgentState) -> AgentState:
             raise
         logger.error("graduate_topic failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Failed to graduate topic: {e}"], "pending_message_id": None}
+
+
+# ---------------------------------------------------------------------------
+# Node: confirm_graduate
+# ---------------------------------------------------------------------------
+
+def confirm_graduate(state: AgentState) -> AgentState:
+    """Handle the soft-guard response after graduate_topic sends a warning.
+
+    ``interrupt()`` is the very first statement so re-runs on resume are
+    side-effect-free.
+
+    Handles two resume values:
+    - ``"Yes, activate"`` — proceeds with normal graduation (same as
+      ``/activate`` happy path; ``next_review = tomorrow``).
+    - ``"Do discuss first"`` — sets the topic to ``discussing`` status and
+      sends a discuss session-ready message without activating.
+
+    Args:
+        state: Current agent state (must contain ``current_topic_id`` and
+            ``current_topic_name`` set by ``graduate_topic``).
+
+    Returns:
+        Partial state update with ``messages`` set and
+        ``pending_message_id`` cleared.
+    """
+    try:
+        chat_id = state.get("chat_id")
+        guard_msg_id = state.get("pending_message_id")
+        topic_id = state.get("current_topic_id")
+        topic_name = state.get("current_topic_name") or "topic"
+
+        # Interrupt at start — no side effects above this line
+        payload = interrupt("waiting for activate confirmation")
+
+        if guard_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, guard_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        if topic_id is None:
+            return {"messages": ["⚠️ No topic selected."], "pending_message_id": None}
+
+        if (payload or "").strip().lower() == "yes, activate":
+            topic_name = topic_service.graduate_topic(topic_id)
+            return {
+                "messages": [messages.topic_graduated(topic_name)],
+                "pending_message_id": None,
+            }
+
+        # "Do discuss first" — mirror discuss_parser's single-topic path.
+        topic_repository.set_topic_discussing(topic_id)
+        session_count = session_repository.get_discuss_session_count(topic_id)
+        context = topic_repository.get_topic_context(topic_id)
+        topic_type = context.get("topic_type") or "conceptual"
+        weak_areas = _weak_area_keys(context.get("weak_areas"))
+        msg = messages.discuss_session_ready(topic_name, topic_type, weak_areas, session_count + 1)
+        return {
+            "messages": [msg],
+            "pending_message_id": None,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("confirm_graduate failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Activation failed: {e}"], "pending_message_id": None}

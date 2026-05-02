@@ -178,7 +178,11 @@ def test_graduate_topic_topic_not_found_returns_warning():
 # ---------------------------------------------------------------------------
 
 def test_graduate_topic_success_sets_active_status():
-    """graduate_topic() promotes the topic to 'active' status in the DB."""
+    """graduate_topic() promotes the topic to 'active' status in the DB.
+
+    Prior discuss session (count=1) bypasses the soft guard so the normal
+    activation path is exercised.
+    """
     path = _make_topics_db([
         {"name": "DSA - Linked Lists", "tier": 1, "status": "in_progress"},
     ])
@@ -189,6 +193,7 @@ def test_graduate_topic_success_sets_active_status():
     config = {"configurable": {"thread_id": str(chat_id)}}
 
     with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes.session_repository, "get_discuss_session_count", return_value=1), \
          patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
          patch.object(_nodes._telegram, "send_message"), \
          patch.object(_nodes._telegram, "remove_buttons"):
@@ -199,7 +204,11 @@ def test_graduate_topic_success_sets_active_status():
 
 
 def test_graduate_topic_success_message_mentions_sm2():
-    """Confirmation message tells the user first SM-2 review is scheduled."""
+    """Confirmation message tells the user first SM-2 review is scheduled.
+
+    Prior discuss session (count=1) bypasses the soft guard so the normal
+    activation path is exercised.
+    """
     path = _make_topics_db([
         {"name": "Gen AI - RAG", "tier": 1, "status": "in_progress"},
     ])
@@ -211,6 +220,7 @@ def test_graduate_topic_success_message_mentions_sm2():
 
     mock_send = MagicMock()
     with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes.session_repository, "get_discuss_session_count", return_value=1), \
          patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
          patch.object(_nodes._telegram, "send_message", mock_send), \
          patch.object(_nodes._telegram, "remove_buttons"):
@@ -223,7 +233,11 @@ def test_graduate_topic_success_message_mentions_sm2():
 
 
 def test_graduate_topic_success_sets_next_review_to_tomorrow():
-    """After graduation, next_review is set to a future date."""
+    """After graduation, next_review is set to a future date.
+
+    Prior discuss session (count=1) bypasses the soft guard so the normal
+    activation path is exercised.
+    """
     from datetime import date
 
     path = _make_topics_db([
@@ -236,6 +250,7 @@ def test_graduate_topic_success_sets_next_review_to_tomorrow():
     config = {"configurable": {"thread_id": str(chat_id)}}
 
     with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes.session_repository, "get_discuss_session_count", return_value=1), \
          patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
          patch.object(_nodes._telegram, "send_message"), \
          patch.object(_nodes._telegram, "remove_buttons"):
@@ -282,7 +297,11 @@ def test_activate_topic_no_in_progress_does_not_send_buttons():
 # ---------------------------------------------------------------------------
 
 def test_activate_topic_valid_payload_stored_in_state():
-    """A 'studied:<id>' resume graduates the topic and sends a confirmation."""
+    """A 'studied:<id>' resume graduates the topic and sends a confirmation.
+
+    Prior discuss session (count=1) bypasses the soft guard so the normal
+    activation path is exercised.
+    """
     path = _make_topics_db([
         {"name": "DSA - Linked Lists", "tier": 1, "status": "in_progress"},
     ])
@@ -294,6 +313,7 @@ def test_activate_topic_valid_payload_stored_in_state():
 
     mock_send = MagicMock()
     with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes.session_repository, "get_discuss_session_count", return_value=1), \
          patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
          patch.object(_nodes._telegram, "send_message", mock_send), \
          patch.object(_nodes._telegram, "remove_buttons"):
@@ -392,3 +412,145 @@ def test_activate_topic_buttons_removed_after_invalid_resume():
         g.invoke(Command(resume="not_a_valid_payload"), config=config)
 
     mock_remove.assert_called_once_with(chat_id, 99)
+
+
+# ---------------------------------------------------------------------------
+# 10. Soft guard — in_progress topic with 0 discuss sessions
+# ---------------------------------------------------------------------------
+
+def test_activate_soft_guard_sends_warning_buttons():
+    """Activating an in_progress topic with no discuss sessions sends a soft-guard
+    warning (not a graduation) and leaves the topic status unchanged.
+
+    This exercises the ``graduate_topic`` → ``confirm_graduate`` path where the
+    topic has never been discussed before.
+    """
+    path = _make_topics_db([
+        {"name": "DSA - Tries", "tier": 1, "status": "in_progress"},
+    ])
+    topic_id = _get_topic_id(path, "DSA - Tries")
+
+    g = _make_test_graph()
+    chat_id = 5020
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
+    mock_send_buttons = MagicMock(return_value=77)
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes.session_repository, "get_discuss_session_count", return_value=0), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_buttons", mock_send_buttons), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=f"studied:{topic_id}"), config=config)
+
+    # Soft-guard buttons must be sent with the expected choices.
+    mock_send_buttons.assert_called_once()
+    _, call_buttons = mock_send_buttons.call_args[0]
+    assert "Yes, activate" in call_buttons
+    assert "Do discuss first" in call_buttons
+
+    # Topic is NOT yet activated — guard is paused waiting for the user.
+    assert _get_topic_status(path, "DSA - Tries") == "in_progress"
+
+
+def test_soft_guard_yes_activate_promotes_topic_to_active():
+    """Tapping 'Yes, activate' after the soft-guard warning activates the topic
+    and sends a graduation confirmation.
+
+    Full 3-step HITL: /activate → topic selection → 'Yes, activate'.
+    """
+    path = _make_topics_db([
+        {"name": "DSA - Heaps", "tier": 1, "status": "in_progress"},
+    ])
+    topic_id = _get_topic_id(path, "DSA - Heaps")
+
+    g = _make_test_graph()
+    chat_id = 5021
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
+    mock_send = MagicMock()
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes.session_repository, "get_discuss_session_count", return_value=0), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_buttons", return_value=77), \
+         patch.object(_nodes._telegram, "send_message", mock_send), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=f"studied:{topic_id}"), config=config)
+        g.invoke(Command(resume="Yes, activate"), config=config)
+
+    assert _get_topic_status(path, "DSA - Heaps") == "active"
+    mock_send.assert_called_once()
+    assert "✅" in mock_send.call_args[0][0]
+
+
+def test_soft_guard_do_discuss_first_sets_topic_to_discussing():
+    """Tapping 'Do discuss first' sets the topic to 'discussing' and sends a
+    discuss-session-ready notification without activating the topic.
+
+    Full 3-step HITL: /activate → topic selection → 'Do discuss first'.
+    """
+    path = _make_topics_db([
+        {"name": "DSA - Graphs", "tier": 1, "status": "in_progress"},
+    ])
+    topic_id = _get_topic_id(path, "DSA - Graphs")
+
+    g = _make_test_graph()
+    chat_id = 5022
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
+    mock_send = MagicMock()
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes.session_repository, "get_discuss_session_count", return_value=0), \
+         patch.object(_nodes.topic_repository, "get_topic_context",
+                      return_value={"topic_type": "dsa", "weak_areas": None}), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_buttons", return_value=77), \
+         patch.object(_nodes._telegram, "send_message", mock_send), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=f"studied:{topic_id}"), config=config)
+        g.invoke(Command(resume="Do discuss first"), config=config)
+
+    assert _get_topic_status(path, "DSA - Graphs") == "discussing"
+    mock_send.assert_called_once()
+    msg = mock_send.call_args[0][0]
+    assert "discuss" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# 11. Hard block — discussing topic cannot be activated
+# ---------------------------------------------------------------------------
+
+def test_activate_discussing_block_sends_hard_block_message():
+    """Trying to activate a topic that is in 'discussing' status sends a hard-block
+    message and leaves the topic status unchanged.
+
+    The discussing topic is injected into the picker mock so the user can
+    'select' it; the hard block fires inside ``graduate_topic``.
+    """
+    path = _make_topics_db([
+        {"name": "DSA - Trees", "tier": 1, "status": "discussing"},
+    ])
+    topic_id = _get_topic_id(path, "DSA - Trees")
+
+    g = _make_test_graph()
+    chat_id = 5023
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
+    mock_send = MagicMock()
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes.topic_service, "get_in_progress_topics",
+                      return_value=[{"id": topic_id, "name": "DSA - Trees"}]), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_message", mock_send), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=f"studied:{topic_id}"), config=config)
+
+    mock_send.assert_called_once()
+    msg = mock_send.call_args[0][0]
+    assert "🚫" in msg or "discuss mode" in msg.lower()
+
+    # Status unchanged — hard block does not modify the topic.
+    assert _get_topic_status(path, "DSA - Trees") == "discussing"

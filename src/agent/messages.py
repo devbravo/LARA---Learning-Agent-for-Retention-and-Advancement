@@ -268,6 +268,98 @@ def discuss_not_ready(topic_name: str, weak_areas: list[str]) -> str:
     return f"📖 {_html.escape(topic_name)} isn't ready yet. Keep discussing before moving to mock."
 
 
+# ---------------------------------------------------------------------------
+# Discuss-mode activation prompt  (notify_discuss_ready)
+# ---------------------------------------------------------------------------
+
+#: Button labels for the discuss-readiness activation prompt.
+DISCUSS_ACTIVATION_BUTTONS: ButtonList = ["Yes, activate", "Not yet"]
+
+
+def discuss_ready_prompt(topic_name: str) -> str:
+    """Prompt text sent with activation buttons when a topic passes readiness.
+
+    Used by the ``notify_discuss_ready`` node.  Deliberately separate from
+    ``discuss_ready`` so the reentry plain-message path is unchanged.
+
+    Args:
+        topic_name: Display name of the topic.
+
+    Returns:
+        Plain-text prompt string with HTML formatting.
+    """
+    name = _html.escape(topic_name)
+    return (
+        f"✅ <b>{name}</b> looks ready for its first mock — no repeated gaps "
+        "and quality is strong.\nActivate it for SM-2 review?"
+    )
+
+
+def discuss_activated(topic_name: str) -> str:
+    """Confirmation sent after the user taps 'Yes, activate' on a discuss-ready topic.
+
+    Args:
+        topic_name: Display name of the topic.
+
+    Returns:
+        Plain-text confirmation string.
+    """
+    return (
+        f"✅ {_html.escape(topic_name)} is now active. "
+        "SM-2 will schedule your first mock session."
+    )
+
+
+def discuss_not_yet() -> str:
+    """Response sent when the user taps 'Not yet' on a discuss-ready prompt.
+
+    Returns:
+        Plain-text message string.
+    """
+    return "👍 No rush. Do another discuss session whenever you're ready."
+
+
+# ---------------------------------------------------------------------------
+# /activate soft guard  (graduate_topic / confirm_graduate)
+# ---------------------------------------------------------------------------
+
+#: Button labels for the soft-guard warning in the /activate flow.
+ACTIVATE_SOFT_GUARD_BUTTONS: ButtonList = ["Yes, activate", "Do discuss first"]
+
+
+def activate_no_discuss_warning(topic_name: str) -> tuple[str, ButtonList]:
+    """Soft-guard prompt shown when activating a topic with no discuss history.
+
+    Args:
+        topic_name: Display name of the topic.
+
+    Returns:
+        Tuple of (prompt text, button labels).
+    """
+    name = _html.escape(topic_name)
+    return (
+        f"⚠️ You haven't done a discuss session on <b>{name}</b> yet. "
+        "Activate anyway?",
+        ACTIVATE_SOFT_GUARD_BUTTONS,
+    )
+
+
+def activate_discussing_block(topic_name: str) -> str:
+    """Hard-block message shown when trying to activate a topic mid-discuss.
+
+    Args:
+        topic_name: Display name of the topic.
+
+    Returns:
+        Plain-text block message string.
+    """
+    name = _html.escape(topic_name)
+    return (
+        f"🚫 <b>{name}</b> is in discuss mode. "
+        "Wait for Claude's readiness assessment or start another discuss session."
+    )
+
+
 def discuss_session_ready(
     topic_name: str,
     topic_type: str,

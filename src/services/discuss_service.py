@@ -12,6 +12,10 @@ from src.agent import messages
 from src.integrations import telegram_client as _telegram
 from src.repositories import session_repository, topic_repository
 
+# Imported lazily-by-name to avoid circular imports at module load time;
+# the singleton graph is accessed only inside function bodies.
+import src.agent.graph as _graph_module
+
 logger = logging.getLogger(__name__)
 
 
@@ -207,7 +211,24 @@ def assess_discuss_readiness(
     # --- Telegram notification (best-effort, never blocks the result) ---
     try:
         if recommendation == "ready":
-            _telegram.send_message(messages.discuss_ready(topic_name, is_reentry=is_reentry))
+            if is_reentry:
+                # Topic is already active in SM-2 — plain message, no activation needed.
+                _telegram.send_message(messages.discuss_ready(topic_name, is_reentry=True))
+            else:
+                # First-time ready: invoke the graph so it can send activation buttons
+                # and pause at an interrupt waiting for the user's choice.
+                chat_id = _telegram.get_chat_id()
+                _graph_module.graph.invoke(
+                    {
+                        "trigger": "discuss_ready_confirm",
+                        "chat_id": chat_id,
+                        "current_topic_id": topic_id,
+                        "current_topic_name": topic_name,
+                        "pending_message_id": None,
+                        "messages": [],
+                    },
+                    config={"configurable": {"thread_id": str(chat_id)}},
+                )
         elif recommendation == "not_ready":
             current_areas = _parse_weak_area_keys(teacher_weak_areas)
             _telegram.send_message(messages.discuss_not_ready(topic_name, current_areas))

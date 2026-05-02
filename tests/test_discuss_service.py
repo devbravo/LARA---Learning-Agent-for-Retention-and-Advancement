@@ -302,11 +302,18 @@ class AssessDiscussReadinessTests(DiscussServiceTestCase):
     # --- ready (fresh) ---
 
     def test_ready_fresh_when_quality_5_no_repeats(self) -> None:
+        # Non-reentry ready path: graph.invoke is called (not send_message).
         self._insert_topic(name="T")
-        result, msg, btn = self._call("T", 5, '{"gap": "strong"}')
+        mock_invoke = MagicMock()
+        with patch("src.services.discuss_service._graph_module.graph.invoke", mock_invoke), \
+             patch("src.services.discuss_service._telegram.get_chat_id", return_value=9999):
+            result, msg, btn = self._call("T", 5, '{"gap": "strong"}')
         self.assertEqual(result["recommendation"], "ready")
         self.assertIn("first", result["reason"].lower())
-        msg.assert_called_once()
+        mock_invoke.assert_called_once()
+        call_state = mock_invoke.call_args[0][0]
+        self.assertEqual(call_state["trigger"], "discuss_ready_confirm")
+        msg.assert_not_called()  # send_message not used in non-reentry ready path
         btn.assert_not_called()
 
     def test_ready_fresh_reason_mentions_first_discuss(self) -> None:

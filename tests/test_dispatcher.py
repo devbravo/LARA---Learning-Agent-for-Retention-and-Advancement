@@ -189,3 +189,32 @@ def test_all_invocations_use_chat_in_flight():
 
     assert 55 not in _chat_in_flight  # cleared after completion
 
+
+# ---------------------------------------------------------------------------
+# resolve_trigger
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("command,expected_trigger", [
+    ("/done",     "done"),
+    ("/study",    "study"),
+    ("/plan",     "daily"),
+    ("/pick",     "pick"),
+    ("/activate", "activate"),
+    ("/discuss",  "discuss"),
+])
+def test_resolve_trigger_known_commands(command: str, expected_trigger: str):
+    """Each registered command maps to its graph trigger name."""
+    assert dispatcher.resolve_trigger(command) == expected_trigger
+
+
+def test_resolve_trigger_unknown_payload_returned_as_is():
+    """An unrecognised payload (e.g. a button callback) is returned unchanged."""
+    assert dispatcher.resolve_trigger("category:DSA") == "category:DSA"
+
+
+def test_resolve_trigger_is_case_insensitive():
+    """Command matching is case-insensitive (Telegram delivers commands lowercase,
+    but defensive handling keeps the mapping robust)."""
+    assert dispatcher.resolve_trigger("/DONE") == "done"
+    assert dispatcher.resolve_trigger("/Discuss") == "discuss"
+
