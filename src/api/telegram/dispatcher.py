@@ -91,6 +91,7 @@ def resolve_trigger(payload: str) -> str:
         "/plan":     "daily",
         "/pick":     "pick",
         "/activate": "activate",
+        "/discuss":  "discuss",
     }
     return mapping.get(payload.lower().strip(), payload)
 

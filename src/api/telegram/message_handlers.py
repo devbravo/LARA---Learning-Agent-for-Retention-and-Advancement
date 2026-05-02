@@ -22,6 +22,7 @@ HELP_TEXT = (
     "/plan - Generate today's study plan\n"
     "/pick - Choose a specific topic to start studying\n"
     "/activate - Show in-progress topics and move one into active review\n"
+    "/discuss - Start a discuss session for an in-progress or active topic\n"
     "/view - Show overdue, due today, and in-progress topics at a glance\n"
     "/help - Show this command guide\n\n"
     "Notes:\n"

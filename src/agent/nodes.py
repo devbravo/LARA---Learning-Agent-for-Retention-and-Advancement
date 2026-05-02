@@ -1043,6 +1043,137 @@ def study_topic_confirm(state: AgentState) -> AgentState:
 
 
 # ---------------------------------------------------------------------------
+# Node: discuss_parser
+# ---------------------------------------------------------------------------
+
+def _weak_area_keys(raw: str | None) -> list[str]:
+    """Extract non-empty top-level keys from a stored weak_areas JSON string.
+
+    Args:
+        raw: Raw ``weak_areas`` value as stored in the topics table.
+
+    Returns:
+        List of key strings with truthy values; empty list when input is None,
+        empty, or not a JSON object.
+    """
+    if not raw or not raw.strip():
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return [k for k, v in parsed.items() if v]
+        return []
+    except Exception:
+        return [raw.strip()]
+
+
+def discuss_parser(state: AgentState) -> AgentState:
+    logger.info("discuss_parser: entered")
+
+    try:
+        chat_id = state.get("chat_id")
+
+        # Clean up stale button message from a previous abandoned flow
+        old_msg_id = state.get("pending_message_id")
+        if old_msg_id is not None and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, old_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        topics = topic_repository.get_in_progress_and_active_topics()
+
+        if not topics:
+            return {
+                "messages": ["No topics in progress or active to discuss."],
+                "pending_message_id": None,
+            }
+
+        if len(topics) >= 2:
+            logger.info("discuss_parser: %d topics — sending picker", len(topics))
+            buttons = [(t["name"], f"discuss_topic:{t['id']}") for t in topics]
+            picker_msg_id = _telegram.send_inline_buttons("Which topic are you discussing?", buttons)
+            return {
+                "messages": [],
+                "pending_message_id": picker_msg_id,
+            }
+
+        # Exactly one topic — handle inline, no interrupt needed
+        topic = topics[0]
+        topic_id = topic["id"]
+        topic_name = topic["name"]
+
+        topic_repository.set_topic_discussing(topic_id)
+        session_count = session_repository.get_discuss_session_count(topic_id)
+        context = topic_repository.get_topic_context(topic_id)
+        topic_type = context.get("topic_type") or "conceptual"
+        weak_areas = _weak_area_keys(context.get("weak_areas"))
+
+        msg = messages.discuss_session_ready(topic_name, topic_type, weak_areas, session_count + 1)
+        return {
+            "messages": [msg],
+            "pending_message_id": None,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("discuss_parser failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Discuss flow failed: {e}"], "pending_message_id": None}
+
+
+# ---------------------------------------------------------------------------
+# Node: start_discuss
+# ---------------------------------------------------------------------------
+
+def start_discuss(state: AgentState) -> AgentState:
+    """interrupt() is first — on resume, receives the selected topic id payload."""
+    try:
+        chat_id = state.get("chat_id")
+        picker_msg_id = state.get("pending_message_id")
+
+        # Interrupt at start — no side effects above this line
+        selected_payload = interrupt("waiting for topic selection")
+
+        # Remove picker buttons after resume (idempotent)
+        if picker_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, picker_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        if not isinstance(selected_payload, str) or not selected_payload.startswith("discuss_topic:"):
+            return {"messages": ["⚠️ Invalid topic selection."], "pending_message_id": None}
+
+        try:
+            topic_id = int(selected_payload[len("discuss_topic:"):])
+        except ValueError:
+            return {"messages": ["⚠️ Invalid topic id."], "pending_message_id": None}
+
+        topic_name = topic_repository.get_topic_name_by_id(topic_id)
+        if topic_name is None:
+            return {"messages": ["⚠️ Topic not found."], "pending_message_id": None}
+
+        topic_repository.set_topic_discussing(topic_id)
+        session_count = session_repository.get_discuss_session_count(topic_id)
+        context = topic_repository.get_topic_context(topic_id)
+        topic_type = context.get("topic_type") or "conceptual"
+        weak_areas = _weak_area_keys(context.get("weak_areas"))
+
+        msg = messages.discuss_session_ready(topic_name, topic_type, weak_areas, session_count + 1)
+        return {
+            "messages": [msg],
+            "pending_message_id": None,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("start_discuss failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Failed to start discuss session: {e}"], "pending_message_id": None}
+
+
+# ---------------------------------------------------------------------------
 # Node: activate_topic
 # ---------------------------------------------------------------------------
 

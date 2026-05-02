@@ -13,6 +13,8 @@ Flow (HITL pattern — interrupt() replaces awaiting_* flags):
   done_parser → (select_done_topic → interrupt() →)? log_session → interrupt() → log_weak_areas → output → END
   study_topic → interrupt() → study_topic_category → interrupt() → study_topic_confirm → output → END
   activate_topic → interrupt() → graduate_topic → output → END
+  discuss_parser → output → END  (single topic or error)
+  discuss_parser → interrupt() → start_discuss → output → END  (multiple topics)
 
 Checkpointer: SqliteSaver backed by db/state.db.
 Thread ID: chat_id from state (one thread per user).
@@ -36,6 +38,7 @@ from src.agent.nodes import (
     await_daily_confirmation,
     book_events,
     daily_planning,
+    discuss_parser,
     done_parser,
     generate_brief,
     graduate_topic,
@@ -47,6 +50,7 @@ from src.agent.nodes import (
     router,
     select_done_topic,
     send_duration_picker,
+    start_discuss,
     study_topic,
     study_topic_category,
     study_topic_confirm,
@@ -57,6 +61,7 @@ from src.agent.routes import (
     route_from_await_brief_confirmation,
     route_from_await_daily_confirmation,
     route_from_daily_planning,
+    route_from_discuss_parser,
     route_from_done_parser,
     route_from_generate_brief,
     route_from_log_weak_areas,
@@ -96,6 +101,8 @@ def build_graph(checkpointer=None):
     builder.add_node("study_topic_confirm", study_topic_confirm)
     builder.add_node("activate_topic", activate_topic)
     builder.add_node("graduate_topic", graduate_topic)
+    builder.add_node("discuss_parser", discuss_parser)
+    builder.add_node("start_discuss", start_discuss)
 
     # Entry point
     builder.add_edge(START, "router")
@@ -111,6 +118,7 @@ def build_graph(checkpointer=None):
             "done_parser":          "done_parser",
             "study_topic":          "study_topic",
             "activate_topic":       "activate_topic",
+            "discuss_parser":       "discuss_parser",
             "output":               "output",
         },
     )
@@ -187,6 +195,14 @@ def build_graph(checkpointer=None):
         {"graduate_topic": "graduate_topic", "output": "output"},
     )
     builder.add_edge("graduate_topic", "output")
+
+    # Discuss flow
+    builder.add_conditional_edges(
+        "discuss_parser",
+        route_from_discuss_parser,
+        {"start_discuss": "start_discuss", "output": "output"},
+    )
+    builder.add_edge("start_discuss", "output")
 
     # Shared terminal
     builder.add_edge("book_events", "output")

@@ -265,6 +265,41 @@ def discuss_not_ready(topic_name: str, weak_areas: list[str]) -> str:
     return f"📖 {_html.escape(topic_name)} isn't ready yet. Keep discussing before moving to mock."
 
 
+def discuss_session_ready(
+    topic_name: str,
+    topic_type: str,
+    weak_areas: list[str],
+    session_number: int,
+) -> str:
+    """Message sent when a discuss session is initiated for a topic.
+
+    Args:
+        topic_name: Display name of the topic.
+        topic_type: Raw topic type string (e.g. ``"dsa"``, ``"system_design"``).
+        weak_areas: Parsed list of focus-area labels from the topic's weak_areas
+            field.  Pass an empty list when no prior gaps are recorded.
+        session_number: 1-indexed session counter (prior sessions + 1).
+
+    Returns:
+        Plain-text notification string with HTML formatting.
+    """
+    name = _html.escape(topic_name)
+    type_label = {
+        "dsa": "DSA",
+        "system_design": "System Design",
+        "conceptual": "Conceptual",
+        "behavioral": "Behavioral",
+    }.get(topic_type, _html.escape(topic_type.replace("_", " ").title()))
+    header = (
+        f"📝 Discuss session started — <b>{name}</b>\n"
+        f"Session #{session_number} | {type_label}"
+    )
+    if weak_areas:
+        gaps = ", ".join(_html.escape(a) for a in weak_areas)
+        return f"{header}\nFocus areas: {gaps}"
+    return header
+
+
 def discuss_go_back_to_study(
     topic_name: str,
     repeated_weak_areas: list[str],

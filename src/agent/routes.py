@@ -17,6 +17,7 @@ def route_from_router(state: AgentState) -> str:
         "done":     "done_parser",
         "pick":     "study_topic",
         "activate": "activate_topic",
+        "discuss":  "discuss_parser",
     }
     return mapping.get(trigger, "output")
 
@@ -79,3 +80,8 @@ def route_from_log_weak_areas(state: AgentState) -> str:
     if state.get("weak_areas_topic_type") == "conceptual":
         return "output"
     return "log_weak_areas_q2"
+
+
+def route_from_discuss_parser(state: AgentState) -> str:
+    """Route to output when a message is set (single-topic or error); else start_discuss."""
+    return "output" if state.get("messages") else "start_discuss"
