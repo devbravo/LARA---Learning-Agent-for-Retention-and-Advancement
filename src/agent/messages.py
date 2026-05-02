@@ -213,3 +213,36 @@ def topic_graduated(topic_name: str) -> str:
         f"✅ {topic_name} graduated to active. "
         "First SM-2 review scheduled for tomorrow."
     )
+
+
+# ---------------------------------------------------------------------------
+# Discuss-mode readiness  (assess_discuss_readiness)
+# ---------------------------------------------------------------------------
+
+def discuss_ready(topic_name: str) -> tuple[str, ButtonList]:
+    """Readiness prompt with activation buttons after a strong discuss session."""
+    return (
+        f"✅ {topic_name} looks ready for a mock — no repeated gaps and quality is strong.\n"
+        "Activate it?",
+        ["Yes, activate", "Not yet"],
+    )
+
+
+def discuss_not_ready(topic_name: str, weak_areas: list[str]) -> str:
+    """Message when quality or gaps are insufficient for a mock session."""
+    if weak_areas:
+        bullet_list = "\n".join(f"  • {area}" for area in weak_areas)
+        return (
+            f"📖 {topic_name} isn't ready yet. Focus on these areas before the next discuss:\n"
+            f"{bullet_list}"
+        )
+    return f"📖 {topic_name} isn't ready yet. Keep discussing before moving to mock."
+
+
+def discuss_go_back_to_study(topic_name: str, repeated_weak_areas: list[str]) -> str:
+    """Message when repeated gaps force the topic back to in-progress study."""
+    bullet_list = "\n".join(f"  • {area}" for area in repeated_weak_areas)
+    return (
+        f"🔄 {topic_name} moved back to In Progress — the following gaps are recurring "
+        f"and need more study before discussing again:\n{bullet_list}"
+    )
