@@ -134,6 +134,9 @@ def assess_discuss_readiness(
         Returns ``{"error": str}`` when the topic is not found or a critical
         error occurs.
     """
+    if teacher_quality not in {2, 3, 5}:
+        return {"error": f"Invalid teacher_quality {teacher_quality!r} — must be 2, 3, or 5."}
+
     try:
         topic_id = topic_repository.get_topic_id_by_name(topic_name)
     except ValueError as exc:
@@ -158,6 +161,7 @@ def assess_discuss_readiness(
         return {"error": f"Database error: {exc}"}
 
     repeated_weak_areas = _find_repeated_weak_areas(sessions)
+    discuss_count = len(sessions)
 
     # --- Readiness rubric ---
     if repeated_weak_areas:
@@ -169,11 +173,15 @@ def assess_discuss_readiness(
         )
     elif teacher_quality >= 4:
         recommendation = "ready"
-        reason = (
-            "No repeated gaps and quality is strong — ready for a mock session."
-            if is_reentry
-            else "First discuss session with strong quality — ready for a mock session."
-        )
+        if is_reentry:
+            reason = "No repeated gaps and quality is strong — ready for another mock session."
+        elif discuss_count == 1:
+            reason = "First discuss session with strong quality — ready for a mock session."
+        else:
+            reason = (
+                f"{discuss_count} discuss session(s) completed with no repeated gaps "
+                f"and strong quality — ready for a mock session."
+            )
     else:
         recommendation = "not_ready"
         current_areas = _parse_weak_area_keys(teacher_weak_areas)
@@ -184,21 +192,32 @@ def assess_discuss_readiness(
             else f"Quality score {teacher_quality} is below the readiness threshold."
         )
 
-    # --- Side effects ---
+    # --- DB side effect (status rollback) — must succeed before notifying ---
+    was_moved = False
+    if recommendation == "go_back_to_study":
+        try:
+            was_moved = topic_repository.set_topic_back_to_in_progress(topic_id)
+        except Exception as exc:
+            logger.error(
+                "assess_discuss_readiness: status rollback failed for topic_id=%d: %s",
+                topic_id, exc,
+            )
+            return {"error": f"Failed to update topic status: {exc}"}
+
+    # --- Telegram notification (best-effort, never blocks the result) ---
     try:
         if recommendation == "ready":
-            text, buttons = messages.discuss_ready(topic_name)
-            _telegram.send_buttons(text, buttons)
+            _telegram.send_message(messages.discuss_ready(topic_name, is_reentry=is_reentry))
         elif recommendation == "not_ready":
             current_areas = _parse_weak_area_keys(teacher_weak_areas)
             _telegram.send_message(messages.discuss_not_ready(topic_name, current_areas))
         else:  # go_back_to_study
-            topic_repository.set_topic_back_to_in_progress(topic_id)
-            _telegram.send_message(messages.discuss_go_back_to_study(topic_name, repeated_weak_areas))
+            _telegram.send_message(
+                messages.discuss_go_back_to_study(topic_name, repeated_weak_areas, was_moved=was_moved)
+            )
     except Exception as exc:
-        # Telegram or DB failure on side effects — log but still return the result.
         logger.warning(
-            "assess_discuss_readiness side-effect failed for %s (%s): %s",
+            "assess_discuss_readiness: Telegram notification failed for %s (%s): %s",
             topic_name, recommendation, exc,
         )
 
