@@ -253,3 +253,110 @@ def insert_session(topic_id: int, duration_min: int, student_quality: int, weak_
                VALUES (?, ?, ?, ?, ?)""",
             (topic_id, duration_min, student_quality, weak_areas, local_now()),
         )
+
+
+def get_discuss_session_count(topic_id: int) -> int:
+    """Count discuss-mode sessions for a topic.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        Number of rows where ``mode = 'discuss'`` for the given topic.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM sessions WHERE topic_id = ? AND mode = 'discuss'",
+            (topic_id,),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def get_discuss_sessions(topic_id: int, limit: int = 5) -> list[dict]:
+    """Return recent discuss-mode sessions for a topic.
+
+    Args:
+        topic_id: Topic primary key.
+        limit: Maximum number of rows to return (most recent first).
+
+    Returns:
+        List of dicts with keys ``teacher_quality``, ``teacher_weak_areas``,
+        and ``studied_at``, ordered by ``studied_at`` DESC.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT teacher_quality, teacher_weak_areas, studied_at
+               FROM sessions
+               WHERE topic_id = ? AND mode = 'discuss'
+               ORDER BY studied_at DESC
+               LIMIT ?""",
+            (topic_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_mock_sessions(topic_id: int, limit: int = 5) -> list[dict]:
+    """Return recent mock-mode sessions for a topic (includes legacy NULL-mode rows).
+
+    Args:
+        topic_id: Topic primary key.
+        limit: Maximum number of rows to return (most recent first).
+
+    Returns:
+        List of dicts with keys ``quality`` (COALESCE of teacher/student/legacy
+        quality scores), ``weak_areas`` (COALESCE of ``teacher_weak_areas`` and
+        the legacy ``weak_areas`` column), and ``studied_at``, ordered by
+        ``studied_at`` DESC.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT COALESCE(teacher_quality, student_quality, quality_score) AS quality,
+                      COALESCE(teacher_weak_areas, weak_areas) AS weak_areas,
+                      studied_at
+               FROM sessions
+               WHERE topic_id = ? AND (mode = 'mock' OR mode IS NULL)
+               ORDER BY studied_at DESC
+               LIMIT ?""",
+            (topic_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def has_mock_history(topic_id: int) -> bool:
+    """Return True if the topic has any mock or legacy session.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        ``True`` when at least one row exists with ``mode = 'mock'`` or
+        ``mode IS NULL``; ``False`` otherwise.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT 1 FROM sessions
+               WHERE topic_id = ? AND (mode = 'mock' OR mode IS NULL)
+               LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+    return row is not None
+
+
+def insert_discuss_session(
+    topic_id: int,
+    teacher_quality: int,
+    teacher_weak_areas: str,
+) -> None:
+    """Insert a new discuss-mode session row with the current local timestamp.
+
+    Args:
+        topic_id: Topic primary key.
+        teacher_quality: Teacher quality score (2, 3, or 5).
+        teacher_weak_areas: Structured weak-areas text (typically JSON).
+    """
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO sessions (topic_id, teacher_quality, teacher_weak_areas, mode, studied_at)
+               VALUES (?, ?, ?, 'discuss', ?)""",
+            (topic_id, teacher_quality, teacher_weak_areas, local_now()),
+        )
