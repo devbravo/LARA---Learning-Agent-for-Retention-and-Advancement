@@ -12,9 +12,11 @@ from src.agent import messages
 from src.integrations import telegram_client as _telegram
 from src.repositories import session_repository, topic_repository
 
-# Imported lazily-by-name to avoid circular imports at module load time;
-# the singleton graph is accessed only inside function bodies.
-import src.agent.graph as _graph_module
+# Imported lazily-by-name to avoid circular imports at module load time.
+# We route graph invocations through the dispatcher's ``safe_chat_invoke``
+# so service-layer flows share the same per-chat serialization and pending-
+# interrupt check as the webhook layer.
+import src.api.telegram.dispatcher as _dispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -216,9 +218,12 @@ def assess_discuss_readiness(
                 _telegram.send_message(messages.discuss_ready(topic_name, is_reentry=True))
             else:
                 # First-time ready: invoke the graph so it can send activation buttons
-                # and pause at an interrupt waiting for the user's choice.
+                # and pause at an interrupt waiting for the user's choice.  Route
+                # through the dispatcher so we acquire the per-chat lock and skip
+                # cleanly if the user is already paused on another HITL flow.
                 chat_id = _telegram.get_chat_id()
-                _graph_module.graph.invoke(
+                invoked = _dispatcher.safe_chat_invoke(
+                    chat_id,
                     {
                         "trigger": "discuss_ready_confirm",
                         "chat_id": chat_id,
@@ -227,8 +232,13 @@ def assess_discuss_readiness(
                         "pending_message_id": None,
                         "messages": [],
                     },
-                    config={"configurable": {"thread_id": str(chat_id)}},
                 )
+                if not invoked:
+                    # Chat is paused on another flow — sending activation buttons
+                    # would clobber that flow's checkpoint.  Fall back to a plain
+                    # readiness message; the user can /activate later (the soft
+                    # guard won't fire because they have prior discuss sessions).
+                    _telegram.send_message(messages.discuss_ready(topic_name, is_reentry=False))
         elif recommendation == "not_ready":
             current_areas = _parse_weak_area_keys(teacher_weak_areas)
             _telegram.send_message(messages.discuss_not_ready(topic_name, current_areas))

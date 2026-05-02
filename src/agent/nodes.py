@@ -1154,33 +1154,16 @@ def start_discuss(state: AgentState) -> AgentState:
             except Exception as _e:
                 logger.debug("remove_buttons silently failed: %s", _e)
 
-        # If the user typed a command instead of tapping a button, re-send the
-        # picker so they can see their options — mirrors study_topic_category.
+        # If the user typed a command instead of tapping a button, the interrupt
+        # is already consumed and the graph is about to end — any buttons sent
+        # here would be dangling (has_pending_interrupt will be False so tapping
+        # them triggers a fresh no-op invoke).  Just tell the user to restart.
         if not selected_payload or (
             isinstance(selected_payload, str) and selected_payload.startswith("/")
         ):
-            topics = topic_repository.get_in_progress_and_active_topics()
-            if not topics:
-                return {
-                    "messages": ["No topics in progress or active to discuss."],
-                    "pending_message_id": None,
-                }
-            buttons = [(t["name"], f"discuss_topic:{t['id']}") for t in topics]
-            try:
-                new_picker_id = _telegram.send_inline_buttons(
-                    "Which topic are you discussing?", buttons
-                )
-            except RuntimeError as e:
-                if "timed out" in str(e).lower():
-                    logger.warning("start_discuss: send_inline_buttons timed out: %s", e)
-                    return {
-                        "messages": ["⚠️ Timed out sending the topic list. Type /discuss to try again."],
-                        "pending_message_id": None,
-                    }
-                raise
             return {
                 "messages": [messages.DISCUSS_PICKER_FALLBACK],
-                "pending_message_id": new_picker_id,
+                "pending_message_id": None,
             }
 
         if not selected_payload.startswith("discuss_topic:"):
@@ -1293,7 +1276,21 @@ def await_discuss_activation(state: AgentState) -> AgentState:
                     "messages": ["⚠️ No topic selected for activation."],
                     "pending_message_id": None,
                 }
-            topic_repository.activate_topic_from_discuss(topic_id)
+            activated = topic_repository.activate_topic_from_discuss(topic_id)
+            if not activated:
+                # rowcount == 0: topic was deleted, renamed, or otherwise can't
+                # be updated.  Don't lie to the user with a success message.
+                logger.warning(
+                    "await_discuss_activation: activate_topic_from_discuss "
+                    "returned False for topic_id=%s", topic_id,
+                )
+                return {
+                    "messages": [
+                        "⚠️ Topic activation could not be completed. "
+                        "It may no longer exist or was not updated."
+                    ],
+                    "pending_message_id": None,
+                }
             return {
                 "messages": [messages.discuss_activated(topic_name)],
                 "pending_message_id": None,
@@ -1427,11 +1424,15 @@ def confirm_graduate(state: AgentState) -> AgentState:
     ``interrupt()`` is the very first statement so re-runs on resume are
     side-effect-free.
 
-    Handles two resume values:
+    Handles three resume cases:
     - ``"Yes, activate"`` — proceeds with normal graduation (same as
       ``/activate`` happy path; ``next_review = tomorrow``).
     - ``"Do discuss first"`` — sets the topic to ``discussing`` status and
       sends a discuss session-ready message without activating.
+    - Anything else (commands, free text, empty) — returns a warning without
+      mutating state.  Re-sending buttons is not viable: the interrupt is
+      already consumed and any new buttons would be dangling.  The user must
+      restart the flow with ``/activate``.
 
     Args:
         state: Current agent state (must contain ``current_topic_id`` and
@@ -1459,22 +1460,35 @@ def confirm_graduate(state: AgentState) -> AgentState:
         if topic_id is None:
             return {"messages": ["⚠️ No topic selected."], "pending_message_id": None}
 
-        if (payload or "").strip().lower() == "yes, activate":
+        normalised = (payload or "").strip().lower() if isinstance(payload, str) else ""
+
+        if normalised == "yes, activate":
             topic_name = topic_service.graduate_topic(topic_id)
             return {
                 "messages": [messages.topic_graduated(topic_name)],
                 "pending_message_id": None,
             }
 
-        # "Do discuss first" — mirror discuss_parser's single-topic path.
-        topic_repository.set_topic_discussing(topic_id)
-        session_count = session_repository.get_discuss_session_count(topic_id)
-        context = topic_repository.get_topic_context(topic_id)
-        topic_type = context.get("topic_type") or "conceptual"
-        weak_areas = _weak_area_keys(context.get("weak_areas"))
-        msg = messages.discuss_session_ready(topic_name, topic_type, weak_areas, session_count + 1)
+        if normalised == "do discuss first":
+            topic_repository.set_topic_discussing(topic_id)
+            session_count = session_repository.get_discuss_session_count(topic_id)
+            context = topic_repository.get_topic_context(topic_id)
+            topic_type = context.get("topic_type") or "conceptual"
+            weak_areas = _weak_area_keys(context.get("weak_areas"))
+            msg = messages.discuss_session_ready(topic_name, topic_type, weak_areas, session_count + 1)
+            return {
+                "messages": [msg],
+                "pending_message_id": None,
+            }
+
+        # Unknown payload (typed command, free text, empty) — exit cleanly.
+        # Mutating state on an unrecognised resume value would silently flip
+        # the topic to 'discussing'; safer to ask the user to restart.
         return {
-            "messages": [msg],
+            "messages": [
+                "⚠️ Activation cancelled — please tap one of the buttons or "
+                "type /activate to retry."
+            ],
             "pending_message_id": None,
         }
 

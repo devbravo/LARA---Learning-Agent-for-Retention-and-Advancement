@@ -189,8 +189,10 @@ TOPIC_PICKER_PROMPT = "Which topic?"
 #: Fallback shown when the user types a command instead of tapping a button.
 CATEGORY_PICKER_FALLBACK = "Please choose a category using the buttons."
 
-#: Fallback shown in start_discuss when the user types a command instead of tapping a button.
-DISCUSS_PICKER_FALLBACK = "Please use the buttons to select a topic for this discuss session."
+#: Shown in start_discuss when the user types a command instead of tapping a picker button.
+#: Re-sending buttons is not possible at this point (the interrupt is already consumed and
+#: the graph is about to end), so we ask the user to restart the flow cleanly.
+DISCUSS_PICKER_FALLBACK = "Please type /discuss to start a new discuss session."
 
 
 def no_inactive_topics() -> str:

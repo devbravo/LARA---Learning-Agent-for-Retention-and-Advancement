@@ -19,9 +19,12 @@ Covers discuss_parser and start_discuss nodes end-to-end:
    12. Valid resume → topic status set to 'discussing' in DB
    13. Valid resume → confirmation message includes topic name
    14. Buttons removed after valid resume
-   15. Invalid resume payload (wrong prefix) → warning message
-   16. Non-integer topic id in payload → warning message
-   17. Unknown topic id → warning message
+   15. Command payload → no picker re-sent (dangling buttons); restart message sent
+   16. Command payload → message contains /discuss restart instruction
+   17. Empty payload → treated same as command (no re-send)
+   18. Invalid resume payload (wrong prefix) → warning message
+   19. Non-integer topic id in payload → warning message
+   20. Unknown topic id → warning message
 """
 
 import json
@@ -446,8 +449,14 @@ def test_start_discuss_buttons_removed_after_resume():
 # 15a. Full HITL: command payload → picker re-sent with fallback message
 # ---------------------------------------------------------------------------
 
-def test_start_discuss_command_payload_resends_picker():
-    """Typing a command instead of tapping re-sends the picker (mirrors /pick)."""
+def test_start_discuss_command_payload_does_not_resend_picker():
+    """Typing a command instead of tapping a button must NOT re-send the picker.
+
+    Re-sending buttons here would leave them dangling: the interrupt is already
+    consumed so ``has_pending_interrupt`` is False and any button tap would be
+    treated as a fresh no-op trigger.  The correct behaviour is to end the flow
+    and tell the user to restart with /discuss.
+    """
     path = _make_discuss_db([
         {"name": "Topic A", "status": "in_progress"},
         {"name": "Topic B", "status": "active"},
@@ -457,7 +466,7 @@ def test_start_discuss_command_payload_resends_picker():
     chat_id = 7010
     config = {"configurable": {"thread_id": str(chat_id)}}
 
-    mock_btn = MagicMock(side_effect=[55, 66])  # first=initial picker, second=re-sent picker
+    mock_btn = MagicMock(return_value=55)  # only the initial picker should fire
     with _patch_db(path), \
          patch.object(_nodes._telegram, "send_inline_buttons", mock_btn), \
          patch.object(_nodes._telegram, "send_message"), \
@@ -466,11 +475,12 @@ def test_start_discuss_command_payload_resends_picker():
         g.invoke(Command(resume="/pick"), config=config)
     os.remove(path)
 
-    assert mock_btn.call_count == 2
+    # Only the initial picker from discuss_parser — no second send.
+    assert mock_btn.call_count == 1
 
 
-def test_start_discuss_command_payload_sends_fallback_message():
-    """Fallback message tells the user to use the buttons."""
+def test_start_discuss_command_payload_sends_restart_message():
+    """Fallback message after a command payload tells the user to restart with /discuss."""
     path = _make_discuss_db([
         {"name": "Topic A", "status": "in_progress"},
         {"name": "Topic B", "status": "active"},
@@ -490,11 +500,11 @@ def test_start_discuss_command_payload_sends_fallback_message():
     os.remove(path)
 
     mock_send.assert_called_once()
-    assert "buttons" in mock_send.call_args[0][0].lower()
+    assert "/discuss" in mock_send.call_args[0][0]
 
 
-def test_start_discuss_empty_payload_resends_picker():
-    """An empty resume string is treated the same as a command payload."""
+def test_start_discuss_empty_payload_does_not_resend_picker():
+    """An empty resume string is treated the same as a command payload: no re-send."""
     path = _make_discuss_db([
         {"name": "Topic A", "status": "in_progress"},
         {"name": "Topic B", "status": "active"},
@@ -504,7 +514,7 @@ def test_start_discuss_empty_payload_resends_picker():
     chat_id = 7012
     config = {"configurable": {"thread_id": str(chat_id)}}
 
-    mock_btn = MagicMock(side_effect=[55, 66])
+    mock_btn = MagicMock(return_value=55)
     with _patch_db(path), \
          patch.object(_nodes._telegram, "send_inline_buttons", mock_btn), \
          patch.object(_nodes._telegram, "send_message"), \
@@ -513,7 +523,7 @@ def test_start_discuss_empty_payload_resends_picker():
         g.invoke(Command(resume=""), config=config)
     os.remove(path)
 
-    assert mock_btn.call_count == 2
+    assert mock_btn.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -596,3 +606,49 @@ def test_start_discuss_unknown_topic_id_sends_warning():
 
     mock_send.assert_called_once()
     assert "⚠️" in mock_send.call_args[0][0]
+
+
+# ---------------------------------------------------------------------------
+# 21. await_discuss_activation: rowcount=0 surfaces a warning, not success
+# ---------------------------------------------------------------------------
+
+def test_await_discuss_activation_rowcount_zero_returns_warning():
+    """When activate_topic_from_discuss returns False (no row updated, e.g.
+    topic deleted between the readiness check and the user's tap), the user
+    must see a warning — not a misleading success message.
+    """
+    path = _make_discuss_db([
+        {"name": "Topic A", "status": "in_progress"},
+    ])
+    topic_id = _get_topic_id(path, "Topic A")
+
+    g = _make_test_graph()
+    chat_id = 7100
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
+    mock_send = MagicMock()
+    with _patch_db(path), \
+         patch.object(_nodes.topic_repository, "activate_topic_from_discuss",
+                      return_value=False), \
+         patch.object(_nodes._telegram, "send_buttons", return_value=88), \
+         patch.object(_nodes._telegram, "send_message", mock_send), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        # Enter the readiness-confirm flow as the discuss service would
+        g.invoke(
+            {
+                "trigger": "discuss_ready_confirm",
+                "chat_id": chat_id,
+                "current_topic_id": topic_id,
+                "current_topic_name": "Topic A",
+                "pending_message_id": None,
+                "messages": [],
+            },
+            config=config,
+        )
+        g.invoke(Command(resume="Yes, activate"), config=config)
+    os.remove(path)
+
+    mock_send.assert_called_once()
+    msg = mock_send.call_args[0][0]
+    assert "⚠️" in msg
+    assert "could not" in msg.lower() or "no longer" in msg.lower()

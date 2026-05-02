@@ -96,6 +96,84 @@ def resolve_trigger(payload: str) -> str:
     return mapping.get(payload.lower().strip(), payload)
 
 
+def _acquire_chat_lock(chat_id: int) -> None:
+    """Block until *chat_id* is no longer in flight, then mark it in-flight.
+
+    Spin-waits in 50 ms ticks; logs once when waiting begins so concurrent
+    contention is visible without flooding the log.
+    """
+    wait_event = threading.Event()
+    logged_wait = False
+    while True:
+        with _chat_lock:
+            if chat_id not in _chat_in_flight:
+                _chat_in_flight.add(chat_id)
+                return
+        if not logged_wait:
+            logger.info("Waiting for prior invocation to finish for chat_id=%s", chat_id)
+            logged_wait = True
+        wait_event.wait(0.05)
+
+
+def _release_chat_lock(chat_id: int) -> None:
+    """Release *chat_id* from the in-flight set.  Idempotent."""
+    with _chat_lock:
+        _chat_in_flight.discard(chat_id)
+
+
+def safe_chat_invoke(chat_id: int, fresh_state: dict) -> bool:
+    """Run a fresh graph invocation under per-chat serialization.
+
+    Used by service-layer callers (e.g. ``discuss_service`` posting a
+    ``discuss_ready_confirm`` flow) that need the same safety guarantees as
+    ``invoke_safe`` but supply their own initial state.
+
+    Refuses to invoke when the chat is already paused at an interrupt — that
+    means another flow is mid-HITL and a fresh state push would clobber its
+    checkpoint.  Callers should fall back to a non-stateful notification
+    (e.g. plain Telegram message) in that case.
+
+    Architectural note: this helper lives next to ``invoke_safe`` because both
+    share the per-chat lock state.  Importing it from a service layer is a
+    layering compromise; if more service-layer callers appear, consider
+    moving the lock + helper into a shared graph-invocation module.
+
+    Args:
+        chat_id: Telegram chat id (used both as state field and thread id).
+        fresh_state: Initial state dict for the graph.  Must include the
+            ``trigger`` key.  ``chat_id`` is set by this helper if missing.
+
+    Returns:
+        ``True`` when the graph was invoked, ``False`` when the call was
+        skipped because the chat already had a pending interrupt.
+
+    Raises:
+        Re-raises any exception thrown by ``graph.invoke``.  Callers are
+        responsible for swallowing/logging if appropriate.
+    """
+    config = {"configurable": {"thread_id": str(chat_id)}}
+    fresh_state.setdefault("chat_id", chat_id)
+
+    _acquire_chat_lock(chat_id)
+    try:
+        state_snapshot = _graph.graph.get_state(config)
+        if has_pending_interrupt(state_snapshot):
+            logger.warning(
+                "safe_chat_invoke: chat_id=%s already paused at interrupt; "
+                "skipping fresh invocation with trigger=%r",
+                chat_id, fresh_state.get("trigger"),
+            )
+            return False
+        logger.info(
+            "safe_chat_invoke: trigger=%s chat_id=%s",
+            fresh_state.get("trigger"), chat_id,
+        )
+        _graph.graph.invoke(fresh_state, config=config)
+        return True
+    finally:
+        _release_chat_lock(chat_id)
+
+
 def invoke_safe(chat_id: int, payload: str, message_id: int | None = None) -> None:
     """Invoke the graph safely, choosing resume vs fresh based on interrupt state.
 
@@ -108,19 +186,7 @@ def invoke_safe(chat_id: int, payload: str, message_id: int | None = None) -> No
     """
     config = {"configurable": {"thread_id": str(chat_id)}}
 
-    # Serialize per-chat to prevent race conditions on concurrent webhooks
-    wait_event = threading.Event()
-    logged_wait = False
-    while True:
-        with _chat_lock:
-            if chat_id not in _chat_in_flight:
-                _chat_in_flight.add(chat_id)
-                break
-        if not logged_wait:
-            logger.info("Waiting for prior invocation to finish for chat_id=%s", chat_id)
-            logged_wait = True
-        wait_event.wait(0.05)
-
+    _acquire_chat_lock(chat_id)
     try:
         state_snapshot = _graph.graph.get_state(config)
 
@@ -148,5 +214,4 @@ def invoke_safe(chat_id: int, payload: str, message_id: int | None = None) -> No
         if message_id is not None:
             clear_in_flight(message_id)
     finally:
-        with _chat_lock:
-            _chat_in_flight.discard(chat_id)
+        _release_chat_lock(chat_id)

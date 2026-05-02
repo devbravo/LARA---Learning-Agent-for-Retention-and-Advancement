@@ -238,12 +238,18 @@ def get_chat_id() -> int:
         Integer chat id from ``TELEGRAM_CHAT_ID`` environment variable.
 
     Raises:
-        EnvironmentError: If the environment variable is not set.
+        EnvironmentError: If the environment variable is not set, or is set
+            to a value that cannot be parsed as an integer.
     """
     chat_id_str = os.environ.get("TELEGRAM_CHAT_ID", "")
     if not chat_id_str:
         raise EnvironmentError("Missing required env var: TELEGRAM_CHAT_ID")
-    return int(chat_id_str)
+    try:
+        return int(chat_id_str)
+    except ValueError as exc:
+        raise EnvironmentError(
+            f"Invalid TELEGRAM_CHAT_ID: must be an integer, got {chat_id_str!r}."
+        ) from exc
 
 
 if __name__ == "__main__":

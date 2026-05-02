@@ -245,12 +245,24 @@ class GetDiscussContextTests(DiscussServiceTestCase):
 class AssessDiscussReadinessTests(DiscussServiceTestCase):
 
     def _call(self, topic_name: str, quality: int, weak_areas: str,
-              mock_send_message=None, mock_send_buttons=None):
-        """Helper: call the service with Telegram patched out."""
+              mock_send_message=None, mock_send_buttons=None,
+              mock_safe_invoke=None):
+        """Helper: call the service with Telegram + graph invocation patched out.
+
+        ``safe_chat_invoke`` is always patched so the fresh-ready path doesn't
+        accidentally invoke the real LangGraph singleton during tests.  Pass
+        ``mock_safe_invoke`` to inspect the invocation or override its return
+        value (e.g. ``MagicMock(return_value=False)`` to simulate a busy chat).
+        """
+        invoke_mock = mock_safe_invoke or MagicMock(return_value=True)
         with patch("src.integrations.telegram_client.send_message",
                    mock_send_message or MagicMock()) as msg, \
              patch("src.integrations.telegram_client.send_buttons",
-                   mock_send_buttons or MagicMock()) as btn:
+                   mock_send_buttons or MagicMock()) as btn, \
+             patch("src.services.discuss_service._dispatcher.safe_chat_invoke",
+                   invoke_mock), \
+             patch("src.services.discuss_service._telegram.get_chat_id",
+                   return_value=9999):
             result = discuss_service.assess_discuss_readiness(topic_name, quality, weak_areas)
             return result, msg, btn
 
@@ -302,18 +314,37 @@ class AssessDiscussReadinessTests(DiscussServiceTestCase):
     # --- ready (fresh) ---
 
     def test_ready_fresh_when_quality_5_no_repeats(self) -> None:
-        # Non-reentry ready path: graph.invoke is called (not send_message).
+        # Non-reentry ready path: routes through dispatcher.safe_chat_invoke
+        # (not send_message) with the discuss_ready_confirm trigger.
         self._insert_topic(name="T")
-        mock_invoke = MagicMock()
-        with patch("src.services.discuss_service._graph_module.graph.invoke", mock_invoke), \
-             patch("src.services.discuss_service._telegram.get_chat_id", return_value=9999):
-            result, msg, btn = self._call("T", 5, '{"gap": "strong"}')
+        mock_safe_invoke = MagicMock(return_value=True)
+        result, msg, btn = self._call("T", 5, '{"gap": "strong"}',
+                                      mock_safe_invoke=mock_safe_invoke)
         self.assertEqual(result["recommendation"], "ready")
         self.assertIn("first", result["reason"].lower())
-        mock_invoke.assert_called_once()
-        call_state = mock_invoke.call_args[0][0]
+        mock_safe_invoke.assert_called_once()
+        call_chat_id, call_state = mock_safe_invoke.call_args[0]
+        self.assertEqual(call_chat_id, 9999)
         self.assertEqual(call_state["trigger"], "discuss_ready_confirm")
-        msg.assert_not_called()  # send_message not used in non-reentry ready path
+        self.assertEqual(call_state["current_topic_name"], "T")
+        msg.assert_not_called()  # send_message not used when invocation succeeds
+        btn.assert_not_called()
+
+
+    def test_ready_fresh_falls_back_to_plain_message_when_chat_busy(self) -> None:
+        """When safe_chat_invoke returns False (chat paused on another flow),
+        the service must fall back to a plain readiness message instead of
+        clobbering the paused checkpoint with activation buttons.
+        """
+        self._insert_topic(name="T")
+        mock_safe_invoke = MagicMock(return_value=False)
+        result, msg, btn = self._call("T", 5, '{"gap": "strong"}',
+                                      mock_safe_invoke=mock_safe_invoke)
+        self.assertEqual(result["recommendation"], "ready")
+        # Invocation was attempted but skipped.
+        mock_safe_invoke.assert_called_once()
+        # Plain message sent as fallback — no buttons.
+        msg.assert_called_once()
         btn.assert_not_called()
 
     def test_ready_fresh_reason_mentions_first_discuss(self) -> None:

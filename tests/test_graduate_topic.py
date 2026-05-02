@@ -522,6 +522,45 @@ def test_soft_guard_do_discuss_first_sets_topic_to_discussing():
 # 11. Hard block — discussing topic cannot be activated
 # ---------------------------------------------------------------------------
 
+def test_soft_guard_unknown_payload_does_not_mutate_state():
+    """A non-button resume value (command or free text) must NOT flip the topic
+    to 'discussing' — the soft guard returns a warning and exits cleanly.
+
+    This prevents silently changing topic status when the user types /done,
+    /help, or arbitrary text while the soft-guard interrupt is pending.
+    """
+    path = _make_topics_db([
+        {"name": "DSA - DP", "tier": 1, "status": "in_progress"},
+    ])
+    topic_id = _get_topic_id(path, "DSA - DP")
+
+    g = _make_test_graph()
+    chat_id = 5024
+    config = {"configurable": {"thread_id": str(chat_id)}}
+
+    # set_topic_discussing must not be called on an unknown payload.
+    mock_set_discussing = MagicMock()
+    mock_send = MagicMock()
+    with patch("src.repositories.topic_repository.get_connection", _make_get_connection(path)), \
+         patch.object(_nodes.session_repository, "get_discuss_session_count", return_value=0), \
+         patch.object(_nodes.topic_repository, "set_topic_discussing", mock_set_discussing), \
+         patch.object(_nodes._telegram, "send_inline_buttons", return_value=42), \
+         patch.object(_nodes._telegram, "send_buttons", return_value=77), \
+         patch.object(_nodes._telegram, "send_message", mock_send), \
+         patch.object(_nodes._telegram, "remove_buttons"):
+        g.invoke({"trigger": "activate", "chat_id": chat_id}, config=config)
+        g.invoke(Command(resume=f"studied:{topic_id}"), config=config)
+        g.invoke(Command(resume="/done"), config=config)
+
+    # Topic status unchanged — still in_progress, not discussing or active.
+    assert _get_topic_status(path, "DSA - DP") == "in_progress"
+    # No state-mutating call to set_topic_discussing.
+    mock_set_discussing.assert_not_called()
+    # Warning message sent.
+    mock_send.assert_called_once()
+    assert "⚠️" in mock_send.call_args[0][0]
+
+
 def test_activate_discussing_block_sends_hard_block_message():
     """Trying to activate a topic that is in 'discussing' status sends a hard-block
     message and leaves the topic status unchanged.
