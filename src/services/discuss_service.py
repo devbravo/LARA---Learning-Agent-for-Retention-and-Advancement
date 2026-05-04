@@ -124,7 +124,7 @@ def assess_discuss_readiness(
 
     Readiness rubric (evaluated after inserting the session):
     - Any repeated weak area (2+ sessions) → ``go_back_to_study``
-    - No repeats **and** ``teacher_quality >= 4`` → ``ready``
+    - No repeats **and** ``teacher_quality >= 5`` → ``ready``
     - Otherwise → ``not_ready``
 
     Args:
@@ -177,7 +177,7 @@ def assess_discuss_readiness(
             f"needs more study before discussing again: "
             f"{', '.join(repeated_weak_areas)}."
         )
-    elif teacher_quality >= 4:
+    elif teacher_quality >= 5:
         recommendation = "ready"
         if is_reentry:
             reason = "No repeated gaps and quality is strong — ready for another mock session."
@@ -213,32 +213,25 @@ def assess_discuss_readiness(
     # --- Telegram notification (best-effort, never blocks the result) ---
     try:
         if recommendation == "ready":
-            if is_reentry:
-                # Topic is already active in SM-2 — plain message, no activation needed.
-                _telegram.send_message(messages.discuss_ready(topic_name, is_reentry=True))
-            else:
-                # First-time ready: invoke the graph so it can send activation buttons
-                # and pause at an interrupt waiting for the user's choice.  Route
-                # through the dispatcher so we acquire the per-chat lock and skip
-                # cleanly if the user is already paused on another HITL flow.
-                chat_id = _telegram.get_chat_id()
-                invoked = _dispatcher.safe_chat_invoke(
-                    chat_id,
-                    {
-                        "trigger": "discuss_ready_confirm",
-                        "chat_id": chat_id,
-                        "current_topic_id": topic_id,
-                        "current_topic_name": topic_name,
-                        "pending_message_id": None,
-                        "messages": [],
-                    },
-                )
-                if not invoked:
-                    # Chat is paused on another flow — sending activation buttons
-                    # would clobber that flow's checkpoint.  Fall back to a plain
-                    # readiness message; the user can /activate later (the soft
-                    # guard won't fire because they have prior discuss sessions).
-                    _telegram.send_message(messages.discuss_ready(topic_name, is_reentry=False))
+            # Both fresh and re-entry topics get activation buttons via the graph.
+            # Pass is_reentry so notify_discuss_ready can use the appropriate prompt.
+            chat_id = _telegram.get_chat_id()
+            invoked = _dispatcher.safe_chat_invoke(
+                chat_id,
+                {
+                    "trigger": "discuss_ready_confirm",
+                    "chat_id": chat_id,
+                    "current_topic_id": topic_id,
+                    "current_topic_name": topic_name,
+                    "current_topic_is_reentry": is_reentry,
+                    "pending_message_id": None,
+                    "messages": [],
+                },
+            )
+            if not invoked:
+                # Chat is paused on another flow — fall back to a plain readiness
+                # message so the user can /activate later.
+                _telegram.send_message(messages.discuss_ready(topic_name, is_reentry=is_reentry))
         elif recommendation == "not_ready":
             current_areas = _parse_weak_area_keys(teacher_weak_areas)
             _telegram.send_message(messages.discuss_not_ready(topic_name, current_areas))

@@ -356,7 +356,8 @@ def insert_discuss_session(
     """
     with get_connection() as conn:
         conn.execute(
-            """INSERT INTO sessions (topic_id, teacher_quality, teacher_weak_areas, mode, studied_at)
-               VALUES (?, ?, ?, 'discuss', ?)""",
-            (topic_id, teacher_quality, teacher_weak_areas, local_now()),
+            """INSERT INTO sessions
+               (topic_id, studied_at, mode, teacher_quality, teacher_weak_areas, teacher_source)
+               VALUES (?, ?, 'discuss', ?, ?, 'claude')""",
+            (topic_id, local_now(), teacher_quality, teacher_weak_areas),
         )

@@ -20,3 +20,4 @@ class AgentState(TypedDict, total=False):
     has_unlogged_sessions: bool | None  # True when done_parser / log_weak_areas queued a topic for rating
     weak_areas_first_answer: str | None # Q1 answer carried from log_weak_areas to log_weak_areas_q2
     weak_areas_topic_type: str | None    # topic_type carried from log_weak_areas to log_weak_areas_q2
+    current_topic_is_reentry: bool | None  # True when topic already has mock history

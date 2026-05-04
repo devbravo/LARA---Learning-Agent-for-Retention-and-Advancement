@@ -236,7 +236,7 @@ def test_discuss_parser_first_session_shows_session_1():
         result = discuss_parser({"chat_id": 1, "pending_message_id": None})
     os.remove(path)
 
-    assert "Session #1" in result["messages"][0]
+    assert "Discuss #1" in result["messages"][0]
 
 
 def test_discuss_parser_session_number_increments_with_prior_sessions():
@@ -256,7 +256,7 @@ def test_discuss_parser_session_number_increments_with_prior_sessions():
         result = discuss_parser({"chat_id": 1, "pending_message_id": None})
     os.remove(path)
 
-    assert "Session #3" in result["messages"][0]
+    assert "Discuss #3" in result["messages"][0]
 
 
 # ---------------------------------------------------------------------------
