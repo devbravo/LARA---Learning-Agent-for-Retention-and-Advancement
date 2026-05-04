@@ -264,13 +264,12 @@ def test_discuss_parser_session_number_increments_with_prior_sessions():
 # ---------------------------------------------------------------------------
 
 def test_discuss_parser_weak_areas_appear_in_message():
-    """Weak area VALUES (not structural key names) appear in the session-ready message.
+    """Session-ready message contains topic name and /discuss command regardless of weak_areas.
 
-    topics.weak_areas stores content in the values, not the keys.  For example,
-    a conceptual topic writes {"unclear": "CAP theorem vs PACELC"} — the focus
-    area to surface is "CAP theorem vs PACELC", not the structural label "unclear".
-    A DSA topic writes {"breakdown": "Edge case, Time complexity"} — the focus
-    area is "Edge case, Time complexity", not "breakdown".
+    The session-ready format no longer surfaces weak-area text inline —
+    context is fetched live via get_discuss_context() inside Claude.
+    This test verifies the message is well-formed when a topic has recorded
+    weak areas (i.e. weak_areas do not break the output).
     """
     weak_json = json.dumps({
         "unclear": "CAP theorem vs PACELC",
@@ -288,11 +287,8 @@ def test_discuss_parser_weak_areas_appear_in_message():
     os.remove(path)
 
     msg = result["messages"][0]
-    # Values are shown — the structural key names must NOT appear
-    assert "CAP theorem vs PACELC" in msg
-    assert "Edge case, Time complexity" in msg
-    assert "unclear" not in msg
-    assert "breakdown" not in msg
+    assert "Topic A" in msg
+    assert "/discuss" in msg
 
 
 def test_discuss_parser_no_weak_areas_omits_focus_line():
