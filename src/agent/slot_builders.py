@@ -127,9 +127,13 @@ def rebook_study_events(
             logger.warning("Skipping [Study] rebooking for %s — no conflict-free slot remains on %s", topic_name, target_date)
             break
 
-        slot_index, (start_dt, end_dt) = result
+        slot_index, (start_dt, _unused_end_dt) = result
+        # Use the topic default duration for the end time instead of the
+        # one-hour fallback end returned by _default_study_slot_datetimes().
+        default_duration = topic_repository.get_default_duration_by_name(topic_name)
         try:
             start = local_datetime_str(start_dt.date(), start_dt.hour, start_dt.minute, tz)
+            end_dt = start_dt + timedelta(minutes=default_duration)
             end = local_datetime_str(end_dt.date(), end_dt.hour, end_dt.minute, tz)
             _gcal.write_study_event(
                 topic=topic_name,
@@ -179,7 +183,9 @@ def build_missing_study_events(
             logger.warning("Skipping synthetic [Study] busy event for %s — no conflict-free slot remains on %s", topic_name, target_date)
             break
 
-        slot_index, (start_dt, end_dt) = result
+        slot_index, (start_dt, _unused_end_dt) = result
+        default_duration = topic_repository.get_default_duration_by_name(topic_name)
+        end_dt = start_dt + timedelta(minutes=default_duration)
         synthetic_events.append(
             {
                 "summary": f"[Study] {topic_name}",
@@ -232,7 +238,8 @@ def build_in_progress_study_slots(
             if result is None:
                 logger.warning("Skipping in-progress display slot for %s — no conflict-free slot remains on %s", topic_name, target_date)
                 break
-            fallback_slot_index, (start_dt, end_dt) = result
+            fallback_slot_index, (start_dt, _unused_end_dt) = result
+            end_dt = start_dt + timedelta(minutes=default_duration)
             start = format_event_time({"dateTime": start_dt.isoformat()})
             end = format_event_time({"dateTime": end_dt.isoformat()})
             duration_min = default_duration
