@@ -9,7 +9,7 @@ schedule:
     misfire_grace_time: 600
   evening_brief:
     hour: 20
-    minute: 26
+    minute: 51
     misfire_grace_time: 600
 
 protected_blocks:
@@ -18,9 +18,9 @@ protected_blocks:
 
 focus_windows:
   - start: "07:00"
-    end: "10:00"
-  - start: "10:00"
-    end: "16:00"
+    end: "15:00"
+  - start: "20:00"
+    end: "22:00"
 
 timezone: "America/Paramaribo"
 

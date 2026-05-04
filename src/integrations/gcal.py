@@ -10,6 +10,8 @@ import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+import yaml
+import pytz
 
 from dotenv import load_dotenv
 
@@ -102,8 +104,31 @@ def get_events(day: date) -> list[dict[str, Any]]:
     """
     calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
 
-    time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
-    time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+    # Compute UTC bounds for the target local day. The application config
+    # contains the local timezone (e.g. 'America/Paramaribo'). If config.yaml
+    # is missing or malformed, fall back to UTC day bounds.
+    try:
+        config_path = Path(__file__).parents[2] / "config.yaml"
+        if config_path.exists():
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f)
+            tzname = cfg.get("timezone")
+            if tzname:
+                tz = pytz.timezone(tzname)
+                local_start = tz.localize(datetime(day.year, day.month, day.day, 0, 0, 0))
+                local_end = tz.localize(datetime(day.year, day.month, day.day, 23, 59, 59))
+                time_min = local_start.astimezone(pytz.UTC).isoformat()
+                time_max = local_end.astimezone(pytz.UTC).isoformat()
+            else:
+                time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+                time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+        else:
+            time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+            time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+    except Exception:
+        # Any failure reading config or resolving timezone should default to UTC
+        time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+        time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
 
     try:
         service = _get_service()
