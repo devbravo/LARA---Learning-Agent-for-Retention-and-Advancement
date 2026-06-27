@@ -281,8 +281,7 @@ DISCUSS_ACTIVATION_BUTTONS: ButtonList = ["Yes, activate", "Not yet"]
 def discuss_ready_prompt(topic_name: str) -> str:
     """Prompt text sent with activation buttons when a topic passes readiness.
 
-    Used by the ``notify_discuss_ready`` node.  Deliberately separate from
-    ``discuss_ready`` so the reentry plain-message path is unchanged.
+    Used by the ``notify_discuss_ready`` node for first-time ready topics.
 
     Args:
         topic_name: Display name of the topic.
@@ -294,6 +293,26 @@ def discuss_ready_prompt(topic_name: str) -> str:
     return (
         f"✅ <b>{name}</b> looks ready for its first mock — no repeated gaps "
         "and quality is strong.\nActivate it for SM-2 review?"
+    )
+
+
+def discuss_ready_reentry_prompt(topic_name: str) -> str:
+    """Prompt text sent with activation buttons when a re-entry topic passes readiness.
+
+    Used by the ``notify_discuss_ready`` node when the topic already has mock
+    history (i.e. it is returning through discuss rather than graduating for
+    the first time).
+
+    Args:
+        topic_name: Display name of the topic.
+
+    Returns:
+        Plain-text prompt string with HTML formatting.
+    """
+    name = _html.escape(topic_name)
+    return (
+        f"✅ <b>{name}</b> looks strong again — no repeated gaps and quality is solid.\n"
+        "Put it back in SM-2?"
     )
 
 
@@ -364,37 +383,23 @@ def activate_discussing_block(topic_name: str) -> str:
 
 def discuss_session_ready(
     topic_name: str,
-    topic_type: str,
-    weak_areas: list[str],
     session_number: int,
 ) -> str:
     """Message sent when a discuss session is initiated for a topic.
-
     Args:
         topic_name: Display name of the topic.
-        topic_type: Raw topic type string (e.g. ``"dsa"``, ``"system_design"``).
-        weak_areas: Parsed list of focus-area labels from the topic's weak_areas
-            field.  Pass an empty list when no prior gaps are recorded.
         session_number: 1-indexed session counter (prior sessions + 1).
 
     Returns:
         Plain-text notification string with HTML formatting.
     """
     name = _html.escape(topic_name)
-    type_label = {
-        "dsa": "DSA",
-        "system_design": "System Design",
-        "conceptual": "Conceptual",
-        "behavioral": "Behavioral",
-    }.get(topic_type, _html.escape(topic_type.replace("_", " ").title()))
-    header = (
-        f"📝 Discuss session started — <b>{name}</b>\n"
-        f"Session #{session_number} | {type_label}"
+    return (
+        f"📝 Discuss Session Ready\n\n"
+        f"Open a new Claude chat titled:\n"
+        f'<b>"Discuss #{session_number} - {name}"</b>\n\n'
+        f"Then start the session with:\n<code>/discuss {name}</code>\n"
     )
-    if weak_areas:
-        gaps = ", ".join(_html.escape(a) for a in weak_areas)
-        return f"{header}\nFocus areas: {gaps}"
-    return header
 
 
 def discuss_go_back_to_study(

@@ -16,18 +16,20 @@ from src.services import view_service
 logger = logging.getLogger(__name__)
 
 HELP_TEXT = (
-    "🤖 Here is what I can do:\n\n"
-    "/study - Generate a study brief for the highest-priority due topic\n"
-    "/done - Log completed study sessions and rate how they went\n"
-    "/plan - Generate today's study plan\n"
-    "/pick - Choose a specific topic to start studying\n"
-    "/activate - Show in-progress topics and move one into active review\n"
-    "/discuss - Start a discuss session for an in-progress or active topic\n"
-    "/view - Show overdue, due today, and in-progress topics at a glance\n"
+    "🤖 LARA — your study pipeline:\n\n"
+    "📋 Planning\n"
+    "/plan - See what's on your study agenda today\n"
+    "/view - Check where you stand: What's overdue, due today, and in progress\n\n"
+    "📚 Study pipeline\n"
+    "/pick - Choose a new topic to start learning\n"
+    "/discuss - Practice explaining a topic and get challenged on it\n"
+    "/mock - Run a mock interview on a topic\n"
+    "/done - Log a discuss or mock session and rate how well you did\n\n"
+    "🛠 Other\n"
     "/help - Show this command guide\n\n"
     "Notes:\n"
-    "- After /done, your next text reply is treated as weak areas notes\n"
-    "- Booking mock sessions always requires confirmation"
+    "- Study pipeline order: /pick → /discuss → /mock → /done\n"
+    "- Booking study blocks always requires confirmation"
 )
 
 

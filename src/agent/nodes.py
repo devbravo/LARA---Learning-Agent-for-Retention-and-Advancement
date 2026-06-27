@@ -1117,11 +1117,8 @@ def discuss_parser(state: AgentState) -> AgentState:
 
         topic_repository.set_topic_discussing(topic_id)
         session_count = session_repository.get_discuss_session_count(topic_id)
-        context = topic_repository.get_topic_context(topic_id)
-        topic_type = context.get("topic_type") or "conceptual"
-        weak_areas = _weak_area_keys(context.get("weak_areas"))
 
-        msg = messages.discuss_session_ready(topic_name, topic_type, weak_areas, session_count + 1)
+        msg = messages.discuss_session_ready(topic_name, session_count + 1)
         return {
             "messages": [msg],
             "pending_message_id": None,
@@ -1180,11 +1177,7 @@ def start_discuss(state: AgentState) -> AgentState:
 
         topic_repository.set_topic_discussing(topic_id)
         session_count = session_repository.get_discuss_session_count(topic_id)
-        context = topic_repository.get_topic_context(topic_id)
-        topic_type = context.get("topic_type") or "conceptual"
-        weak_areas = _weak_area_keys(context.get("weak_areas"))
-
-        msg = messages.discuss_session_ready(topic_name, topic_type, weak_areas, session_count + 1)
+        msg = messages.discuss_session_ready(topic_name, session_count + 1)
         return {
             "messages": [msg],
             "pending_message_id": None,
@@ -1217,10 +1210,13 @@ def notify_discuss_ready(state: AgentState) -> AgentState:
     """
     try:
         topic_name = state.get("current_topic_name") or "topic"
-        msg_id = _telegram.send_buttons(
-            messages.discuss_ready_prompt(topic_name),
-            messages.DISCUSS_ACTIVATION_BUTTONS,
+        is_reentry = state.get("current_topic_is_reentry") or False
+        prompt = (
+            messages.discuss_ready_reentry_prompt(topic_name)
+            if is_reentry
+            else messages.discuss_ready_prompt(topic_name)
         )
+        msg_id = _telegram.send_buttons(prompt, messages.DISCUSS_ACTIVATION_BUTTONS)
         return {"pending_message_id": msg_id, "messages": []}
 
     except Exception as e:
@@ -1472,10 +1468,7 @@ def confirm_graduate(state: AgentState) -> AgentState:
         if normalised == "do discuss first":
             topic_repository.set_topic_discussing(topic_id)
             session_count = session_repository.get_discuss_session_count(topic_id)
-            context = topic_repository.get_topic_context(topic_id)
-            topic_type = context.get("topic_type") or "conceptual"
-            weak_areas = _weak_area_keys(context.get("weak_areas"))
-            msg = messages.discuss_session_ready(topic_name, topic_type, weak_areas, session_count + 1)
+            msg = messages.discuss_session_ready(topic_name, session_count + 1)
             return {
                 "messages": [msg],
                 "pending_message_id": None,

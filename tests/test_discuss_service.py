@@ -357,10 +357,28 @@ class AssessDiscussReadinessTests(DiscussServiceTestCase):
     def test_ready_reentry_when_mock_history_exists(self) -> None:
         tid = self._insert_topic(name="T")
         self._insert_session(tid, mode="mock", teacher_quality=3)
-        result, msg, _ = self._call("T", 5, "{}")
+        mock_safe_invoke = MagicMock(return_value=True)
+        result, msg, btn = self._call("T", 5, "{}", mock_safe_invoke=mock_safe_invoke)
         self.assertEqual(result["recommendation"], "ready")
         self.assertIn("another", result["reason"].lower())
+        # Re-entry now routes through safe_chat_invoke, not a plain send_message.
+        mock_safe_invoke.assert_called_once()
+        _, call_state = mock_safe_invoke.call_args[0]
+        self.assertTrue(call_state["current_topic_is_reentry"])
+        msg.assert_not_called()
+        btn.assert_not_called()
+
+    def test_ready_reentry_falls_back_to_plain_message_when_chat_busy(self) -> None:
+        """When safe_chat_invoke returns False on a re-entry topic, fall back to
+        a plain readiness message — same behaviour as the fresh-topic path."""
+        tid = self._insert_topic(name="T")
+        self._insert_session(tid, mode="mock", teacher_quality=3)
+        mock_safe_invoke = MagicMock(return_value=False)
+        result, msg, btn = self._call("T", 5, "{}", mock_safe_invoke=mock_safe_invoke)
+        self.assertEqual(result["recommendation"], "ready")
+        mock_safe_invoke.assert_called_once()
         msg.assert_called_once()
+        btn.assert_not_called()
 
     def test_ready_multi_discuss_no_repeats_uses_count_in_reason(self) -> None:
         tid = self._insert_topic(name="T")

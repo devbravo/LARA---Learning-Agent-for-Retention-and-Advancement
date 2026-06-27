@@ -388,7 +388,7 @@ def test_rebooking_fires_when_not_already_booked():
     _, kwargs = mock_write.call_args
     assert kwargs["topic"] == "DSA - Arrays"
     assert f"{target_date.isoformat()}T08:00:00" in kwargs["start"]
-    assert f"{target_date.isoformat()}T09:00:00" in kwargs["end"]
+    assert f"{target_date.isoformat()}T08:30:00" in kwargs["end"]
 
 
 def test_rebooking_fires_for_each_unbooked_in_progress_topic():
@@ -499,7 +499,7 @@ def test_missing_study_busy_events_preserve_default_slot_order_for_unbooked_topi
     assert events[0]["summary"] == "[Study] LLMOps - MLflow"
     # Already-booked topics no longer consume a slot index, so LLMOps gets 08:00.
     assert f"{target_date.isoformat()}T08:00:00" in events[0]["start"]["dateTime"]
-    assert f"{target_date.isoformat()}T09:00:00" in events[0]["end"]["dateTime"]
+    assert f"{target_date.isoformat()}T08:30:00" in events[0]["end"]["dateTime"]
 
 
 def test_in_progress_study_slots_use_actual_booked_time_when_present():
@@ -542,16 +542,14 @@ def test_in_progress_study_slots_mix_actual_and_default_slots_chronologically():
 
     slots = build_in_progress_study_slots(["DSA - Arrays", "LLMOps - MLflow"], timed_events, target_date)
 
-    # duration_min now comes from the DB default (30) rather than a hardcoded 60.
-    # The fallback slot window is still 1 hour wide (08:00–09:00) but the
-    # displayed duration reflects the topic's actual default_duration_minutes.
+    # duration_min comes from the DB default (30 min). End time = start + 30 min.
     assert slots == [
         {
             "topic": "LLMOps - MLflow",
             # Already-booked topics no longer consume a slot index,
             # so LLMOps gets the earliest free slot (08:00).
             "start": "08:00",
-            "end": "09:00",
+            "end": "08:30",
             "duration_min": 30,
         },
         {
