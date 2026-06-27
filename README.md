@@ -198,7 +198,59 @@ Also reset and reseed with:
 rm db/learning.db && python -m src.infrastructure.db
 ```
 
-### 5. Register the Telegram webhook
+### 5. Neo4j knowledge graph (AuraDB)
+
+LARA uses a Neo4j AuraDB instance to store a concept graph: articles and notes link to `Concept` nodes, which eventually connect to `topics` for enriched study briefs.
+
+**Required environment variables** (add to `.env`):
+
+```env
+NEO4J_URI=neo4j+s://<instance-id>.databases.neo4j.io
+NEO4J_USERNAME=<username>
+NEO4J_PASSWORD=<password>
+NEO4J_DATABASE=<database-name>
+```
+
+These are available in the AuraDB console after provisioning a free-tier instance.
+
+**Apply the schema constraints** (idempotent, safe to re-run):
+
+```bash
+python migrations/migrate_neo4j_constraints.py
+```
+
+Or run the Cypher directly:
+
+```cypher
+CREATE CONSTRAINT concept_name_unique IF NOT EXISTS FOR (c:Concept) REQUIRE c.name IS UNIQUE;
+CREATE CONSTRAINT article_id_unique   IF NOT EXISTS FOR (a:Article) REQUIRE a.id   IS UNIQUE;
+CREATE CONSTRAINT note_id_unique      IF NOT EXISTS FOR (n:Note)    REQUIRE n.id   IS UNIQUE;
+```
+
+**MCP server (Claude Code integration)**
+
+The repo includes `.mcp.json` which configures the [neo4j-mcp-server](https://github.com/neo4j/mcp) so Claude Code can query and write the graph directly via `write-cypher` / `read-cypher` / `get-schema` tools.
+
+The MCP server reads credentials from environment variables — no credentials live in `.mcp.json`. Credentials are kept in `.claude/settings.local.json` (gitignored). To set up on a new machine:
+
+1. Copy your credentials into `.claude/settings.local.json` under the `env` key:
+
+```json
+{
+  "env": {
+    "NEO4J_URI": "neo4j+s://...",
+    "NEO4J_USERNAME": "...",
+    "NEO4J_PASSWORD": "...",
+    "NEO4J_DATABASE": "..."
+  }
+}
+```
+
+2. Restart Claude Code — the `neo4j` MCP server loads automatically (`.mcp.json` is already approved via `enableAllProjectMcpServers: true` in `.claude/settings.json`).
+
+To point at a different Neo4j instance, change only the four `NEO4J_*` values in `.claude/settings.local.json` and restart.
+
+### 6. Register the Telegram webhook
 
 ```bash
 curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-domain>/webhook&secret_token=<WEBHOOK_SECRET>"

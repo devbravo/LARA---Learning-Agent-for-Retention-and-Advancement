@@ -7,6 +7,8 @@ langchain-anthropic
 langgraph
 langgraph-checkpoint-sqlite
 mcp[cli]>=1.27.0
+neo4j
+neo4j-mcp-server
 python-dotenv
 python-telegram-bot
 pytz
