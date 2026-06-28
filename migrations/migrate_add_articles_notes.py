@@ -1,8 +1,13 @@
-"""Migration: add sources, articles, and notes tables to LARA's SQLite database.
+"""Migration: add sources, concept_notes, and notes tables to LARA's SQLite database.
 
 This migration is additive only. It does not modify, read from, or depend on
 the existing `topics` or `sessions` tables. Safe to run multiple times
 (uses CREATE TABLE IF NOT EXISTS).
+
+Note: an earlier revision of this migration created an `articles` table that
+has since been replaced by `concept_notes` to match the JIT pipeline design.
+If you have an `articles` table from the earlier revision, drop it manually
+before re-running.
 
 Usage:
     python migrate_add_articles_notes.py --db-path /path/to/lara.db
@@ -22,13 +27,12 @@ CREATE TABLE IF NOT EXISTS sources (
     site_url TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS articles (
+CREATE TABLE IF NOT EXISTS concept_notes (
     id INTEGER PRIMARY KEY,
-    source_id INTEGER REFERENCES sources(id),
-    url TEXT NOT NULL UNIQUE,
-    title TEXT NOT NULL,
-    summary TEXT NOT NULL,
-    fetched_at TEXT NOT NULL,
+    topic_keyword TEXT NOT NULL,
+    synthesized_text TEXT NOT NULL,
+    source_urls TEXT NOT NULL,
+    created_at TEXT NOT NULL,
     user_interest TEXT NOT NULL DEFAULT 'pending',
     CHECK (user_interest IN ('pending', 'confirmed', 'declined'))
 );
@@ -41,8 +45,6 @@ CREATE TABLE IF NOT EXISTS notes (
     summary TEXT NOT NULL,
     ingested_at TEXT NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_articles_url ON articles(url);
 """
 
 
@@ -84,7 +86,7 @@ def run_migration(db_path: str) -> None:
         conn.commit()
         print(f"Migration applied successfully to {db_path}")
 
-        for table in ("sources", "articles", "notes"):
+        for table in ("sources", "concept_notes", "notes"):
             count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
             print(f"  {table}: {count} rows")
 
