@@ -31,6 +31,7 @@ class KnowledgeClients:
     Attributes:
         anthropic: Anthropic API client for Claude calls.
         voyage: Voyage AI client; use with ``VOYAGE_MODEL`` for embeddings.
+        jina_api_key: Jina AI API key for search (s.jina.ai) and reader (r.jina.ai).
         db: SQLite connection via ``get_connection()`` (row_factory set).
         neo4j: Neo4j driver connected to the AuraDB instance.
         neo4j_database: Target Neo4j database name from ``NEO4J_DATABASE``.
@@ -49,6 +50,11 @@ class KnowledgeClients:
         if not voyage_key:
             raise EnvironmentError("Missing required env var: VOYAGE_API_KEY")
         self.voyage: voyageai.Client = voyageai.Client(api_key=voyage_key)
+
+        jina_key = os.environ.get("JINA_API_KEY")
+        if not jina_key:
+            raise EnvironmentError("Missing required env var: JINA_API_KEY")
+        self.jina_api_key: str = jina_key
 
         self.db: sqlite3.Connection = get_connection()
 
