@@ -45,6 +45,11 @@ _BOILERPLATE_DENSITY_THRESHOLD = 0.05
 # Only matched in the last third of the document by character position.
 # "further reading" is flagged but logged rather than silently stripped —
 # it sometimes contains genuinely useful author-curated links.
+# Some blogs (e.g. Eugene Yan) append a markdown anchor to every heading:
+#   ## References[](https://example.com/article/#references)
+# The optional tail group handles that without breaking plain headings.
+_HEADING_ANCHOR_TAIL = r"(?:\s*\[.*?\]\(.*?\))?\s*$"
+
 _TRAILING_BOILERPLATE_PATTERNS = re.compile(
     r"^#{1,3}\s+"
     r"(related\s+(articles?|posts?|reading)"
@@ -55,12 +60,14 @@ _TRAILING_BOILERPLATE_PATTERNS = re.compile(
     r"|acknowledgements?"
     r"|references"
     r"|further\s+reading"
-    r")\s*$",
+    r"|conclusion"
+    r"|closing"
+    r")" + _HEADING_ANCHOR_TAIL,
     re.IGNORECASE | re.MULTILINE,
 )
 
 _FURTHER_READING_PATTERN = re.compile(
-    r"^#{1,3}\s+further\s+reading\s*$",
+    r"^#{1,3}\s+further\s+reading" + _HEADING_ANCHOR_TAIL,
     re.IGNORECASE | re.MULTILINE,
 )
 
