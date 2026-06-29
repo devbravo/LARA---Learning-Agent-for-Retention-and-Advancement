@@ -66,7 +66,9 @@ _SUBMIT_TOOL = {
                     "Relationships ONLY between concepts in the 'concepts' list above. "
                     "Use RELATED_TO for symmetric associations, PREREQUISITE_OF when "
                     "concept A must be understood before concept B. "
-                    "Only propose a relationship where the source text actually supports it."
+                    "Be selective: only the most significant, non-obvious connections. "
+                    "Target fewer than half the concept count in total relationships. "
+                    "Only propose one where the source text genuinely supports it."
                 ),
             },
         },
@@ -78,17 +80,30 @@ _SYSTEM_PROMPT = """\
 You are a technical study note synthesizer. You receive one or more article extracts \
 on a topic and produce a single Concept Note for a learner preparing for a technical interview.
 
-Rules:
+Rules for the synthesized note:
 - Write ONE integrated guide. Actively cross-reference: where sources cover the same concept, \
 combine them into one explanation. Where they differ or complement each other, note it explicitly.
 - Be dense and precise — this is a study reference, not a summary for a general audience.
 - Code examples in the sources are useful grounding. Reference what they DEMONSTRATE \
 (the technique or pattern) rather than reproducing the full snippet verbatim.
-- Concept names must be at the level of techniques and ideas, never implementation \
-artifacts. "semantic chunking" is a concept; "RecursiveCharacterTextSplitter" is not.
-- Relationships must only connect concepts you yourself listed. Only RELATED_TO or \
-PREREQUISITE_OF. Only propose one where the source text genuinely supports it — \
-don't force relationships just because two concepts appear near each other.\
+
+Rules for concept extraction:
+- Technique/idea level only (e.g. "semantic chunking", "prefix caching"). \
+Never code identifiers, library class names, or function names.
+- Every concept must reflect something the source text actually discusses. \
+Do not blend, infer, or combine terminology from different concepts into \
+a new compound term that doesn't appear in (or isn't a clear paraphrase of) the source material.
+- Do NOT extract two concepts that are near-synonyms within the same note. \
+If two terms refer to the same technique, pick the more standard or widely-used name and use only that one. \
+Cross-note deduplication is handled elsewhere — here, avoid obvious same-note duplicates.
+
+Rules for proposed relationships:
+- Only between concepts in your own list. Only RELATED_TO or PREREQUISITE_OF.
+- Be selective: propose only the most significant or non-obvious relationships — \
+ones that would genuinely help a learner navigate from one concept to another. \
+Do NOT propose a relationship just because two concepts appear in the same section. \
+A reasonable target is fewer relationships than half the concept count.
+- Only propose a relationship where the source text actually supports a meaningful connection.\
 """
 
 

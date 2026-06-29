@@ -27,6 +27,11 @@ _RESULTS_PER_BLOG = 5
 # results with semantically shifted wording are being dropped.
 _DEFAULT_SIMILARITY_THRESHOLD = 0.45
 
+# All results that pass the relevance filter are forwarded to synthesis.
+# Raising this wastes nothing — the filter already validated them.
+# Lowering it discards validated results without a good reason.
+TOP_N_FOR_SYNTHESIS = 8
+
 
 def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
     """Search each configured blog for the given topic via Jina AI search.
@@ -156,7 +161,9 @@ def filter_relevant_results(
     return survivors
 
 
-def select_top_results(results: list[dict], n: int = 3) -> list[dict]:
+def select_top_results(
+    results: list[dict], n: int = TOP_N_FOR_SYNTHESIS
+) -> list[dict]:
     """Return the first ``n`` results from a filtered, sorted list.
 
     Intended to operate on the output of ``filter_relevant_results``, which
@@ -165,7 +172,7 @@ def select_top_results(results: list[dict], n: int = 3) -> list[dict]:
 
     Args:
         results: Output of ``filter_relevant_results``.
-        n: Number of results to keep (default 3).
+        n: Number of results to keep (default ``TOP_N_FOR_SYNTHESIS``).
 
     Returns:
         Sublist of the first ``n`` entries, or fewer if the list is shorter.

@@ -6,6 +6,7 @@ No database writes here.
 """
 
 import logging
+import re
 
 import requests
 
@@ -39,6 +40,74 @@ _BOILERPLATE_TERMS = [
 # Not validated — tune up if off-topic boilerplate slips through,
 # tune down if real articles about privacy/cookies get dropped.
 _BOILERPLATE_DENSITY_THRESHOLD = 0.05
+
+# Markdown heading patterns that signal the start of trailing boilerplate.
+# Only matched in the last third of the document by character position.
+# "further reading" is flagged but logged rather than silently stripped —
+# it sometimes contains genuinely useful author-curated links.
+_TRAILING_BOILERPLATE_PATTERNS = re.compile(
+    r"^#{1,3}\s+"
+    r"(related\s+(articles?|posts?|reading)"
+    r"|you\s+(might|may)\s+also\s+like"
+    r"|read\s+(next|more)"
+    r"|subscribe"
+    r"|about\s+the\s+author"
+    r"|acknowledgements?"
+    r"|references"
+    r"|further\s+reading"
+    r")\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+_FURTHER_READING_PATTERN = re.compile(
+    r"^#{1,3}\s+further\s+reading\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def clean_trailing_boilerplate(text: str) -> str:
+    """Remove well-known trailing boilerplate sections from extracted Markdown.
+
+    Only looks in the last third of the document by character position —
+    a heading matching one of the boilerplate patterns near the top or middle
+    of an article is unlikely to actually be trailing boilerplate, and we
+    don't want to truncate real content over a coincidental heading name.
+
+    Does NOT strip inline links or citations within prose paragraphs —
+    only structural ``#`` headings that open a whole trailing section.
+
+    ``## Further Reading`` is borderline: author-curated links can be useful
+    content. This function strips it but logs a warning so it can be reviewed.
+
+    Args:
+        text: Extracted Markdown text, already validated by ``is_extraction_valid``.
+
+    Returns:
+        Text with trailing boilerplate section(s) removed, or the original
+        text unchanged if no boilerplate heading was found.
+    """
+    total_len = len(text)
+    search_start = total_len * 2 // 3  # only scan last third
+
+    for match in _TRAILING_BOILERPLATE_PATTERNS.finditer(text, search_start):
+        if _FURTHER_READING_PATTERN.match(match.group()):
+            logger.warning(
+                "Stripping '## Further Reading' section at char %d/%d — "
+                "may contain useful author-curated links; review if synthesis quality drops",
+                match.start(),
+                total_len,
+            )
+        truncated = text[: match.start()].rstrip()
+        logger.debug(
+            "clean_trailing_boilerplate: stripped %r at char %d/%d (%d chars removed)",
+            match.group().strip(),
+            match.start(),
+            total_len,
+            total_len - len(truncated),
+        )
+        return truncated
+
+    return text
 
 
 def is_extraction_valid(text: str) -> tuple[bool, str]:
@@ -111,11 +180,11 @@ def extract_clean_text(url: str, clients: KnowledgeClients) -> str | None:
 def extract_top_results(
     results: list[dict], clients: KnowledgeClients
 ) -> list[dict]:
-    """Extract and validate clean text for each result in the list.
+    """Extract, validate, and clean text for each result in the list.
 
-    Skips any URL where extraction fails or ``is_extraction_valid`` rejects
-    the content (logs a warning in both cases). Results that pass are returned
-    with a new ``content`` key added.
+    For each URL: fetch → validate (``is_extraction_valid``) → strip trailing
+    boilerplate (``clean_trailing_boilerplate``) → add to output.
+    Skips any URL where extraction fails or validation rejects the content.
 
     Args:
         results: List of result dicts from ``select_top_results``, each
@@ -138,5 +207,6 @@ def extract_top_results(
         if not valid:
             logger.warning("Skipping %s — invalid content: %s", url, reason)
             continue
+        content = clean_trailing_boilerplate(content)
         extracted.append({**item, "content": content})
     return extracted
