@@ -8,12 +8,12 @@ No database writes happen here.
 Dev runner:
     python -m src.knowledge.synthesize "context management"
 """
-
-import json
 import logging
 import sys
 
 from src.knowledge.clients import KnowledgeClients
+from anthropic.types import TextBlockParam, ToolParam, CacheControlEphemeralParam, ToolChoiceParam, MessageParam
+from anthropic.types.content_block import ToolUseBlock
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ _MAX_TOKENS = 4096
 
 # Tool definition for structured output — forces Claude to return
 # exactly these three fields with no free-form preamble.
-_SUBMIT_TOOL = {
+_SUBMIT_TOOL: ToolParam = {
     "name": "submit_concept_note",
     "description": (
         "Submit the synthesized concept note, extracted concept names, "
@@ -74,6 +74,7 @@ _SUBMIT_TOOL = {
         },
         "required": ["synthesized_note", "concepts", "proposed_relationships"],
     },
+    "cache_control": {"type": "ephemeral"}
 }
 
 _SYSTEM_PROMPT = """\
@@ -153,17 +154,23 @@ def synthesize_concept_note(
     response = clients.anthropic.messages.create(
         model=_MODEL,
         max_tokens=_MAX_TOKENS,
-        system=_SYSTEM_PROMPT,
+        system=[
+            TextBlockParam(
+                type="text",
+                text=_SYSTEM_PROMPT,
+                cache_control=CacheControlEphemeralParam(type="ephemeral")
+            )
+        ],
         tools=[_SUBMIT_TOOL],
-        tool_choice={"type": "tool", "name": "submit_concept_note"},
-        messages=[{"role": "user", "content": user_message}],
+        tool_choice=ToolChoiceParam(type="tool", name= "submit_concept_note"),
+        messages=[MessageParam(role= "user", content= user_message)],
     )
 
     tool_block = next(
         (b for b in response.content if b.type == "tool_use"),
         None,
     )
-    if tool_block is None:
+    if tool_block is None or not isinstance(tool_block, ToolUseBlock):
         raise RuntimeError(
             f"Claude did not call submit_concept_note — stop_reason={response.stop_reason}, "
             f"content={response.content!r}"
