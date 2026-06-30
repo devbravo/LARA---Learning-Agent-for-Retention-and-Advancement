@@ -151,7 +151,7 @@ def select_top_results(
     # the Voyage reranker rejects empty strings.
     pairs: list[tuple[dict, str]] = []
     for r in raw_results:
-        text = r.get("snippet") or r.get("content") or r.get("title", "")
+        text = r.get("content") or r.get("snippet") or r.get("title", "")
         if text:
             pairs.append((r, text))
 
