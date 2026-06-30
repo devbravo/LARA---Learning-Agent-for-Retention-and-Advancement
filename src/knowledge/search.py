@@ -28,6 +28,18 @@ TOP_N_FOR_SYNTHESIS = 8
 # Not validated — tune up if off-topic results slip through.
 _RERANK_THRESHOLD = 0.45
 
+# Patterns that indicate a URL is a CMS artifact, tag page, or raw asset, not an article.
+_EXCLUDED_URL_PATTERNS = [
+    "/attachment/",
+    "/wp-content/",
+    "/tag/",
+    "/category/",
+    "/author/",
+    ".png",
+    ".jpg",
+    ".pdf"
+]
+
 
 def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
     """Search each configured blog for the given topic via Jina AI search.
@@ -78,7 +90,14 @@ def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
             per_blog.append([])
             continue
 
-        results = data.get("data", [])[:_RESULTS_PER_BLOG]
+        raw_results = data.get("data", [])[:_RESULTS_PER_BLOG]
+
+        # Filter out junk URLs before saving the result
+        clean_results = [
+            item for item in raw_results
+            if not any(bad in item.get("url", "").lower() for bad in _EXCLUDED_URL_PATTERNS)
+        ][:_RESULTS_PER_BLOG]
+
         per_blog.append([
             {
                 "title": item.get("title", ""),
@@ -86,7 +105,7 @@ def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
                 "snippet": item.get("description", ""),
                 "blog": blog_name,
             }
-            for item in results
+            for item in clean_results
         ])
 
     merged = [
