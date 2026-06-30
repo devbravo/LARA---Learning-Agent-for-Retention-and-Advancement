@@ -21,6 +21,7 @@ from src.infrastructure.db import get_connection
 load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
 VOYAGE_MODEL = "voyage-4-lite"
+VOYAGE_RERANK_MODEL = "rerank-2"
 
 
 class KnowledgeClients:

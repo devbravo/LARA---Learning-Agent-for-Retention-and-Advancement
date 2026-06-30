@@ -1,8 +1,11 @@
-"""Concept note synthesis via Claude API.
+"""Concept note synthesis via Claude API — Map-Reduce architecture.
+
+Map step: each article is independently distilled by Haiku into dense
+technical bullet points (cheap, parallel, fast).
+Reduce step: Sonnet synthesizes across all distilled extracts into a
+single structured Concept Note via tool use.
 
 The ONE place in the knowledge pipeline that calls the LLM.
-Accepts already-extracted article texts; returns a structured dict
-with the synthesized note, concept names, and proposed relationships.
 No database writes happen here.
 
 Dev runner:
@@ -10,17 +13,49 @@ Dev runner:
 """
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from anthropic.types import (
+    CacheControlEphemeralParam,
+    MessageParam,
+    TextBlockParam,
+    ToolChoiceToolParam,
+    ToolParam,
+)
+from anthropic.types.content_block import ToolUseBlock
 
 from src.knowledge.clients import KnowledgeClients
-from anthropic.types import TextBlockParam, ToolParam, CacheControlEphemeralParam, ToolChoiceToolParam, MessageParam
-from anthropic.types.content_block import ToolUseBlock
 
 logger = logging.getLogger(__name__)
 
+# Map step: cheap, parallel extraction per article.
+_MAP_MODEL = "claude-haiku-4-5-20251001"
+_MAP_MAX_TOKENS = 2048
+
+# Reduce step: structured synthesis across all distilled extracts.
 _MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 4096
 
-# Tool definition for structured output — forces Claude to return
+_MAP_SYSTEM_PROMPT = (
+    "You are an expert Machine Learning Infrastructure Engineer. "
+    "Your task is rigid information extraction. "
+    "Do not write introductory or concluding remarks. "
+    "Do not 'summarize'. Extract dense, technical facts."
+)
+
+_MAP_USER_TEMPLATE = (
+    "Extract the core engineering concepts related to the topic: '{topic}' "
+    "from the following article. Follow these strict rules:\n"
+    "1) Focus on the 'How' and 'Why': Extract specific algorithms, architecture "
+    "patterns, latency/cost trade-offs, and scaling bottlenecks.\n"
+    "2) Ignore the fluff: Completely ignore author bios, generic introductions, "
+    "marketing speak, and 'Further Reading' links.\n"
+    "3) Format: Output ONLY a Markdown list of dense bullet points. "
+    "Use sub-bullets for technical depth.\n\n"
+    "Article Text:\n{content}"
+)
+
+# Tool definition for structured output — forces Sonnet to return
 # exactly these three fields with no free-form preamble.
 _SUBMIT_TOOL: ToolParam = {
     "name": "submit_concept_note",
@@ -74,12 +109,13 @@ _SUBMIT_TOOL: ToolParam = {
         },
         "required": ["synthesized_note", "concepts", "proposed_relationships"],
     },
-    "cache_control": {"type": "ephemeral"}
+    "cache_control": {"type": "ephemeral"},
 }
 
 _SYSTEM_PROMPT = """\
-You are a technical study note synthesizer. You receive one or more article extracts \
-on a topic and produce a single Concept Note for a learner preparing for a technical interview.
+You are a technical study note synthesizer. You receive one or more distilled article \
+extracts on a topic and produce a single Concept Note for a learner preparing for a \
+technical interview.
 
 Rules for the synthesized note:
 - Write ONE integrated guide. Actively cross-reference: where sources cover the same concept, \
@@ -108,6 +144,41 @@ A reasonable target is fewer relationships than half the concept count.
 """
 
 
+def _map_article(topic: str, content: str, clients: KnowledgeClients) -> dict:
+    """Distill a single article into dense technical bullet points via Haiku.
+
+    This is the Map step of the Map-Reduce pipeline. Runs in parallel across
+    all articles before the Reduce (Sonnet) step sees any of them.
+
+    Args:
+        topic: The search topic used to focus extraction.
+        content: Raw article text from ``extract_top_results``.
+        clients: Shared client container; ``clients.anthropic`` is used.
+
+    Returns:
+        Dict with keys:
+        - ``text`` (str): Distilled Markdown bullet points.
+        - ``input_tokens`` (int): Haiku prompt tokens consumed.
+        - ``output_tokens`` (int): Haiku response tokens consumed.
+    """
+    response = clients.anthropic.messages.create(
+        model=_MAP_MODEL,
+        max_tokens=_MAP_MAX_TOKENS,
+        system=_MAP_SYSTEM_PROMPT,
+        messages=[
+            MessageParam(
+                role="user",
+                content=_MAP_USER_TEMPLATE.format(topic=topic, content=content),
+            )
+        ],
+    )
+    return {
+        "text": response.content[0].text,
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+    }
+
+
 def synthesize_concept_note(
     topic: str,
     extracted_texts: list[dict],
@@ -115,8 +186,13 @@ def synthesize_concept_note(
 ) -> dict:
     """Synthesize a Concept Note from one or more extracted article texts.
 
-    Makes ONE Claude API call (tool use) that returns a synthesized study note,
-    a list of concept names, and proposed relationships between those concepts.
+    Uses a Map-Reduce architecture:
+    1. **Map**: Each article is independently distilled by Haiku into dense
+       technical bullet points. All map calls run in parallel via
+       ``ThreadPoolExecutor``.
+    2. **Reduce**: Sonnet receives the combined distilled extracts and produces
+       a structured Concept Note via tool use.
+
     No database writes happen here.
 
     Args:
@@ -132,23 +208,47 @@ def synthesize_concept_note(
         - ``proposed_relationships`` (list[dict]): Each dict has
           ``from``, ``type`` (RELATED_TO | PREREQUISITE_OF), ``to``.
         - ``source_urls`` (list[str]): URLs of the articles used.
-        - ``input_tokens`` (int): Tokens consumed by the prompt.
-        - ``output_tokens`` (int): Tokens in Claude's response.
+        - ``input_tokens`` (int): Total tokens across both Haiku and Sonnet calls.
+        - ``output_tokens`` (int): Total tokens across both Haiku and Sonnet calls.
     """
     if not extracted_texts:
         raise ValueError("extracted_texts is empty — nothing to synthesize")
 
-    source_blocks = []
-    for i, item in enumerate(extracted_texts, 1):
-        source_blocks.append(
-            f"--- Source {i}: {item['url']} ---\n{item['content']}\n---"
+    # --- Map step: distil each article in parallel ---
+    n = len(extracted_texts)
+    mapped: list[dict | None] = [None] * n
+
+    with ThreadPoolExecutor(max_workers=n) as executor:
+        futures = {
+            executor.submit(_map_article, topic, item["content"], clients): i
+            for i, item in enumerate(extracted_texts)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            mapped[idx] = future.result()
+
+    total_input_tokens = sum(m["input_tokens"] for m in mapped)
+    total_output_tokens = sum(m["output_tokens"] for m in mapped)
+
+    logger.info(
+        "Map step complete: %d articles, %d in / %d out tokens (Haiku)",
+        n,
+        total_input_tokens,
+        total_output_tokens,
+    )
+
+    # --- Reduce step: synthesize across all distilled extracts ---
+    distilled_blocks = []
+    for i, (item, result) in enumerate(zip(extracted_texts, mapped), 1):
+        distilled_blocks.append(
+            f"--- Distilled Source {i}: {item['url']} ---\n{result['text']}\n"
         )
 
     user_message = (
         f"Topic: {topic}\n\n"
-        f"{len(extracted_texts)} source article(s):\n\n"
-        + "\n\n".join(source_blocks)
-        + "\n\nSynthesize a Concept Note using the submit_concept_note tool."
+        f"{n} distilled source article(s):\n\n"
+        + "\n".join(distilled_blocks)
+        + "\nSynthesize a Concept Note using the submit_concept_note tool."
     )
 
     response = clients.anthropic.messages.create(
@@ -158,12 +258,21 @@ def synthesize_concept_note(
             TextBlockParam(
                 type="text",
                 text=_SYSTEM_PROMPT,
-                cache_control=CacheControlEphemeralParam(type="ephemeral")
+                cache_control=CacheControlEphemeralParam(type="ephemeral"),
             )
         ],
         tools=[_SUBMIT_TOOL],
-        tool_choice=ToolChoiceToolParam(type="tool", name= "submit_concept_note"),
-        messages=[MessageParam(role= "user", content= user_message)],
+        tool_choice=ToolChoiceToolParam(type="tool", name="submit_concept_note"),
+        messages=[MessageParam(role="user", content=user_message)],
+    )
+
+    total_input_tokens += response.usage.input_tokens
+    total_output_tokens += response.usage.output_tokens
+
+    logger.info(
+        "Reduce step complete: %d in / %d out tokens (Sonnet)",
+        response.usage.input_tokens,
+        response.usage.output_tokens,
     )
 
     tool_block = next(
@@ -183,19 +292,14 @@ def synthesize_concept_note(
         "concepts": result["concepts"],
         "proposed_relationships": result["proposed_relationships"],
         "source_urls": [item["url"] for item in extracted_texts],
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
+        "input_tokens": total_input_tokens,
+        "output_tokens": total_output_tokens,
     }
 
 
 if __name__ == "__main__":
-    from src.knowledge.extract import extract_clean_text, is_extraction_valid
-    from src.knowledge.search import (
-        filter_relevant_results,
-        search_blogs_for_topic,
-        select_top_results,
-        _DEFAULT_SIMILARITY_THRESHOLD,
-    )
+    from src.knowledge.extract import is_extraction_valid
+    from src.knowledge.search import search_blogs_for_topic, select_top_results
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
@@ -204,48 +308,46 @@ if __name__ == "__main__":
 
     clients = KnowledgeClients()
     try:
-        # Search → filter → select
+        # Search → rerank → select
         all_results = search_blogs_for_topic(topic, clients)
-        scored = filter_relevant_results(all_results, topic, clients, threshold=0.0)
-        survivors = [r for r in scored if r["similarity"] >= _DEFAULT_SIMILARITY_THRESHOLD]
-        top = select_top_results(survivors)
+        top = select_top_results(topic, all_results, clients)
 
-        print(f"Relevance filter: {len(survivors)}/{len(all_results)} passed threshold {_DEFAULT_SIMILARITY_THRESHOLD}")
+        print(f"Reranker: {len(top)}/{len(all_results)} passed")
         for r in top:
-            print(f"  {r['similarity']:.4f}  [{r['blog']}] {r['title']}")
+            print(f"  {r['relevance_score']:.4f}  [{r['blog']}] {r['title']}")
 
-        # Extract + validate
+        # Validate pre-fetched content (no r.jina.ai call needed — content
+        # already arrived in the search response payload)
         extracted = []
         for item in top:
-            content = extract_clean_text(item["url"], clients)
-            if content is None:
-                print(f"  SKIP (fetch failed): {item['url']}")
-                continue
+            content = item.get("content", "")
             ok, reason = is_extraction_valid(content)
             if not ok:
                 print(f"  SKIP (invalid: {reason}): {item['url']}")
                 continue
-            extracted.append({**item, "content": content})
+            extracted.append(item)
 
         if not extracted:
             print("No valid extractions — cannot synthesize.")
             sys.exit(1)
 
-        print(f"\nExtracting: {len(extracted)} article(s) for synthesis")
+        print(f"\nArticles for synthesis: {len(extracted)}")
         for e in extracted:
             print(f"  {len(e['content']):,} chars — {e['url']}")
 
-        # Synthesize
-        print(f"\nCalling Claude ({_MODEL})…\n")
+        # Map-Reduce synthesis
+        print(f"\nMap step  → {_MAP_MODEL} × {len(extracted)} articles (parallel)…")
+        print(f"Reduce step → {_MODEL}…\n")
         result = synthesize_concept_note(topic, extracted, clients)
 
+        # Cost breakdown: Haiku at $0.80/$4 per M, Sonnet at $3/$15 per M.
+        # We only have totals here, so report combined with a note.
         cost_note = (
-            f"Tokens: {result['input_tokens']:,} in / {result['output_tokens']:,} out"
-            f"  (~${result['input_tokens']/1_000_000*3 + result['output_tokens']/1_000_000*15:.4f} USD)"
+            f"Tokens (combined): {result['input_tokens']:,} in / {result['output_tokens']:,} out"
         )
 
         print(f"{'═'*60}")
-        print(f"SYNTHESIZED NOTE")
+        print("SYNTHESIZED NOTE")
         print(f"{'═'*60}")
         print(result["synthesized_note"])
 

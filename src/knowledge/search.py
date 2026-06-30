@@ -12,25 +12,33 @@ import sys
 from itertools import zip_longest
 from urllib.parse import urlparse
 
-import numpy as np
 import requests
 
-from src.knowledge.clients import KnowledgeClients
+from src.knowledge.clients import KnowledgeClients, VOYAGE_RERANK_MODEL
 
 logger = logging.getLogger(__name__)
 
 _JINA_SEARCH_URL = "https://s.jina.ai/"
 _RESULTS_PER_BLOG = 5
 
-# Starting threshold — not validated, tuned by eye on early test runs.
-# Raise if off-topic results are slipping through; lower if relevant
-# results with semantically shifted wording are being dropped.
-_DEFAULT_SIMILARITY_THRESHOLD = 0.45
-
-# All results that pass the relevance filter are forwarded to synthesis.
-# Raising this wastes nothing — the filter already validated them.
-# Lowering it discards validated results without a good reason.
+# All results that pass the reranker threshold are forwarded to synthesis.
 TOP_N_FOR_SYNTHESIS = 8
+
+# Minimum reranker relevance score to keep a result.
+# Not validated — tune up if off-topic results slip through.
+_RERANK_THRESHOLD = 0.45
+
+# Patterns that indicate a URL is a CMS artifact, tag page, or raw asset, not an article.
+_EXCLUDED_URL_PATTERNS = [
+    "/attachment/",
+    "/wp-content/",
+    "/tag/",
+    "/category/",
+    "/author/",
+    ".png",
+    ".jpg",
+    ".pdf"
+]
 
 
 def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
@@ -82,15 +90,23 @@ def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
             per_blog.append([])
             continue
 
-        results = data.get("data", [])[:_RESULTS_PER_BLOG]
+        raw_results = data.get("data", [])[:_RESULTS_PER_BLOG]
+
+        # Filter out junk URLs before saving the result
+        clean_results = [
+            item for item in raw_results
+            if not any(bad in item.get("url", "").lower() for bad in _EXCLUDED_URL_PATTERNS)
+        ][:_RESULTS_PER_BLOG]
+
         per_blog.append([
             {
                 "title": item.get("title", ""),
                 "url": item.get("url", ""),
                 "snippet": item.get("description", ""),
+                "content": item.get("content", ""),
                 "blog": blog_name,
             }
-            for item in results
+            for item in clean_results
         ])
 
     merged = [
@@ -102,93 +118,68 @@ def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
     return merged
 
 
-def filter_relevant_results(
-    results: list[dict],
-    topic: str,
+def select_top_results(
+    query: str,
+    raw_results: list[dict],
     clients: KnowledgeClients,
-    threshold: float = _DEFAULT_SIMILARITY_THRESHOLD,
 ) -> list[dict]:
-    """Filter search results by embedding similarity to the topic.
+    """Rerank raw search results and return the top relevant ones.
 
-    Embeds the topic and each result's (title + snippet) in two batch calls,
-    then computes cosine similarity. Results below ``threshold`` are dropped;
-    survivors are returned sorted by similarity descending.
+    Uses Voyage's cross-encoder reranker (``rerank-2``) which jointly scores
+    the query against each document — more accurate than bi-encoder cosine
+    similarity because it sees both texts together rather than independently.
 
-    Uses Voyage ``voyage-4-lite`` embeddings — NOT an LLM judgment call.
-    The Claude-only-in-synthesis convention is preserved.
-
-    .. warning::
-        ``threshold=0.5`` is a starting guess, not a validated value.
-        Check the printed scores after each real run and adjust if
-        off-topic results slip through or relevant ones are dropped.
+    Documents are built from each result's ``snippet`` if available, falling
+    back to ``content`` for already-extracted results.
 
     Args:
-        results: Output of ``search_blogs_for_topic``.
-        topic: The original search topic string; embedded once as the query.
+        query: The original search topic string.
+        raw_results: Output of ``search_blogs_for_topic``.
         clients: Shared client container; ``clients.voyage`` is used.
-        threshold: Minimum cosine similarity to keep a result (default 0.5).
 
     Returns:
-        Filtered and similarity-sorted list of result dicts, each with a
-        ``similarity`` key (float) added. May be empty if nothing passes.
+        Results with ``relevance_score`` added, filtered to >= ``_RERANK_THRESHOLD``
+        and limited to ``TOP_N_FOR_SYNTHESIS``, sorted by score descending.
+        May be empty if nothing clears the threshold.
     """
-    if not results:
+    if not raw_results:
         return []
 
-    from src.knowledge.clients import VOYAGE_MODEL
+    # Build (original_result, document_text) pairs.
+    # Snippet is preferred; title is the fallback for results where Jina
+    # returned no description. Results with no text at all are skipped —
+    # the Voyage reranker rejects empty strings.
+    pairs: list[tuple[dict, str]] = []
+    for r in raw_results:
+        text = r.get("content") or r.get("snippet") or r.get("title", "")
+        if text:
+            pairs.append((r, text))
 
-    # Embed topic + all result texts in two batch calls (not N+1 individual calls).
-    topic_vec = np.array(
-        clients.voyage.embed([topic], model=VOYAGE_MODEL).embeddings[0]
+    if not pairs:
+        return []
+
+    originals, documents = zip(*pairs)
+
+    rerank_response = clients.voyage.rerank(
+        query=query,
+        documents=list(documents),
+        model=VOYAGE_RERANK_MODEL,
+        top_k=TOP_N_FOR_SYNTHESIS,
     )
 
-    texts = [f"{r['title']} {r['snippet']}" for r in results]
-    result_vecs = np.array(
-        clients.voyage.embed(texts, model=VOYAGE_MODEL).embeddings
-    )
-
-    # Cosine similarity: dot product of unit vectors.
-    topic_norm = topic_vec / np.linalg.norm(topic_vec)
-    result_norms = result_vecs / np.linalg.norm(result_vecs, axis=1, keepdims=True)
-    scores = result_norms @ topic_norm
-
-    scored = [
-        {**result, "similarity": float(score)}
-        for result, score in zip(results, scores)
+    results = [
+        {**originals[item.index], "relevance_score": item.relevance_score}
+        for item in rerank_response.results
+        if item.relevance_score >= _RERANK_THRESHOLD
     ]
-    survivors = [r for r in scored if r["similarity"] >= threshold]
-    survivors.sort(key=lambda r: r["similarity"], reverse=True)
-    return survivors
-
-
-def select_top_results(
-    results: list[dict], n: int = TOP_N_FOR_SYNTHESIS
-) -> list[dict]:
-    """Return the first ``n`` results from a filtered, sorted list.
-
-    Intended to operate on the output of ``filter_relevant_results``, which
-    already sorts by similarity descending. Taking the head picks the most
-    relevant survivors across blogs.
-
-    Args:
-        results: Output of ``filter_relevant_results``.
-        n: Number of results to keep (default ``TOP_N_FOR_SYNTHESIS``).
-
-    Returns:
-        Sublist of the first ``n`` entries, or fewer if the list is shorter.
-    """
-    return results[:n]
+    return results
 
 
 if __name__ == "__main__":
-    from src.knowledge.extract import extract_top_results
-
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     topic = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "context management"
-    threshold = _DEFAULT_SIMILARITY_THRESHOLD
-    print(f"\nTopic    : {topic!r}")
-    print(f"Threshold: {threshold}\n")
+    print(f"\nTopic: {topic!r}\n")
 
     clients = KnowledgeClients()
     try:
@@ -204,51 +195,35 @@ if __name__ == "__main__":
             snippet = r['snippet'][:100] + ("…" if len(r['snippet']) > 100 else "")
             print(f"     {snippet}")
 
-        # Filter with scores — show ALL candidates including filtered-out ones.
-        from src.knowledge.search import filter_relevant_results
-        scored = filter_relevant_results(all_results, topic, clients, threshold=0.0)
+        top = select_top_results(topic, all_results, clients)
 
         print(f"\n{'─'*60}")
-        print(f"Similarity scores (threshold={threshold})")
-        print(f"{'─'*60}")
-        for r in scored:
-            verdict = "PASS" if r["similarity"] >= threshold else "FAIL"
-            print(f"  [{verdict}] {r['similarity']:.4f}  [{r['blog']}] {r['title']}")
-
-        survivors = [r for r in scored if r["similarity"] >= threshold]
-        top = select_top_results(survivors)
-
-        print(f"\n{'─'*60}")
-        print(f"Top {len(top)} after filter (of {len(survivors)} survivors)")
+        print(f"Reranked: {len(top)} passed threshold {_RERANK_THRESHOLD} (cap {TOP_N_FOR_SYNTHESIS})")
         print(f"{'─'*60}")
         for i, r in enumerate(top, 1):
-            print(f"[{i}] {r['similarity']:.4f}  [{r['blog']}] {r['title']}")
+            print(f"[{i}] {r['relevance_score']:.4f}  [{r['blog']}] {r['title']}")
             print(f"    {r['url']}")
 
         if not top:
             print("No results passed the threshold — nothing to extract.")
         else:
-            from src.knowledge.extract import extract_clean_text, is_extraction_valid
+            from src.knowledge.extract import is_extraction_valid
 
             print(f"\n{'─'*60}")
             print(f"Extraction + validation ({len(top)} candidates)")
             print(f"{'─'*60}")
             valid_items = []
             for item in top:
-                url = item["url"]
                 print(f"\n  [{item['blog']}] {item['title']}")
-                print(f"  {url}")
-                content = extract_clean_text(url, clients)
-                if content is None:
-                    print(f"  SKIP — fetch failed")
-                    continue
+                print(f"  {item['url']}")
+                content = item["content"]
                 ok, reason = is_extraction_valid(content)
                 if not ok:
                     print(f"  SKIP — invalid: {reason}")
                     print(f"  (first 200 chars: {content[:200]!r})")
                 else:
                     print(f"  PASS — {len(content):,} chars")
-                    valid_items.append({**item, "content": content})
+                    valid_items.append(item)
 
             print(f"\n{'─'*60}")
             print(f"Final: {len(valid_items)}/{len(top)} passed validation")
@@ -256,8 +231,7 @@ if __name__ == "__main__":
             for item in valid_items:
                 print(f"\n[{item['blog']}] {item['title']}")
                 print(f"URL   : {item['url']}")
+                print(f"Score : {item['relevance_score']:.4f}")
                 print(f"Chars : {len(item['content'])}")
-                print(f"Preview:\n{item['content'].strip()}")
-                print()
     finally:
         clients.close()
