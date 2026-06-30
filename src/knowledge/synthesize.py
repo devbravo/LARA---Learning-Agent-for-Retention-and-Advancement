@@ -191,10 +191,8 @@ def synthesize_concept_note(
 if __name__ == "__main__":
     from src.knowledge.extract import extract_clean_text, is_extraction_valid
     from src.knowledge.search import (
-        filter_relevant_results,
         search_blogs_for_topic,
         select_top_results,
-        _DEFAULT_SIMILARITY_THRESHOLD,
     )
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
@@ -204,15 +202,13 @@ if __name__ == "__main__":
 
     clients = KnowledgeClients()
     try:
-        # Search → filter → select
+        # Search → rerank → select
         all_results = search_blogs_for_topic(topic, clients)
-        scored = filter_relevant_results(all_results, topic, clients, threshold=0.0)
-        survivors = [r for r in scored if r["similarity"] >= _DEFAULT_SIMILARITY_THRESHOLD]
-        top = select_top_results(survivors)
+        top = select_top_results(topic, all_results, clients)
 
-        print(f"Relevance filter: {len(survivors)}/{len(all_results)} passed threshold {_DEFAULT_SIMILARITY_THRESHOLD}")
+        print(f"Reranker: {len(top)}/{len(all_results)} passed")
         for r in top:
-            print(f"  {r['similarity']:.4f}  [{r['blog']}] {r['title']}")
+            print(f"  {r['relevance_score']:.4f}  [{r['blog']}] {r['title']}")
 
         # Extract + validate
         extracted = []
