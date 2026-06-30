@@ -160,6 +160,12 @@ def is_extraction_valid(text: str) -> tuple[bool, str]:
 def extract_clean_text(url: str, clients: KnowledgeClients) -> str | None:
     """Fetch and return clean Markdown text for a single URL via Jina Reader.
 
+    .. deprecated::
+        Jina Search (``s.jina.ai``) already returns full article content in
+        the ``content`` field of each search result. Calling ``r.jina.ai``
+        afterwards downloads the same page twice. Use ``item["content"]``
+        from the search payload instead.
+
     Args:
         url: The article URL to extract.
         clients: Shared client container; ``clients.jina_api_key`` is used.
@@ -170,6 +176,10 @@ def extract_clean_text(url: str, clients: KnowledgeClients) -> str | None:
     headers = {
         "Authorization": f"Bearer {clients.jina_api_key}",
         "Accept": "text/plain",
+        "X-Target-Selector": "article, main",
+        "X-Remove-Selector": "footer, nav, aside",
+        # Fails the request if the page is larger than ~20,000 tokens
+        "X-Token-Budget": "20000"
     }
     try:
         resp = requests.get(
@@ -188,6 +198,11 @@ def extract_top_results(
     results: list[dict], clients: KnowledgeClients
 ) -> list[dict]:
     """Extract, validate, and clean text for each result in the list.
+
+    .. deprecated::
+        The live pipeline no longer calls this. Content is pre-fetched in the
+        Jina Search payload (``item["content"]``) and validated inline.
+        Kept only as a fallback for any out-of-band callers.
 
     For each URL: fetch → validate (``is_extraction_valid``) → strip trailing
     boilerplate (``clean_trailing_boilerplate``) → add to output.

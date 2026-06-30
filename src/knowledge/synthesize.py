@@ -29,7 +29,7 @@ from src.knowledge.clients import KnowledgeClients
 logger = logging.getLogger(__name__)
 
 # Map step: cheap, parallel extraction per article.
-_MAP_MODEL = "claude-3-5-haiku-20241022"
+_MAP_MODEL = "claude-haiku-4-5-20251001"
 _MAP_MAX_TOKENS = 2048
 
 # Reduce step: structured synthesis across all distilled extracts.
@@ -298,7 +298,7 @@ def synthesize_concept_note(
 
 
 if __name__ == "__main__":
-    from src.knowledge.extract import extract_clean_text, extract_top_results, is_extraction_valid
+    from src.knowledge.extract import is_extraction_valid
     from src.knowledge.search import search_blogs_for_topic, select_top_results
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
@@ -316,18 +316,16 @@ if __name__ == "__main__":
         for r in top:
             print(f"  {r['relevance_score']:.4f}  [{r['blog']}] {r['title']}")
 
-        # Extract + validate
+        # Validate pre-fetched content (no r.jina.ai call needed — content
+        # already arrived in the search response payload)
         extracted = []
         for item in top:
-            content = extract_clean_text(item["url"], clients)
-            if content is None:
-                print(f"  SKIP (fetch failed): {item['url']}")
-                continue
+            content = item.get("content", "")
             ok, reason = is_extraction_valid(content)
             if not ok:
                 print(f"  SKIP (invalid: {reason}): {item['url']}")
                 continue
-            extracted.append({**item, "content": content})
+            extracted.append(item)
 
         if not extracted:
             print("No valid extractions — cannot synthesize.")

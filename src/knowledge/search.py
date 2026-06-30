@@ -103,6 +103,7 @@ def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
                 "title": item.get("title", ""),
                 "url": item.get("url", ""),
                 "snippet": item.get("description", ""),
+                "content": item.get("content", ""),
                 "blog": blog_name,
             }
             for item in clean_results
@@ -206,27 +207,23 @@ if __name__ == "__main__":
         if not top:
             print("No results passed the threshold — nothing to extract.")
         else:
-            from src.knowledge.extract import extract_clean_text, is_extraction_valid
+            from src.knowledge.extract import is_extraction_valid
 
             print(f"\n{'─'*60}")
             print(f"Extraction + validation ({len(top)} candidates)")
             print(f"{'─'*60}")
             valid_items = []
             for item in top:
-                url = item["url"]
                 print(f"\n  [{item['blog']}] {item['title']}")
-                print(f"  {url}")
-                content = extract_clean_text(url, clients)
-                if content is None:
-                    print(f"  SKIP — fetch failed")
-                    continue
+                print(f"  {item['url']}")
+                content = item["content"]
                 ok, reason = is_extraction_valid(content)
                 if not ok:
                     print(f"  SKIP — invalid: {reason}")
                     print(f"  (first 200 chars: {content[:200]!r})")
                 else:
                     print(f"  PASS — {len(content):,} chars")
-                    valid_items.append({**item, "content": content})
+                    valid_items.append(item)
 
             print(f"\n{'─'*60}")
             print(f"Final: {len(valid_items)}/{len(top)} passed validation")
