@@ -12,7 +12,7 @@ import logging
 import sys
 
 from src.knowledge.clients import KnowledgeClients
-from anthropic.types import TextBlockParam, ToolParam, CacheControlEphemeralParam, ToolChoiceParam, MessageParam
+from anthropic.types import TextBlockParam, ToolParam, CacheControlEphemeralParam, ToolChoiceToolParam, MessageParam
 from anthropic.types.content_block import ToolUseBlock
 
 logger = logging.getLogger(__name__)
@@ -162,7 +162,7 @@ def synthesize_concept_note(
             )
         ],
         tools=[_SUBMIT_TOOL],
-        tool_choice=ToolChoiceParam(type="tool", name= "submit_concept_note"),
+        tool_choice=ToolChoiceToolParam(type="tool", name= "submit_concept_note"),
         messages=[MessageParam(role= "user", content= user_message)],
     )
 
