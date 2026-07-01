@@ -140,7 +140,14 @@ Rules for proposed relationships:
 ones that would genuinely help a learner navigate from one concept to another. \
 Do NOT propose a relationship just because two concepts appear in the same section. \
 A reasonable target is fewer relationships than half the concept count.
-- Only propose a relationship where the source text actually supports a meaningful connection.\
+- Only propose a relationship where the source text actually supports a meaningful connection.
+
+If prior notes are provided:
+- Treat them as established knowledge the learner already has.
+- Focus the new note on what is genuinely new, different, or deeper \
+in the current sources versus the prior notes.
+- Explicitly flag where the new sources confirm, extend, or contradict \
+prior coverage. Do not silently re-summarize what prior notes already say.\
 """
 
 
@@ -183,15 +190,17 @@ def synthesize_concept_note(
     topic: str,
     extracted_texts: list[dict],
     clients: KnowledgeClients,
+    prior_notes: list[dict] | None = None,
 ) -> dict:
     """Synthesize a Concept Note from one or more extracted article texts.
 
     Uses a Map-Reduce architecture:
     1. **Map**: Each article is independently distilled by Haiku into dense
        technical bullet points. All map calls run in parallel via
-       ``ThreadPoolExecutor``.
-    2. **Reduce**: Sonnet receives the combined distilled extracts and produces
-       a structured Concept Note via tool use.
+       ``ThreadPoolExecutor``. Prior notes are NOT passed to the Map step —
+       they are raw-article distillation only.
+    2. **Reduce**: Sonnet receives the combined distilled extracts (and any
+       prior notes) and produces a structured Concept Note via tool use.
 
     No database writes happen here.
 
@@ -200,6 +209,10 @@ def synthesize_concept_note(
         extracted_texts: List of dicts from ``extract_top_results``, each
             containing at minimum ``url`` and ``content`` keys.
         clients: Shared client container; ``clients.anthropic`` is used.
+        prior_notes: Optional output of ``find_prior_concept_notes`` — list of
+            dicts with ``concept_note_id`` and ``synthesized_text``. When
+            non-empty, the Reduce step is instructed to extend rather than
+            duplicate prior coverage. Defaults to ``None`` (no prior context).
 
     Returns:
         Dict with keys:
@@ -244,11 +257,33 @@ def synthesize_concept_note(
             f"--- Distilled Source {i}: {item['url']} ---\n{result['text']}\n"
         )
 
+    prior_block = ""
+    if prior_notes:
+        prior_lines = [
+            f"--- Prior knowledge on this topic ({len(prior_notes)} existing note(s)) ---"
+        ]
+        for i, p in enumerate(prior_notes, 1):
+            prior_lines.append(
+                f"--- Prior Note {i} (ConceptNote id={p['concept_note_id']}) ---\n"
+                f"{p['synthesized_text']}\n---"
+            )
+        prior_block = "\n".join(prior_lines) + "\n\n"
+
+    extension_instruction = (
+        "\nWhen prior notes are provided, your new note MUST explicitly extend, "
+        "contradict, or confirm what is already known. Do not re-explain concepts "
+        "already covered unless the new sources add meaningfully different detail."
+        if prior_notes
+        else ""
+    )
+
     user_message = (
         f"Topic: {topic}\n\n"
-        f"{n} distilled source article(s):\n\n"
+        + prior_block
+        + f"{n} distilled source article(s):\n\n"
         + "\n".join(distilled_blocks)
         + "\nSynthesize a Concept Note using the submit_concept_note tool."
+        + extension_instruction
     )
 
     response = clients.anthropic.messages.create(
@@ -299,6 +334,7 @@ def synthesize_concept_note(
 
 if __name__ == "__main__":
     from src.knowledge.extract import is_extraction_valid
+    from src.knowledge.lookup import find_prior_concept_notes
     from src.knowledge.search import search_blogs_for_topic, select_top_results
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
@@ -335,10 +371,20 @@ if __name__ == "__main__":
         for e in extracted:
             print(f"  {len(e['content']):,} chars — {e['url']}")
 
+        # Prior context lookup
+        prior_notes = find_prior_concept_notes(topic, clients)
+        if prior_notes:
+            print(f"\nPrior context: {len(prior_notes)} existing ConceptNote(s) matched")
+            for p in prior_notes:
+                print(f"  ConceptNote id={p['concept_note_id']} "
+                      f"({len(p['synthesized_text'])} chars)")
+        else:
+            print("\nNo prior context found — synthesizing from scratch")
+
         # Map-Reduce synthesis
         print(f"\nMap step  → {_MAP_MODEL} × {len(extracted)} articles (parallel)…")
         print(f"Reduce step → {_MODEL}…\n")
-        result = synthesize_concept_note(topic, extracted, clients)
+        result = synthesize_concept_note(topic, extracted, clients, prior_notes=prior_notes)
 
         # Cost breakdown: Haiku at $0.80/$4 per M, Sonnet at $3/$15 per M.
         # We only have totals here, so report combined with a note.

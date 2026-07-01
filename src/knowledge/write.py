@@ -16,7 +16,6 @@ import logging
 
 import numpy as np
 
-from src.infrastructure.db import get_connection
 from src.infrastructure.time import local_now
 from src.knowledge.clients import KnowledgeClients, VOYAGE_MODEL
 from src.knowledge.resolve import resolve_concept
@@ -52,10 +51,10 @@ def write_concept_note(
           type (``DISCUSSES``, ``RELATED_TO``, ``PREREQUISITE_OF``).
 
     Raises:
-        RuntimeError: If the Neo4j transaction fails; SQLite row is NOT rolled
-            back in that case — the note text is persisted but the graph state
-            is clean (no partial writes). Callers should log the sqlite_id so
-            the graph write can be retried.
+        Exception: If the Neo4j transaction fails, ``clients.db.rollback()`` is
+            called before re-raising — leaving both databases clean with no
+            partial writes. SQLite commits only after the Neo4j transaction
+            succeeds; a Neo4j failure rolls back the SQLite insert.
     """
     raw_concepts: list[str] = synthesis_result["concepts"]
     raw_relationships: list[dict] = synthesis_result["proposed_relationships"]
@@ -101,23 +100,24 @@ def write_concept_note(
     ]
 
     # ------------------------------------------------------------------
-    # Step 3: Write SQLite row
+    # Step 3: Execute SQLite INSERT — do NOT commit yet.
     # user_interest is intentionally omitted — DEFAULT 'pending' fires.
+    # clients.db is used directly (not get_connection()) so we hold the
+    # transaction open until Neo4j commits successfully.
     # ------------------------------------------------------------------
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """INSERT INTO concept_notes (topic_keyword, synthesized_text, source_urls, created_at)
-               VALUES (?, ?, ?, ?)""",
-            (
-                topic,
-                synthesis_result["synthesized_note"],
-                json.dumps(synthesis_result["source_urls"]),
-                local_now(),
-            ),
-        )
-        sqlite_id: int = cursor.lastrowid
+    cursor = clients.db.execute(
+        """INSERT INTO concept_notes (topic_keyword, synthesized_text, source_urls, created_at)
+           VALUES (?, ?, ?, ?)""",
+        (
+            topic,
+            synthesis_result["synthesized_note"],
+            json.dumps(synthesis_result["source_urls"]),
+            local_now(),
+        ),
+    )
+    sqlite_id: int = cursor.lastrowid
 
-    logger.info("SQLite concept_notes row inserted: id=%d", sqlite_id)
+    logger.info("SQLite INSERT executed: id=%d (not yet committed)", sqlite_id)
 
     # ------------------------------------------------------------------
     # Step 4: Compute embeddings for all resolved concept names.
@@ -192,10 +192,20 @@ def write_concept_note(
                 edges_by_type["PREREQUISITE_OF"],
             )
 
+            # Neo4j succeeded — now safe to commit SQLite.
+            # If the process dies between these two lines, the Neo4j ConceptNote
+            # node will have no SQLite counterpart. This is detectable via:
+            #   MATCH (n:ConceptNote) WHERE n.id IS NOT NULL
+            # and a SELECT on concept_notes for the missing id.
+            clients.db.commit()
+            logger.info("SQLite concept_notes row committed: id=%d", sqlite_id)
+
         except Exception:
             tx.rollback()
+            clients.db.rollback()
             logger.exception(
-                "Neo4j transaction rolled back (sqlite_id=%d still committed)", sqlite_id
+                "Neo4j transaction rolled back; SQLite INSERT rolled back (id=%d discarded)",
+                sqlite_id,
             )
             raise
 
