@@ -14,14 +14,18 @@ from pathlib import Path
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
+import sqlite3
 from src.knowledge.nodes import prepare_confirm_node, prepare_preview_node, write_node
 from src.knowledge.state import KGState
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-_DB_DIR = Path(__file__).parents[3] / "db"  # adjust depth to match repo root
+
+
+_DB_DIR = Path(__file__).parents[3] / "db"
 _DB_DIR.mkdir(parents=True, exist_ok=True)
 
-checkpointer = SqliteSaver.from_conn_string(str(_DB_DIR / "state.db"))
+_conn = sqlite3.connect(str(_DB_DIR / "state.db"), check_same_thread=False)
+checkpointer = SqliteSaver(_conn)
 
 logger = logging.getLogger(__name__)
 
