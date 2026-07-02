@@ -1,6 +1,7 @@
 """LangGraph nodes for the Knowledge Agent graph.
 
 Node flow:
+  synthesize_node       →  search + synthesize (creates synthesis_result in state)
   prepare_preview_node  →  sends Telegram preview + approval buttons
   prepare_confirm_node  →  interrupt() (pauses until user taps approve/reject)
   write_node            →  only reached on approval; writes to SQLite + Neo4j
@@ -15,7 +16,11 @@ from langgraph.types import interrupt
 
 from src.integrations import telegram_client as _telegram
 from src.knowledge.clients import KnowledgeClients
+from src.knowledge.extract import is_extraction_valid
+from src.knowledge.lookup import find_prior_concept_notes
+from src.knowledge.search import search_blogs_for_topic, select_top_results
 from src.knowledge.state import KGState
+from src.knowledge.synthesize import synthesize_concept_note
 from src.knowledge.write import write_concept_note
 
 logger = logging.getLogger(__name__)
@@ -23,21 +28,20 @@ logger = logging.getLogger(__name__)
 _NOTE_PREVIEW_CHARS = 600
 
 
-def prepare_preview_node(state: KGState) -> dict:
-    """Format the synthesis result and send it to Telegram with approval buttons.
+def send_preview_buttons(topic: str, synthesis_result: dict) -> int:
+    """Format a synthesis result and send it to Telegram with approval buttons.
 
-    Sends the note preview and concept list to the user, then stores the
-    returned message_id so prepare_confirm_node can remove the buttons on resume.
+    Extracted so both ``prepare_preview_node`` and the re-send path in
+    ``graph.start()`` (when buttons are lost after a server restart) can call
+    the same formatting logic.
 
     Args:
-        state: Graph state containing ``topic``, ``synthesis_result``.
+        topic: The search topic keyword.
+        synthesis_result: Output of ``synthesize_concept_note``.
 
     Returns:
-        Dict with ``pending_message_id`` set to the Telegram message id.
+        Telegram message_id of the sent button message.
     """
-    topic: str = state["topic"]
-    synthesis_result: dict = state["synthesis_result"]
-
     note: str = synthesis_result["synthesized_note"]
     concepts: list[str] = synthesis_result["concepts"]
     source_urls: list[str] = synthesis_result.get("source_urls", [])
@@ -57,14 +61,79 @@ def prepare_preview_node(state: KGState) -> dict:
     )
 
     buttons = [("✅ Keep", "kg_approve"), ("❌ Discard", "kg_reject")]
-    msg_id = _telegram.send_inline_buttons(text, buttons)
+    return _telegram.send_inline_buttons(text, buttons)
 
-    logger.info(
-        "prepare_preview_node: sent preview for topic=%r, message_id=%d",
-        topic,
-        msg_id,
-    )
 
+def synthesize_node(state: KGState) -> dict:
+    """Run the full search → synthesize pipeline for the topic in state.
+
+    Sends progress messages to Telegram so the user knows work is happening.
+    On success stores ``synthesis_result`` in state. On failure (no articles
+    found, API error) sends an error message and stores ``None`` so the
+    conditional edge after this node can route to END instead of the preview.
+
+    Args:
+        state: Graph state containing ``topic`` and ``chat_id``.
+
+    Returns:
+        Dict with ``synthesis_result`` set to the output of
+        ``synthesize_concept_note``, or ``None`` on failure.
+    """
+    topic: str = state["topic"]
+
+    clients = KnowledgeClients()
+    try:
+        _telegram.send_message(f"🔍 Searching for <b>{topic}</b>…")
+
+        all_results = search_blogs_for_topic(topic, clients)
+        top = select_top_results(topic, all_results, clients)
+        extracted = [
+            item for item in top
+            if is_extraction_valid(item.get("content", ""))[0]
+        ]
+
+        if not extracted:
+            _telegram.send_message(f"⚠️ No usable articles found for <i>{topic}</i>.")
+            return {"synthesis_result": None}
+
+        _telegram.send_message(
+            f"✍️ Synthesizing from {len(extracted)} article(s)…"
+        )
+        prior_notes = find_prior_concept_notes(topic, clients)
+        result = synthesize_concept_note(topic, extracted, clients, prior_notes=prior_notes)
+
+        logger.info(
+            "synthesize_node: done for topic=%r "
+            "(%d concepts, %d in / %d out tokens)",
+            topic,
+            len(result["concepts"]),
+            result["input_tokens"],
+            result["output_tokens"],
+        )
+        return {"synthesis_result": result}
+
+    except Exception as e:
+        logger.error("synthesize_node failed for topic=%r: %s", topic, e, exc_info=True)
+        _telegram.send_message(f"⚠️ Synthesis failed for <i>{topic}</i>: {e}")
+        return {"synthesis_result": None}
+    finally:
+        clients.close()
+
+
+def prepare_preview_node(state: KGState) -> dict:
+    """Send the synthesis result to Telegram with approval buttons.
+
+    Args:
+        state: Graph state containing ``topic`` and ``synthesis_result``.
+
+    Returns:
+        Dict with ``pending_message_id`` set to the Telegram message id.
+    """
+    topic: str = state["topic"]
+    synthesis_result: dict = state["synthesis_result"]
+
+    msg_id = send_preview_buttons(topic, synthesis_result)
+    logger.info("prepare_preview_node: sent preview for topic=%r message_id=%d", topic, msg_id)
     return {"pending_message_id": msg_id}
 
 

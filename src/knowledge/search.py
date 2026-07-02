@@ -9,6 +9,7 @@ Dev runner:
 
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import zip_longest
 from urllib.parse import urlparse
 
@@ -41,12 +42,64 @@ _EXCLUDED_URL_PATTERNS = [
 ]
 
 
+def _search_one_blog(
+    blog_name: str,
+    site_url: str,
+    topic: str,
+    headers: dict,
+) -> list[dict]:
+    """Run a single site-scoped Jina search and return cleaned result dicts.
+
+    Args:
+        blog_name: Human-readable source name (stored in each result as ``blog``).
+        site_url: The blog's root URL; only the netloc is used for the query.
+        topic: Search keyword or phrase.
+        headers: HTTP headers including the Jina Bearer token.
+
+    Returns:
+        List of result dicts (may be empty on network error or no results).
+    """
+    domain = urlparse(site_url).netloc
+    query = f"site:{domain} {topic}"
+    logger.info("Searching %s: %r", blog_name, query)
+
+    try:
+        resp = requests.get(
+            _JINA_SEARCH_URL,
+            params={"q": query},
+            headers=headers,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as exc:
+        logger.warning("Search failed for %s (%s): %s", blog_name, query, exc)
+        return []
+
+    raw_results = data.get("data", [])[:_RESULTS_PER_BLOG]
+    clean_results = [
+        item for item in raw_results
+        if not any(bad in item.get("url", "").lower() for bad in _EXCLUDED_URL_PATTERNS)
+    ][:_RESULTS_PER_BLOG]
+
+    return [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "snippet": item.get("description", ""),
+            "content": item.get("content", ""),
+            "blog": blog_name,
+        }
+        for item in clean_results
+    ]
+
+
 def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
     """Search each configured blog for the given topic via Jina AI search.
 
-    Runs one site-scoped search per blog (one request per source row) and
-    interleaves results so the merged list cycles across blogs before going
-    deeper into any one source. Never combines domains into a single OR
+    All blogs are searched concurrently (one thread per source). Results are
+    interleaved round-robin so the merged list cycles across blogs before
+    going deeper into any one source. Never combines domains into a single OR
     query — that makes result ordering unpredictable.
 
     Args:
@@ -56,7 +109,7 @@ def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
 
     Returns:
         List of result dicts, each containing:
-        ``title``, ``url``, ``snippet``, ``blog`` (source name).
+        ``title``, ``url``, ``snippet``, ``content``, ``blog`` (source name).
         Order: round-robin across blogs by rank (rank-1 from each, then
         rank-2 from each, etc.).
     """
@@ -64,50 +117,26 @@ def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
         "SELECT name, site_url FROM sources ORDER BY id"
     ).fetchall()
 
+    if not sources:
+        return []
+
     headers = {
         "Authorization": f"Bearer {clients.jina_api_key}",
         "Accept": "application/json",
     }
 
-    per_blog: list[list[dict]] = []
-    for source in sources:
-        blog_name = source["name"]
-        domain = urlparse(source["site_url"]).netloc
-        query = f"site:{domain} {topic}"
+    per_blog: list[list[dict]] = [[] for _ in sources]
 
-        logger.info("Searching %s: %r", blog_name, query)
-        try:
-            resp = requests.get(
-                _JINA_SEARCH_URL,
-                params={"q": query},
-                headers=headers,
-                timeout=30,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except requests.RequestException as exc:
-            logger.warning("Search failed for %s (%s): %s", blog_name, query, exc)
-            per_blog.append([])
-            continue
-
-        raw_results = data.get("data", [])[:_RESULTS_PER_BLOG]
-
-        # Filter out junk URLs before saving the result
-        clean_results = [
-            item for item in raw_results
-            if not any(bad in item.get("url", "").lower() for bad in _EXCLUDED_URL_PATTERNS)
-        ][:_RESULTS_PER_BLOG]
-
-        per_blog.append([
-            {
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "snippet": item.get("description", ""),
-                "content": item.get("content", ""),
-                "blog": blog_name,
-            }
-            for item in clean_results
-        ])
+    with ThreadPoolExecutor(max_workers=len(sources)) as executor:
+        futures = {
+            executor.submit(
+                _search_one_blog, source["name"], source["site_url"], topic, headers
+            ): i
+            for i, source in enumerate(sources)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            per_blog[idx] = future.result()
 
     merged = [
         item

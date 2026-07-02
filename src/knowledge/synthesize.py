@@ -324,8 +324,8 @@ def synthesize_concept_note(
 
     return {
         "synthesized_note": result["synthesized_note"],
-        "concepts": result["concepts"],
-        "proposed_relationships": result["proposed_relationships"],
+        "concepts": result.get("concepts", []),
+        "proposed_relationships": result.get("proposed_relationships", []),
         "source_urls": [item["url"] for item in extracted_texts],
         "input_tokens": total_input_tokens,
         "output_tokens": total_output_tokens,

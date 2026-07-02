@@ -1,7 +1,7 @@
-"""LangGraph knowledge agent graph: preview → confirm → write.
+"""LangGraph knowledge agent graph: synthesize → preview → confirm → write.
 
 Entry points:
-  - run(topic, chat_id, synthesis_result): start a fresh flow from the synthesis pipeline.
+  - start(chat_id, topic): kick off from a /prepare command (synthesis included).
   - invoke_safe(chat_id, payload): resume a paused flow from a Telegram kg_* callback.
 
 Thread ids are namespaced as ``kg_{chat_id}`` to avoid colliding with the
@@ -15,7 +15,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 import sqlite3
-from src.knowledge.nodes import prepare_confirm_node, prepare_preview_node, write_node
+from src.knowledge.nodes import (
+    prepare_confirm_node,
+    prepare_preview_node,
+    synthesize_node,
+    write_node,
+)
 from src.knowledge.state import KGState
 from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -30,6 +35,14 @@ checkpointer = SqliteSaver(_conn)
 logger = logging.getLogger(__name__)
 
 
+def _route_after_synthesize(state: KGState) -> str:
+    """Skip to END if synthesis produced nothing (no articles / API error)."""
+    if state.get("synthesis_result") is None:
+        logger.info("_route_after_synthesize: no result — ending flow")
+        return END
+    return "prepare_preview_node"
+
+
 def _route_after_confirm(state: KGState) -> str:
     """Route to write_node on approval, END on rejection."""
     if state.get("user_interest") == "approved":
@@ -39,11 +52,17 @@ def _route_after_confirm(state: KGState) -> str:
 
 
 _builder = StateGraph(KGState)
+_builder.add_node("synthesize_node", synthesize_node)
 _builder.add_node("prepare_preview_node", prepare_preview_node)
 _builder.add_node("prepare_confirm_node", prepare_confirm_node)
 _builder.add_node("write_node", write_node)
 
-_builder.add_edge(START, "prepare_preview_node")
+_builder.add_edge(START, "synthesize_node")
+_builder.add_conditional_edges(
+    "synthesize_node",
+    _route_after_synthesize,
+    ["prepare_preview_node", END],
+)
 _builder.add_edge("prepare_preview_node", "prepare_confirm_node")
 _builder.add_conditional_edges(
     "prepare_confirm_node",
@@ -63,35 +82,45 @@ def _has_pending_interrupt(state) -> bool:
     return bool(getattr(state, "next", ()))
 
 
-def run(topic: str, chat_id: int, synthesis_result: dict) -> None:
-    """Start a fresh KG confirm flow from the synthesis pipeline.
+def start(chat_id: int, topic: str) -> None:
+    """Start a fresh KG pipeline from a /prepare command.
 
-    Sends the preview to Telegram and pauses at the interrupt in
-    prepare_confirm_node. Control returns to the caller immediately after
-    the GraphInterrupt is raised; the flow resumes when the user taps a button
-    and invoke_safe() is called.
+    Runs synthesize_node (search + synthesize), then pauses at
+    prepare_confirm_node waiting for user approval. The server's webhook
+    handler resumes the flow when the user taps ✅ Keep or ❌ Discard.
+
+    If the thread is already paused at an interrupt (a previous /prepare is
+    still waiting for a button tap), skips synthesis entirely and reminds
+    the user to respond to the existing preview.
 
     Args:
-        topic: The search topic keyword.
         chat_id: Telegram chat id (used as thread_id namespace and state field).
-        synthesis_result: Output of ``synthesize_concept_note``.
+        topic: The search topic keyword entered after /prepare.
     """
+    from src.integrations import telegram_client as _telegram
+
     config = {"configurable": {"thread_id": f"kg_{chat_id}"}}
-    initial_state: KGState = {
-        "topic": topic,
-        "chat_id": chat_id,
-        "synthesis_result": synthesis_result,
-    }
-    logger.info("KG graph: starting fresh flow for topic=%r chat_id=%s", topic, chat_id)
+
+    snapshot = graph.get_state(config)
+    if _has_pending_interrupt(snapshot):
+        existing_topic = snapshot.values.get("topic", "unknown")
+        synthesis_result = snapshot.values.get("synthesis_result")
+        logger.info(
+            "KG graph: /prepare %r — re-sending buttons for already-paused topic=%r chat_id=%s",
+            topic, existing_topic, chat_id,
+        )
+        from src.knowledge.nodes import send_preview_buttons
+        new_msg_id = send_preview_buttons(existing_topic, synthesis_result)
+        graph.update_state(config, {"pending_message_id": new_msg_id})
+        return
+
+    initial_state: KGState = {"topic": topic, "chat_id": chat_id}
+    logger.info("KG graph: /prepare %r for chat_id=%s", topic, chat_id)
     try:
         graph.invoke(initial_state, config=config)
     except Exception as e:
-        # GraphInterrupt is expected — graph paused at prepare_confirm_node.
-        # Any other exception is a real error.
-        from langgraph.errors import GraphInterrupt  # type: ignore[import]
-        if not isinstance(e, GraphInterrupt):
-            logger.error("KG graph fresh invocation failed: %s", e, exc_info=True)
-            raise
+        logger.error("KG graph start failed [topic=%r chat_id=%s]: %s", topic, chat_id, e, exc_info=True)
+        _telegram.send_message(f"⚠️ /prepare failed for <i>{topic}</i>: {e}")
 
 
 def invoke_safe(chat_id: int, payload: str) -> None:
