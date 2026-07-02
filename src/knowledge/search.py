@@ -4,12 +4,12 @@ Reads blog sources from the ``sources`` SQLite table — no hardcoded URLs here.
 All search results are returned as plain dicts; no database writes happen here.
 
 Pipeline:
-  1. search_blogs_for_topic  — concurrent Jina searches, returns title/url/snippet only
-  2. select_top_results      — Voyage reranker on snippets, returns top N
-  3. fetch_article_contents  — concurrent Jina Reader calls only for top N articles
+  1. search_blogs_for_topic  — concurrent Jina searches, returns full content per result
+  2. select_top_results      — Voyage reranker on snippets, returns top N with content
 
-Fetching full content only after reranking avoids paying Jina token cost for
-articles that are discarded by the reranker (~90% of raw results).
+Jina's search response already includes full article content (~40k chars each), so
+there is no need for a separate reader step. Reranking is done on snippets (not content)
+to keep Voyage payloads small — the reranker has enough signal from 100-char descriptions.
 
 Dev runner:
     python -m src.knowledge.search "context management"
@@ -28,7 +28,6 @@ from src.knowledge.clients import KnowledgeClients, VOYAGE_RERANK_MODEL
 logger = logging.getLogger(__name__)
 
 _JINA_SEARCH_URL = "https://s.jina.ai/"
-_JINA_READER_URL = "https://r.jina.ai/"
 
 # All results that pass the reranker threshold are forwarded to synthesis.
 TOP_N_FOR_SYNTHESIS = 8
@@ -55,11 +54,10 @@ def _search_one_blog(
     topic: str,
     headers: dict,
 ) -> list[dict]:
-    """Run a single site-scoped Jina search, returning metadata only (no content).
+    """Run a single site-scoped Jina search and return full result dicts.
 
-    Full article content is intentionally excluded — it is fetched later via
-    the Jina Reader only for articles that pass reranking, avoiding token cost
-    for the ~90% of results that are discarded.
+    Jina's search response includes full article content (~40k chars each),
+    so no separate reader call is needed.
 
     Args:
         blog_name: Human-readable source name (stored in each result as ``blog``).
@@ -68,7 +66,7 @@ def _search_one_blog(
         headers: HTTP headers including the Jina Bearer token.
 
     Returns:
-        List of result dicts with ``title``, ``url``, ``snippet``, ``blog``.
+        List of result dicts with ``title``, ``url``, ``snippet``, ``content``, ``blog``.
         May be empty on network error or no results.
     """
     domain = urlparse(site_url).netloc
@@ -99,41 +97,19 @@ def _search_one_blog(
             "title": item.get("title", ""),
             "url": item.get("url", ""),
             "snippet": item.get("description", ""),
+            "content": item.get("content", ""),
             "blog": blog_name,
         }
         for item in clean_results
     ]
 
 
-def _fetch_one_article(url: str, headers: dict) -> str:
-    """Fetch full article content from Jina Reader for a single URL.
-
-    Args:
-        url: The article URL to fetch.
-        headers: HTTP headers including the Jina Bearer token.
-
-    Returns:
-        Article text, or empty string on failure.
-    """
-    try:
-        resp = requests.get(
-            f"{_JINA_READER_URL}{url}",
-            headers=headers,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.text
-    except requests.RequestException as exc:
-        logger.warning("Reader fetch failed for %s: %s", url, exc)
-        return ""
-
-
 def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
     """Search each configured blog for the given topic via Jina AI search.
 
-    All blogs are searched concurrently (one thread per source). Returns
-    metadata only (title, url, snippet) — full content is not fetched here.
-    Call ``fetch_article_contents`` on the reranked subset to get content.
+    All blogs are searched concurrently (one thread per source). Full article
+    content is included in each result — Jina's search response returns it for
+    free, so no separate reader call is needed.
 
     Args:
         topic: The keyword or phrase to search for (e.g. ``"context management"``).
@@ -141,7 +117,7 @@ def search_blogs_for_topic(topic: str, clients: KnowledgeClients) -> list[dict]:
             ``clients.db`` are used here.
 
     Returns:
-        List of result dicts with ``title``, ``url``, ``snippet``, ``blog``.
+        List of result dicts with ``title``, ``url``, ``snippet``, ``content``, ``blog``.
         Order: round-robin across blogs by rank (rank-1 from each, then
         rank-2 from each, etc.).
     """
@@ -189,17 +165,17 @@ def select_top_results(
     Uses Voyage's cross-encoder reranker (``rerank-2``). Scores are computed
     on ``snippet`` (short description) rather than full content — the reranker
     has enough signal from 100-char descriptions to judge relevance, and using
-    snippets avoids sending large payloads to the Voyage API.
+    snippets avoids sending large payloads to the Voyage API. The ``content``
+    field already present on each result passes through untouched.
 
     Args:
         query: The original search topic string.
-        raw_results: Output of ``search_blogs_for_topic`` (no content field).
+        raw_results: Output of ``search_blogs_for_topic``.
         clients: Shared client container; ``clients.voyage`` is used.
 
     Returns:
         Results with ``relevance_score`` added, filtered to >= ``_RERANK_THRESHOLD``
         and limited to ``TOP_N_FOR_SYNTHESIS``, sorted by score descending.
-        No ``content`` field yet — call ``fetch_article_contents`` next.
     """
     if not raw_results:
         return []
@@ -227,47 +203,6 @@ def select_top_results(
         for item in rerank_response.results
         if item.relevance_score >= _RERANK_THRESHOLD
     ]
-
-
-def fetch_article_contents(
-    top_results: list[dict],
-    jina_api_key: str,
-) -> list[dict]:
-    """Fetch full article content for each result via Jina Reader, in parallel.
-
-    Called after ``select_top_results`` so content is only fetched for articles
-    that passed reranking — typically 5–8 articles instead of 40–80 raw results.
-
-    Args:
-        top_results: Output of ``select_top_results``.
-        jina_api_key: Jina API key for Bearer auth.
-
-    Returns:
-        Same list with ``content`` field added to each dict. Articles whose
-        fetch failed have ``content`` set to empty string and are expected to
-        be filtered out by ``is_extraction_valid`` downstream.
-    """
-    if not top_results:
-        return []
-
-    headers = {
-        "Authorization": f"Bearer {jina_api_key}",
-        "Accept": "text/plain",
-        "X-Return-Format": "text",
-    }
-
-    contents: list[str] = [""] * len(top_results)
-
-    with ThreadPoolExecutor(max_workers=len(top_results)) as executor:
-        futures = {
-            executor.submit(_fetch_one_article, result["url"], headers): i
-            for i, result in enumerate(top_results)
-        }
-        for future in as_completed(futures):
-            idx = futures[future]
-            contents[idx] = future.result()
-
-    return [{**result, "content": content} for result, content in zip(top_results, contents)]
 
 
 if __name__ == "__main__":
@@ -299,14 +234,11 @@ if __name__ == "__main__":
             print(f"    {r['url']}")
 
         if top:
-            print(f"\nFetching content for {len(top)} article(s) via Jina Reader…")
-            top_with_content = fetch_article_contents(top, clients.jina_api_key)
-
             from src.knowledge.extract import is_extraction_valid
             print(f"\n{'─'*60}")
-            print(f"Content validation")
+            print(f"Content validation ({len(top)} articles)")
             print(f"{'─'*60}")
-            for item in top_with_content:
+            for item in top:
                 ok, reason = is_extraction_valid(item.get("content", ""))
                 status = f"PASS — {len(item['content']):,} chars" if ok else f"SKIP — {reason}"
                 print(f"  [{item['blog']}] {item['title']}")

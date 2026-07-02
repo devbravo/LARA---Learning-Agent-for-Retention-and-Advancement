@@ -18,7 +18,7 @@ from src.integrations import telegram_client as _telegram
 from src.knowledge.clients import KnowledgeClients
 from src.knowledge.extract import is_extraction_valid
 from src.knowledge.lookup import find_prior_concept_notes
-from src.knowledge.search import fetch_article_contents, search_blogs_for_topic, select_top_results
+from src.knowledge.search import search_blogs_for_topic, select_top_results
 from src.knowledge.state import KGState
 from src.knowledge.synthesize import synthesize_concept_note
 from src.knowledge.write import write_concept_note
@@ -96,9 +96,8 @@ def synthesize_node(state: KGState) -> dict:
             _telegram.send_message(f"⚠️ No relevant articles found for <i>{topic}</i>.")
             return {"synthesis_result": None}
 
-        top_with_content = fetch_article_contents(top, clients.jina_api_key)
         extracted = [
-            item for item in top_with_content
+            item for item in top
             if is_extraction_valid(item.get("content", ""))[0]
         ]
 
