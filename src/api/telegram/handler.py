@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from src.models.telegram import TelegramUpdate
 from src.api.telegram import dispatcher
 from src.api.telegram.intent_parser import extract_payload
+from src.knowledge import graph as _kg_graph
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +64,15 @@ async def handle_update(update: TelegramUpdate) -> JSONResponse:
 
     # --- 4. Fire-and-forget graph invocation ---
     loop = asyncio.get_running_loop()
-    loop.run_in_executor(
-        None,
-        lambda: dispatcher.invoke_safe(chat_id, payload, message_id=message_id),
-    )
+    if payload.startswith("kg_"):
+        loop.run_in_executor(
+            None,
+            lambda: _kg_graph.invoke_safe(chat_id, payload),
+        )
+    else:
+        loop.run_in_executor(
+            None,
+            lambda: dispatcher.invoke_safe(chat_id, payload, message_id=message_id),
+        )
 
     return JSONResponse({"ok": True})
