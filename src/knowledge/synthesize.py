@@ -78,9 +78,12 @@ _SUBMIT_TOOL: ToolParam = {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Concept names extracted from the synthesized note. "
-                    "Technique/idea level only (e.g. 'semantic chunking', 'prefix caching'). "
-                    "Never code identifiers, library class names, or function names."
+                    "The 5–10 most important concepts from the synthesized note. "
+                    "Each must be a standalone idea a learner would need to understand independently — "
+                    "not a detail or sub-component of another concept already in the list. "
+                    "Technique/idea level only (e.g. 'speculative decoding', 'prefix caching'). "
+                    "Never code identifiers, library names, author names, or paper titles. "
+                    "If two terms refer to the same idea, pick one and drop the other."
                 ),
             },
             "proposed_relationships": {
@@ -101,9 +104,9 @@ _SUBMIT_TOOL: ToolParam = {
                     "Relationships ONLY between concepts in the 'concepts' list above. "
                     "Use RELATED_TO for symmetric associations, PREREQUISITE_OF when "
                     "concept A must be understood before concept B. "
-                    "Be selective: only the most significant, non-obvious connections. "
-                    "Target fewer than half the concept count in total relationships. "
-                    "Only propose one where the source text genuinely supports it."
+                    "Be selective: 3–5 relationships maximum, only the most load-bearing connections. "
+                    "Skip obvious or trivially implied links. "
+                    "Only propose one where the source text explicitly supports it."
                 ),
             },
         },
@@ -125,22 +128,21 @@ combine them into one explanation. Where they differ or complement each other, n
 (the technique or pattern) rather than reproducing the full snippet verbatim.
 
 Rules for concept extraction:
-- Technique/idea level only (e.g. "semantic chunking", "prefix caching"). \
-Never code identifiers, library class names, or function names.
+- Extract the 5–10 most important concepts only. Quality over quantity.
+- Each concept must be a standalone idea a learner would need to understand independently. \
+Drop anything that is a detail, sub-component, or near-synonym of another concept already in your list.
+- Technique/idea level only (e.g. "speculative decoding", "prefix caching"). \
+Never code identifiers, library class names, author names, or paper titles.
 - Every concept must reflect something the source text actually discusses. \
-Do not blend, infer, or combine terminology from different concepts into \
-a new compound term that doesn't appear in (or isn't a clear paraphrase of) the source material.
-- Do NOT extract two concepts that are near-synonyms within the same note. \
-If two terms refer to the same technique, pick the more standard or widely-used name and use only that one. \
-Cross-note deduplication is handled elsewhere — here, avoid obvious same-note duplicates.
+Do not infer or coin new compound terms not present in the sources.
+- If two terms refer to the same technique, use the more standard name and drop the other.
 
 Rules for proposed relationships:
 - Only between concepts in your own list. Only RELATED_TO or PREREQUISITE_OF.
-- Be selective: propose only the most significant or non-obvious relationships — \
-ones that would genuinely help a learner navigate from one concept to another. \
-Do NOT propose a relationship just because two concepts appear in the same section. \
-A reasonable target is fewer relationships than half the concept count.
-- Only propose a relationship where the source text actually supports a meaningful connection.
+- 3–5 relationships maximum. Only the most load-bearing connections — \
+ones that would genuinely help a learner understand the dependency between two ideas. \
+Skip anything obvious or trivially implied.
+- Only propose a relationship where the source text explicitly supports it.
 
 If prior notes are provided:
 - Treat them as established knowledge the learner already has.
@@ -322,10 +324,21 @@ def synthesize_concept_note(
 
     result = tool_block.input
 
+    concepts = result.get("concepts", [])
+    relationships = result.get("proposed_relationships", [])
+
+    if not concepts:
+        logger.warning(
+            "synthesize_concept_note: Claude returned no concepts for topic=%r "
+            "(raw keys: %s)",
+            topic,
+            list(result.keys()),
+        )
+
     return {
         "synthesized_note": result["synthesized_note"],
-        "concepts": result.get("concepts", []),
-        "proposed_relationships": result.get("proposed_relationships", []),
+        "concepts": concepts,
+        "proposed_relationships": relationships,
         "source_urls": [item["url"] for item in extracted_texts],
         "input_tokens": total_input_tokens,
         "output_tokens": total_output_tokens,

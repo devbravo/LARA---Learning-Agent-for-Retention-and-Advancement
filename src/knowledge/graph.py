@@ -105,14 +105,19 @@ def start(chat_id: int, topic: str) -> None:
     if _has_pending_interrupt(snapshot):
         existing_topic = snapshot.values.get("topic", "unknown")
         synthesis_result = snapshot.values.get("synthesis_result")
-        logger.info(
-            "KG graph: /prepare %r — re-sending buttons for already-paused topic=%r chat_id=%s",
-            topic, existing_topic, chat_id,
+        if synthesis_result is not None:
+            logger.info(
+                "KG graph: /prepare %r — re-sending buttons for already-paused topic=%r chat_id=%s",
+                topic, existing_topic, chat_id,
+            )
+            from src.knowledge.nodes import send_preview_buttons
+            new_msg_id = send_preview_buttons(existing_topic, synthesis_result)
+            graph.update_state(config, {"pending_message_id": new_msg_id})
+            return
+        logger.warning(
+            "KG graph: stale checkpoint (synthesis_result=None) for chat_id=%s — restarting",
+            chat_id,
         )
-        from src.knowledge.nodes import send_preview_buttons
-        new_msg_id = send_preview_buttons(existing_topic, synthesis_result)
-        graph.update_state(config, {"pending_message_id": new_msg_id})
-        return
 
     initial_state: KGState = {"topic": topic, "chat_id": chat_id}
     logger.info("KG graph: /prepare %r for chat_id=%s", topic, chat_id)

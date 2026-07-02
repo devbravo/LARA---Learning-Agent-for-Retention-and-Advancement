@@ -18,7 +18,7 @@ from src.integrations import telegram_client as _telegram
 from src.knowledge.clients import KnowledgeClients
 from src.knowledge.extract import is_extraction_valid
 from src.knowledge.lookup import find_prior_concept_notes
-from src.knowledge.search import search_blogs_for_topic, select_top_results
+from src.knowledge.search import fetch_article_contents, search_blogs_for_topic, select_top_results
 from src.knowledge.state import KGState
 from src.knowledge.synthesize import synthesize_concept_note
 from src.knowledge.write import write_concept_note
@@ -53,11 +53,15 @@ def send_preview_buttons(topic: str, synthesis_result: dict) -> int:
     if len(concepts) > 10:
         concept_line += f" (+{len(concepts) - 10} more)"
 
+    source_lines = "\n".join(
+        f'  {i}. <a href="{url}">{url}</a>' for i, url in enumerate(source_urls, 1)
+    )
+
     text = (
         f"<b>Knowledge note ready: {topic}</b>\n\n"
         f"{preview}{'…' if truncated else ''}\n\n"
-        f"<b>Concepts ({len(concepts)}):</b> {concept_line}\n"
-        f"<b>Sources:</b> {len(source_urls)}"
+        f"<b>Concepts ({len(concepts)}):</b> {concept_line}\n\n"
+        f"<b>Sources ({len(source_urls)}):</b>\n{source_lines}"
     )
 
     buttons = [("✅ Keep", "kg_approve"), ("❌ Discard", "kg_reject")]
@@ -87,8 +91,14 @@ def synthesize_node(state: KGState) -> dict:
 
         all_results = search_blogs_for_topic(topic, clients)
         top = select_top_results(topic, all_results, clients)
+
+        if not top:
+            _telegram.send_message(f"⚠️ No relevant articles found for <i>{topic}</i>.")
+            return {"synthesis_result": None}
+
+        top_with_content = fetch_article_contents(top, clients.jina_api_key)
         extracted = [
-            item for item in top
+            item for item in top_with_content
             if is_extraction_valid(item.get("content", ""))[0]
         ]
 

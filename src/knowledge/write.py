@@ -121,16 +121,21 @@ def write_concept_note(
 
     # ------------------------------------------------------------------
     # Step 4: Compute embeddings for all resolved concept names.
-    # resolve_concept computes embeddings internally but does not expose
-    # them, so we make one fresh batch call here for all unique resolved
-    # names. One Voyage call is cheaper than re-entering resolve_concept
-    # for each concept and discarding its output.
+    # Skipped when the synthesis returned no concepts — the ConceptNote
+    # and SQLite row are still written; they just have no Concept links.
     # ------------------------------------------------------------------
-    embeddings_response = clients.voyage.embed(all_resolved_names, model=VOYAGE_MODEL)
-    name_to_embedding: dict[str, list[float]] = {
-        name: emb
-        for name, emb in zip(all_resolved_names, embeddings_response.embeddings)
-    }
+    name_to_embedding: dict[str, list[float]] = {}
+    if all_resolved_names:
+        embeddings_response = clients.voyage.embed(all_resolved_names, model=VOYAGE_MODEL)
+        name_to_embedding = {
+            name: emb
+            for name, emb in zip(all_resolved_names, embeddings_response.embeddings)
+        }
+    else:
+        logger.warning(
+            "write_concept_note: no concepts for topic=%r — writing note without concept links",
+            topic,
+        )
 
     # ------------------------------------------------------------------
     # Step 5: Write to Neo4j in ONE explicit transaction
