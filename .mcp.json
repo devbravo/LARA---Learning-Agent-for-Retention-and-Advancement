@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "neo4j": {
+      "command": ".venv/bin/python",
+      "args": ["-m", "neo4j_mcp_server"],
+      "env": {
+        "NEO4J_TELEMETRY": "false"
+      }
+    }
+  }
+}

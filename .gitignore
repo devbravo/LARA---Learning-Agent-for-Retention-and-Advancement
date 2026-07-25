@@ -1,4 +1,5 @@
 .env
+.claude/settings.local.json
 credentials/
 db/*.db
 __pycache__/
