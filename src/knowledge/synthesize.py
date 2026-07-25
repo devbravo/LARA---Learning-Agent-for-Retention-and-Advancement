@@ -2,8 +2,9 @@
 
 Map step: each article is independently distilled by Haiku into dense
 technical bullet points (cheap, parallel, fast).
-Reduce step: Sonnet synthesizes across all distilled extracts into a
-single structured Concept Note via tool use.
+Reduce A: Sonnet synthesizes across all distilled extracts into a
+single Concept Note via strict tool use.
+Reduce B: Haiku extracts concepts + relationships from the finished note.
 
 The ONE place in the knowledge pipeline that calls the LLM.
 No database writes happen here.
@@ -21,6 +22,7 @@ from anthropic.types import (
     TextBlockParam,
     ToolChoiceToolParam,
     ToolParam,
+    Usage,
 )
 from anthropic.types.content_block import ToolUseBlock
 
@@ -32,9 +34,18 @@ logger = logging.getLogger(__name__)
 _MAP_MODEL = "claude-haiku-4-5-20251001"
 _MAP_MAX_TOKENS = 2048
 
-# Reduce step: structured synthesis across all distilled extracts.
+# Reduce A: note synthesis across all distilled extracts.
 _MODEL = "claude-sonnet-4-6"
-_MAX_TOKENS = 4096
+_MAX_TOKENS = 8192
+
+# Reduce B: concept/relationship extraction from the finished note.
+# Cheap — input is just the note, so Haiku is plenty.
+_EXTRACT_MODEL = _MAP_MODEL
+_EXTRACT_MAX_TOKENS = 2048
+
+# Distillations shorter than this are junk (refusal, empty page, error text) —
+# too short to be a real technical bullet list from a validated article.
+_MIN_DISTILLATION_LENGTH = 200
 
 _MAP_SYSTEM_PROMPT = (
     "You are an expert Machine Learning Infrastructure Engineer. "
@@ -55,16 +66,21 @@ _MAP_USER_TEMPLATE = (
     "Article Text:\n{content}"
 )
 
-# Tool definition for structured output — forces Sonnet to return
-# exactly these three fields with no free-form preamble.
-_SUBMIT_TOOL: ToolParam = {
-    "name": "submit_concept_note",
-    "description": (
-        "Submit the synthesized concept note, extracted concept names, "
-        "and proposed relationships between those concepts."
-    ),
+# The Reduce step is split into two focused calls so each does one job well:
+#   Reduce A (Sonnet) — write the note. Full attention on cross-referencing.
+#   Reduce B (Haiku)  — extract concepts + relationships FROM the finished
+#     note, guaranteeing every concept is grounded in what the note actually
+#     says (not in source material the note may have dropped).
+# ``strict`` makes the API guarantee each tool input validates against its
+# schema exactly, so malformed relationships can't reach write_node.
+
+_NOTE_TOOL: ToolParam = {
+    "name": "submit_note",
+    "description": "Submit the synthesized concept note.",
+    "strict": True,
     "input_schema": {
         "type": "object",
+        "additionalProperties": False,
         "properties": {
             "synthesized_note": {
                 "type": "string",
@@ -74,11 +90,28 @@ _SUBMIT_TOOL: ToolParam = {
                     "cover the same ground. Aimed at technical interview preparation."
                 ),
             },
+        },
+        "required": ["synthesized_note"],
+    },
+    "cache_control": {"type": "ephemeral"},
+}
+
+_CONCEPTS_TOOL: ToolParam = {
+    "name": "submit_concepts",
+    "description": (
+        "Submit the concept names and proposed relationships extracted "
+        "from the concept note."
+    ),
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
             "concepts": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "The 5–10 most important concepts from the synthesized note. "
+                    "The 5–10 most important concepts from the note. "
                     "Each must be a standalone idea a learner would need to understand independently — "
                     "not a detail or sub-component of another concept already in the list. "
                     "Technique/idea level only (e.g. 'speculative decoding', 'prefix caching'). "
@@ -90,6 +123,7 @@ _SUBMIT_TOOL: ToolParam = {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "additionalProperties": False,
                     "properties": {
                         "from": {"type": "string"},
                         "type": {
@@ -106,16 +140,15 @@ _SUBMIT_TOOL: ToolParam = {
                     "concept A must be understood before concept B. "
                     "Be selective: 3–5 relationships maximum, only the most load-bearing connections. "
                     "Skip obvious or trivially implied links. "
-                    "Only propose one where the source text explicitly supports it."
+                    "Only propose one where the note explicitly supports it."
                 ),
             },
         },
-        "required": ["synthesized_note", "concepts", "proposed_relationships"],
+        "required": ["concepts", "proposed_relationships"],
     },
-    "cache_control": {"type": "ephemeral"},
 }
 
-_SYSTEM_PROMPT = """\
+_SYNTH_SYSTEM_PROMPT = """\
 You are a technical study note synthesizer. You receive one or more distilled article \
 extracts on a topic and produce a single Concept Note for a learner preparing for a \
 technical interview.
@@ -127,23 +160,6 @@ combine them into one explanation. Where they differ or complement each other, n
 - Code examples in the sources are useful grounding. Reference what they DEMONSTRATE \
 (the technique or pattern) rather than reproducing the full snippet verbatim.
 
-Rules for concept extraction:
-- Extract the 5–10 most important concepts only. Quality over quantity.
-- Each concept must be a standalone idea a learner would need to understand independently. \
-Drop anything that is a detail, sub-component, or near-synonym of another concept already in your list.
-- Technique/idea level only (e.g. "speculative decoding", "prefix caching"). \
-Never code identifiers, library class names, author names, or paper titles.
-- Every concept must reflect something the source text actually discusses. \
-Do not infer or coin new compound terms not present in the sources.
-- If two terms refer to the same technique, use the more standard name and drop the other.
-
-Rules for proposed relationships:
-- Only between concepts in your own list. Only RELATED_TO or PREREQUISITE_OF.
-- 3–5 relationships maximum. Only the most load-bearing connections — \
-ones that would genuinely help a learner understand the dependency between two ideas. \
-Skip anything obvious or trivially implied.
-- Only propose a relationship where the source text explicitly supports it.
-
 If prior notes are provided:
 - Treat them as established knowledge the learner already has.
 - Focus the new note on what is genuinely new, different, or deeper \
@@ -151,6 +167,51 @@ in the current sources versus the prior notes.
 - Explicitly flag where the new sources confirm, extend, or contradict \
 prior coverage. Do not silently re-summarize what prior notes already say.\
 """
+
+_EXTRACT_SYSTEM_PROMPT = """\
+You are a concept extractor. You receive a finished technical Concept Note and \
+extract the concepts it teaches plus the relationships between them.
+
+Rules for concept extraction:
+- Extract the 5–10 most important concepts only. Quality over quantity.
+- Each concept must be a standalone idea a learner would need to understand independently. \
+Drop anything that is a detail, sub-component, or near-synonym of another concept already in your list.
+- Technique/idea level only (e.g. "speculative decoding", "prefix caching"). \
+Never code identifiers, library class names, author names, or paper titles.
+- Every concept must reflect something the note actually discusses. \
+Do not infer or coin new compound terms not present in the note.
+- If two terms refer to the same technique, use the more standard name and drop the other.
+
+Rules for proposed relationships:
+- Only between concepts in your own list. Only RELATED_TO or PREREQUISITE_OF.
+- 3–5 relationships maximum. Only the most load-bearing connections — \
+ones that would genuinely help a learner understand the dependency between two ideas. \
+Skip anything obvious or trivially implied.
+- Only propose a relationship where the note explicitly supports it.\
+"""
+
+
+def _is_distillation_valid(text: str) -> tuple[bool, str]:
+    """Sanity-check a Haiku distillation before it enters the Reduce step.
+
+    Deterministic formula check — no LLM call. A distillation from a
+    pre-validated article should be a substantive Markdown bullet list;
+    very short output means the model had nothing to extract (empty page
+    slipped through, refusal, error text).
+
+    Args:
+        text: Distilled Markdown from ``_map_article``.
+
+    Returns:
+        ``(True, "")`` if the distillation looks substantive.
+        ``(False, reason)`` with a human-readable explanation otherwise.
+    """
+    stripped = text.strip()
+    if len(stripped) < _MIN_DISTILLATION_LENGTH:
+        return False, (
+            f"too short ({len(stripped)} chars, min {_MIN_DISTILLATION_LENGTH})"
+        )
+    return True, ""
 
 
 def _map_article(topic: str, content: str, clients: KnowledgeClients) -> dict:
@@ -188,6 +249,69 @@ def _map_article(topic: str, content: str, clients: KnowledgeClients) -> dict:
     }
 
 
+def _forced_tool_call(
+    clients: KnowledgeClients,
+    *,
+    model: str,
+    max_tokens: int,
+    system: str | list[TextBlockParam],
+    tool: ToolParam,
+    user_message: str,
+    step: str,
+    topic: str,
+) -> tuple[dict, Usage]:
+    """Make a forced tool-use call and return the validated tool input.
+
+    Shared by both Reduce calls. Fails loudly on truncation — a truncated
+    tool call would otherwise produce an incomplete result that could be
+    written to the graph as if it were complete.
+
+    Args:
+        clients: Shared client container; ``clients.anthropic`` is used.
+        model: Model ID for this call.
+        max_tokens: Output token cap for this call.
+        system: System prompt (plain string or content-block list).
+        tool: Strict tool definition the model is forced to call.
+        user_message: The user-turn content.
+        step: Human-readable step name for error messages (e.g.
+            ``"Reduce A (note synthesis)"``).
+        topic: The search topic, for error messages.
+
+    Returns:
+        Tuple of (tool input dict, usage object for this call).
+
+    Raises:
+        RuntimeError: If the response was truncated at ``max_tokens`` or
+            the model did not call the tool.
+    """
+    response = clients.anthropic.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        tools=[tool],
+        tool_choice=ToolChoiceToolParam(type="tool", name=tool["name"]),
+        messages=[MessageParam(role="user", content=user_message)],
+    )
+
+    if response.stop_reason == "max_tokens":
+        raise RuntimeError(
+            f"{step} truncated at max_tokens={max_tokens} for topic {topic!r} "
+            f"— refusing to use an incomplete result"
+        )
+
+    tool_block = next(
+        (b for b in response.content if b.type == "tool_use"),
+        None,
+    )
+    if tool_block is None or not isinstance(tool_block, ToolUseBlock):
+        raise RuntimeError(
+            f"{step}: Claude did not call {tool['name']} — "
+            f"stop_reason={response.stop_reason}, content={response.content!r}"
+        )
+
+    return tool_block.input, response.usage
+
+
 def synthesize_concept_note(
     topic: str,
     extracted_texts: list[dict],
@@ -200,9 +324,14 @@ def synthesize_concept_note(
     1. **Map**: Each article is independently distilled by Haiku into dense
        technical bullet points. All map calls run in parallel via
        ``ThreadPoolExecutor``. Prior notes are NOT passed to the Map step —
-       they are raw-article distillation only.
-    2. **Reduce**: Sonnet receives the combined distilled extracts (and any
-       prior notes) and produces a structured Concept Note via tool use.
+       they are raw-article distillation only. A failed or junk distillation
+       is logged and skipped; synthesis proceeds with whatever survives.
+    2. **Reduce A**: Sonnet receives the combined distilled extracts (and any
+       prior notes) and writes the Concept Note via strict tool use — full
+       attention on cross-referencing sources, nothing else.
+    3. **Reduce B**: Haiku extracts concepts and relationships from the
+       *finished* note via strict tool use, guaranteeing every concept is
+       grounded in what the note actually says.
 
     No database writes happen here.
 
@@ -222,14 +351,23 @@ def synthesize_concept_note(
         - ``concepts`` (list[str]): Concept names extracted from the note.
         - ``proposed_relationships`` (list[dict]): Each dict has
           ``from``, ``type`` (RELATED_TO | PREREQUISITE_OF), ``to``.
-        - ``source_urls`` (list[str]): URLs of the articles used.
+        - ``source_urls`` (list[str]): URLs of the articles that actually
+          survived the Map step and fed the note.
         - ``input_tokens`` (int): Total tokens across both Haiku and Sonnet calls.
         - ``output_tokens`` (int): Total tokens across both Haiku and Sonnet calls.
+
+    Raises:
+        ValueError: If ``extracted_texts`` is empty.
+        RuntimeError: If every Map distillation fails or is junk, if either
+            Reduce call is truncated at its ``max_tokens``, or if Claude
+            does not call the forced tool.
     """
     if not extracted_texts:
         raise ValueError("extracted_texts is empty — nothing to synthesize")
 
     # --- Map step: distil each article in parallel ---
+    # A single failed or junk distillation must not kill the whole synthesis:
+    # log it, skip the article, and continue with whatever survives.
     n = len(extracted_texts)
     mapped: list[dict | None] = [None] * n
 
@@ -240,21 +378,46 @@ def synthesize_concept_note(
         }
         for future in as_completed(futures):
             idx = futures[future]
-            mapped[idx] = future.result()
+            try:
+                mapped[idx] = future.result()
+            except Exception:
+                logger.exception(
+                    "Map step failed for %s — skipping article",
+                    extracted_texts[idx]["url"],
+                )
 
-    total_input_tokens = sum(m["input_tokens"] for m in mapped)
-    total_output_tokens = sum(m["output_tokens"] for m in mapped)
+    survivors: list[tuple[dict, dict]] = []
+    for item, result in zip(extracted_texts, mapped):
+        if result is None:
+            continue
+        ok, reason = _is_distillation_valid(result["text"])
+        if not ok:
+            logger.warning(
+                "Discarding distillation of %s (%s)", item["url"], reason
+            )
+            continue
+        survivors.append((item, result))
+
+    if not survivors:
+        raise RuntimeError(
+            f"Map step produced no usable distillations for topic {topic!r} "
+            f"({n} article(s) attempted)"
+        )
+
+    total_input_tokens = sum(m["input_tokens"] for _, m in survivors)
+    total_output_tokens = sum(m["output_tokens"] for _, m in survivors)
 
     logger.info(
-        "Map step complete: %d articles, %d in / %d out tokens (Haiku)",
+        "Map step complete: %d/%d articles survived, %d in / %d out tokens (Haiku)",
+        len(survivors),
         n,
         total_input_tokens,
         total_output_tokens,
     )
 
-    # --- Reduce step: synthesize across all distilled extracts ---
+    # --- Build the Reduce A user message ---
     distilled_blocks = []
-    for i, (item, result) in enumerate(zip(extracted_texts, mapped), 1):
+    for i, (item, result) in enumerate(survivors, 1):
         distilled_blocks.append(
             f"--- Distilled Source {i}: {item['url']} ---\n{result['text']}\n"
         )
@@ -279,67 +442,86 @@ def synthesize_concept_note(
         else ""
     )
 
-    user_message = (
+    synth_message = (
         f"Topic: {topic}\n\n"
         + prior_block
-        + f"{n} distilled source article(s):\n\n"
+        + f"{len(survivors)} distilled source article(s):\n\n"
         + "\n".join(distilled_blocks)
-        + "\nSynthesize a Concept Note using the submit_concept_note tool."
+        + "\nSynthesize a Concept Note using the submit_note tool."
         + extension_instruction
     )
 
-    response = clients.anthropic.messages.create(
+    # --- Reduce A: synthesize the note (Sonnet, full attention on the note) ---
+    synth_result, synth_usage = _forced_tool_call(
+        clients,
         model=_MODEL,
         max_tokens=_MAX_TOKENS,
         system=[
             TextBlockParam(
                 type="text",
-                text=_SYSTEM_PROMPT,
+                text=_SYNTH_SYSTEM_PROMPT,
                 cache_control=CacheControlEphemeralParam(type="ephemeral"),
             )
         ],
-        tools=[_SUBMIT_TOOL],
-        tool_choice=ToolChoiceToolParam(type="tool", name="submit_concept_note"),
-        messages=[MessageParam(role="user", content=user_message)],
+        tool=_NOTE_TOOL,
+        user_message=synth_message,
+        step="Reduce A (note synthesis)",
+        topic=topic,
     )
+    note: str = synth_result["synthesized_note"]
 
-    total_input_tokens += response.usage.input_tokens
-    total_output_tokens += response.usage.output_tokens
+    total_input_tokens += synth_usage.input_tokens
+    total_output_tokens += synth_usage.output_tokens
 
     logger.info(
-        "Reduce step complete: %d in / %d out tokens (Sonnet)",
-        response.usage.input_tokens,
-        response.usage.output_tokens,
+        "Reduce A complete: %d in / %d out tokens (Sonnet)",
+        synth_usage.input_tokens,
+        synth_usage.output_tokens,
     )
 
-    tool_block = next(
-        (b for b in response.content if b.type == "tool_use"),
-        None,
+    # --- Reduce B: extract concepts from the finished note (Haiku, cheap) ---
+    # Grounding guarantee: concepts come from what the note actually says,
+    # not from source material the note may have dropped.
+    extract_message = (
+        f"Topic: {topic}\n\nConcept note:\n{note}\n\n"
+        "Extract concepts and relationships using the submit_concepts tool."
     )
-    if tool_block is None or not isinstance(tool_block, ToolUseBlock):
-        raise RuntimeError(
-            f"Claude did not call submit_concept_note — stop_reason={response.stop_reason}, "
-            f"content={response.content!r}"
-        )
+    extract_result, extract_usage = _forced_tool_call(
+        clients,
+        model=_EXTRACT_MODEL,
+        max_tokens=_EXTRACT_MAX_TOKENS,
+        system=_EXTRACT_SYSTEM_PROMPT,
+        tool=_CONCEPTS_TOOL,
+        user_message=extract_message,
+        step="Reduce B (concept extraction)",
+        topic=topic,
+    )
 
-    result = tool_block.input
+    total_input_tokens += extract_usage.input_tokens
+    total_output_tokens += extract_usage.output_tokens
 
-    concepts = result.get("concepts", [])
-    relationships = result.get("proposed_relationships", [])
+    logger.info(
+        "Reduce B complete: %d in / %d out tokens (Haiku)",
+        extract_usage.input_tokens,
+        extract_usage.output_tokens,
+    )
+
+    concepts = extract_result.get("concepts", [])
+    relationships = extract_result.get("proposed_relationships", [])
 
     if not concepts:
         logger.warning(
-            "synthesize_concept_note: Claude returned no concepts for topic=%r "
+            "synthesize_concept_note: no concepts extracted for topic=%r "
             "(raw keys: %s)",
             topic,
-            list(result.keys()),
+            list(extract_result.keys()),
         )
 
     return {
-        "synthesized_note": result["synthesized_note"],
+        "synthesized_note": note,
         "concepts": concepts,
         "proposed_relationships": relationships,
-        "source_urls": [item["url"] for item in extracted_texts],
+        "source_urls": [item["url"] for item, _ in survivors],
         "input_tokens": total_input_tokens,
         "output_tokens": total_output_tokens,
     }
@@ -396,7 +578,8 @@ if __name__ == "__main__":
 
         # Map-Reduce synthesis
         print(f"\nMap step  → {_MAP_MODEL} × {len(extracted)} articles (parallel)…")
-        print(f"Reduce step → {_MODEL}…\n")
+        print(f"Reduce A  → {_MODEL} (note)…")
+        print(f"Reduce B  → {_EXTRACT_MODEL} (concepts)…\n")
         result = synthesize_concept_note(topic, extracted, clients, prior_notes=prior_notes)
 
         # Cost breakdown: Haiku at $0.80/$4 per M, Sonnet at $3/$15 per M.
