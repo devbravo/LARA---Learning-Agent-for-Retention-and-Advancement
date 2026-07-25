@@ -5,33 +5,37 @@ Each node receives an AgentState and returns a partial state update dict.
 All exceptions are caught and surfaced as user-friendly messages in state.
 """
 
+import json
 import pytz
+import yaml
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import cast, TypedDict
+from typing import cast
 
 import logging
-from src.core import sm2 as _sm2_mod
-
-import yaml
-
+from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
 
 from src.agent.formatting import (
     format_time,
     local_datetime_str,
 )
-from src.agent.daily_planning_helpers import (
+from src.agent.plan_message import (
     append_calendar_lines,
     build_evening_preview_state,
     pack_mock_slots,
 )
-from src.agent.planning_helpers import (
+from src.agent.slot_builders import (
     build_in_progress_study_slots,
     build_missing_study_events,
     get_prebooked_topics,
     rebook_study_events,
 )
+
+from src.agent import messages
+from src.agent.state import AgentState
+from src.agent.weak_areas_parser import null_if_skip, breakdown, _DSA_ALL, _SYSDESIGN_ALL, _BEHAVIORAL_ALL
+
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
 from src.integrations import claude_api as _claude
@@ -41,41 +45,12 @@ from src.repositories import session_repository, topic_repository
 from src.services import topic_service
 
 _CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
-_TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
-logger = logging.getLogger(__name__)
 
 def _load_config() -> dict:
     with open(_CONFIG_PATH) as f:
         return yaml.safe_load(f)
+logger = logging.getLogger(__name__)
 
-
-def _load_topics() -> dict:
-    with open(_TOPICS_PATH) as f:
-        return yaml.safe_load(f)
-
-
-# ---------------------------------------------------------------------------
-# State definition
-# ---------------------------------------------------------------------------
-
-class AgentState(TypedDict, total=False):
-    trigger: str               # fresh flow routing signal
-    chat_id: int
-    message_id: int | None     # Telegram message_id (legacy; button removal now happens in-node)
-    duration_min: int | None
-    proposed_topic: str | None          # single-slot flow (on_demand)
-    proposed_slot: dict | None          # single-slot flow (on_demand)
-    proposed_slots: list[dict] | None   # multi-slot flow (daily_planning)
-    has_study_plan: bool                # False → skip confirm, go straight to output
-    preview_only: bool                  # True → evening briefing, route to output not confirm
-    quality_score: int | None
-    messages: list[str]        # outbound Telegram messages
-    payload: str | None        # raw resume value from interrupt()
-    current_topic_id: int | None
-    current_topic_name: str | None
-    study_topic_category: str | None    # selected category in /pick flow
-    pending_subtopic_message_id: int | None  # message_id of last sent subtopic list
-    pending_picker_message_id: int | None    # message_id of last sent duration picker
 
 
 # ---------------------------------------------------------------------------
@@ -86,71 +61,9 @@ def router(state: AgentState) -> AgentState:
     trigger = state.get("trigger", "")
     if not trigger:
         return {"messages": ["⚠️ No trigger set — cannot route."]}
-    return {}
-
-
-def route_from_router(state: AgentState) -> str:
-    trigger = state.get("trigger", "")
-    mapping = {
-        "daily":    "daily_planning",
-        "evening":  "daily_planning",
-        "weekend":  "weekend_brief",
-        "study":    "send_duration_picker",
-        "done":     "done_parser",
-        "pick":     "study_topic",
-        "activate": "activate_topic",
-    }
-    return mapping.get(trigger, "output")
-
-
-def route_from_daily_planning(state: AgentState) -> str:
-    if state.get("preview_only") or not state.get("has_study_plan"):
-        return "output"
-    payload = (state.get("payload") or "").lower().strip()
-    if payload == "yes, book them":
-        return "book_events"
-    return "output"
-
-
-def route_from_done_parser(state: AgentState) -> str:
-    if state.get("quality_score") is not None:
-        return "log_session"
-    return "output"
-
-
-def route_from_log_weak_areas(state: AgentState) -> str:
-    proposed_slots = state.get("proposed_slots") or []
-    logged_names = session_repository.get_logged_topic_names_for_today()
-    unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
-    return "log_session" if unlogged else "output"
-
-
-def route_from_on_demand(state: AgentState) -> str:
-    return "generate_brief" if state.get("proposed_topic") else "output"
-
-
-def route_from_generate_brief(state: AgentState) -> str:
-    """Route to book_events only when a slot exists and user confirmed booking.
-
-    If no free slot was found (has_study_plan=False), the brief was already
-    sent directly — go straight to output with no booking step.
-    If a slot exists but user skipped, book_events handles the skip message.
-    """
-    if state.get("has_study_plan") and state.get("proposed_slot"):
-        return "book_events"
-    return "output"
-
-
-def route_from_activate_topic(state: AgentState) -> str:
-    return "graduate_topic" if state.get("payload") else "output"
-
-
-def route_from_study_topic(state: AgentState) -> str:
-    return "study_topic_category" if state.get("study_topic_category") else "output"
-
-
-def route_from_study_topic_category(state: AgentState) -> str:
-    return "study_topic_confirm" if state.get("proposed_topic") else "output"
+    # Clear stale messages from any previous flow so routing guards
+    # (e.g. route_from_study_topic) don't misread checkpoint state.
+    return {"messages": []}
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +84,9 @@ def daily_planning(state: AgentState) -> AgentState:
         timed_events = [e for e in events if "dateTime" in e.get("start", {})]
 
         if is_evening:
-            topics_config = _load_topics()
             in_progress_topics = topic_repository.get_in_progress_topic_names()
             evening_state = build_evening_preview_state(
-                target_date, events, timed_events, due_topics, config, topics_config,
+                target_date, events, timed_events, due_topics, config,
                 in_progress_topics=in_progress_topics,
             )
             return cast(AgentState, evening_state)
@@ -199,13 +111,11 @@ def daily_planning(state: AgentState) -> AgentState:
         append_calendar_lines(lines, timed_events, "📅 Your day: No meetings today")
 
         available_topics = [t for t in due_topics if t["name"] not in prebooked]
-        topics_config = _load_topics()
         min_window_minutes = config.get("min_window_minutes", 25)
         proposed_topic, proposed_slot, proposed_slots = pack_mock_slots(
             target_date,
             free_windows,
             available_topics,
-            topics_config,
             min_window_minutes,
             lines,
         )
@@ -220,7 +130,6 @@ def daily_planning(state: AgentState) -> AgentState:
                 )
             lines.append("")
 
-        rebook_study_events(in_progress_topics, timed_events, target_date, config)
 
         assigned_names = {slot["topic"] for slot in proposed_slots}
         backlog_topics = [t for t in available_topics if t["name"] not in assigned_names]
@@ -236,46 +145,72 @@ def daily_planning(state: AgentState) -> AgentState:
         has_study_plan = bool(proposed_slots)
         message = "\n".join(lines + (["Confirm these mock interview blocks?"] if has_study_plan else ["No mock interview windows available today — calendar fully booked."]))
 
-        base_state: dict = {
+        base_state: AgentState = {
             "proposed_topic": proposed_topic,
             "proposed_slot": proposed_slot,
             "proposed_slots": proposed_slots if proposed_slots else None,
             "has_study_plan": has_study_plan,
             "preview_only": False,
+            "messages": [],  # clear any stale messages
         }
 
         if not has_study_plan:
             base_state["messages"] = [message]
-            return cast(AgentState, base_state)
+            return base_state
 
-        # Interactive path: send buttons and interrupt for user confirmation
+        # Send buttons and return — interrupt happens in await_daily_confirmation
+        msg_id = _telegram.send_buttons(message, messages.BOOKING_BUTTONS)
+        base_state["pending_message_id"] = msg_id
+        return base_state
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        return {"messages": [f"⚠️ Daily briefing failed: {e}"]}
+
+
+# ---------------------------------------------------------------------------
+# Node: await_daily_confirmation  (interrupt lives here, not in daily_planning)
+# ---------------------------------------------------------------------------
+
+def await_daily_confirmation(state: AgentState) -> AgentState:
+    """Wait for the user to confirm or skip the daily booking proposal.
+
+    interrupt() is the very first statement so that on LangGraph resume the
+    node re-runs with no side-effects before it — eliminating duplicate sends.
+    """
+    try:
         chat_id = state.get("chat_id")
-        msg_id = _telegram.send_buttons(message, ["Yes, book them", "Skip"])
+        msg_id = state.get("pending_message_id")
+
         booking_payload = interrupt("waiting for booking confirmation")
 
-        # Remove buttons after resume
+        # Remove buttons after resume (idempotent — silently fails if already gone)
         if msg_id and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         booking_payload_lower = (booking_payload or "").lower().strip()
-        if booking_payload_lower != "yes, book them":
-            base_state["messages"] = ["Okay, no study blocks booked. See you tomorrow! 👋"]
-
-        base_state["payload"] = booking_payload
-        return cast(AgentState, base_state)
+        return {
+            "payload": booking_payload,
+            "pending_message_id": None,
+            "messages": [] if booking_payload_lower == "yes, book them"
+                        else ["Okay, no study blocks booked. See you tomorrow! 👋"],
+        }
 
     except Exception as e:
-        return cast(AgentState, {"messages": [f"⚠️ Daily briefing failed: {e}"]})
+        if isinstance(e, GraphInterrupt):
+            raise
+        return {"messages": [f"⚠️ Booking confirmation failed: {e}"]}
 
 
 # ---------------------------------------------------------------------------
 # Node: weekend_brief
 # ---------------------------------------------------------------------------
 
-def weekend_brief(state: AgentState) -> AgentState:
+def weekend_brief(_state: AgentState) -> AgentState:
     try:
         today = date.today()
         day_str = f"{today.strftime('%A %B')} {today.day}"
@@ -287,11 +222,9 @@ def weekend_brief(state: AgentState) -> AgentState:
         if due_topics:
             lines.append(f"🎯 You have {len(due_topics)} topic(s) due for review today:")
             for topic in due_topics:
-                weak = topic.get("weak_areas")
-                focus = f" — focus: {weak}" if weak else ""
                 overdue_days = (today - date.fromisoformat(topic["next_review"])).days
                 overdue_str = f" ⚠️ overdue {overdue_days}d" if overdue_days > 0 else ""
-                lines.append(f"• {topic['name']}{overdue_str}{focus}")
+                lines.append(f"• {topic['name']}{overdue_str}")
             lines.append("")
             lines.append("What time block will you have today to tackle these?")
 
@@ -331,36 +264,21 @@ def send_duration_picker(state: AgentState) -> AgentState:
     try:
         chat_id = state.get("chat_id")
 
-        # Clean up stale picker
-        old_id = state.get("pending_picker_message_id")
+        # Clean up stale picker from a previous abandoned /study flow
+        old_id = state.get("pending_message_id")
         if old_id is not None and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, old_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
-        msg_id = _telegram.send_buttons("How long do you have?", ["30 min", "45 min", "60 min"])
-
-        duration_payload = interrupt("waiting for duration selection")
-
-        # Remove buttons after resume
-        if msg_id and chat_id:
-            try:
-                _telegram.remove_buttons(chat_id, msg_id)
-            except Exception:
-                pass
-
-        try:
-            duration_min = int((duration_payload or "30 min").replace(" min", "").strip())
-        except (ValueError, AttributeError):
-            duration_min = 30
-
-        return {
-            "pending_picker_message_id": msg_id,
-            "duration_min": duration_min,
-        }
+        msg_id = _telegram.send_buttons(*messages.duration_picker())
+        # Return msg_id — interrupt lives in on_demand so there's no duplicate send on resume
+        return {"pending_message_id": msg_id}
 
     except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
         return {"messages": [f"⚠️ Duration picker failed: {e}"]}
 
 
@@ -369,13 +287,34 @@ def send_duration_picker(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def on_demand(state: AgentState) -> AgentState:
+    """interrupt() is the very first statement so re-runs on resume are side-effect-free."""
     try:
+        chat_id = state.get("chat_id")
+        picker_msg_id = state.get("pending_message_id")
+
+        # Interrupt at start — no side effects above this line
+        duration_payload = interrupt("waiting for duration selection")
+
+        # Remove picker buttons after resume (idempotent)
+        if picker_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, picker_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        try:
+            duration_min = int((duration_payload or "30 min").replace(" min", "").strip())
+        except (ValueError, AttributeError):
+            duration_min = 30
+
         due_topics = _sm2.get_due_topics()
         topic = due_topics[0] if due_topics else None
         if topic is None:
-            return {"messages": ["🎉 Nothing due for review right now — enjoy your break!"]}
-
-        duration_min = state.get("duration_min") or 30
+            return {
+                "messages": [messages.nothing_due()],
+                "duration_min": duration_min,
+                "pending_message_id": None,
+            }
 
         # Find a free window of the requested duration
         config = _load_config()
@@ -401,15 +340,19 @@ def on_demand(state: AgentState) -> AgentState:
                 }
                 break
 
-        status = f"📚 Generating a {duration_min} min brief for {topic['name']}…"
+        status = messages.generating_brief(topic["name"], duration_min)
         _telegram.send_message(status)
         return {
             "proposed_topic": topic["name"],
             "proposed_slot": proposed_slot,
             "has_study_plan": proposed_slot is not None,
+            "duration_min": duration_min,
+            "pending_message_id": None,
         }
 
     except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
         return {"messages": [f"⚠️ On-demand session failed: {e}"]}
 
 
@@ -421,7 +364,6 @@ def generate_brief(state: AgentState) -> AgentState:
     try:
         topic = state.get("proposed_topic") or "General Study"
         duration_min = state.get("duration_min") or 30
-        chat_id = state.get("chat_id")
 
         context = "General review"
         weak_areas = topic_repository.get_topic_weak_areas_by_name(topic)
@@ -435,27 +377,49 @@ def generate_brief(state: AgentState) -> AgentState:
         )
 
         if state.get("has_study_plan") and state.get("proposed_slot"):
-            # Send brief with booking buttons and wait for confirmation.
-            # Do NOT add to messages — output runs after book_events and
-            # must not re-send the brief.
-            msg_id = _telegram.send_buttons(brief, ["Yes, book them", "Skip"])
-            booking_payload = interrupt("waiting for booking confirmation")
-
-            if msg_id and chat_id:
-                try:
-                    _telegram.remove_buttons(chat_id, msg_id)
-                except Exception:
-                    pass
-
-            return {"payload": booking_payload}
+            # Send brief with booking buttons — interrupt lives in await_brief_confirmation
+            msg_id = _telegram.send_buttons(brief, messages.BOOKING_BUTTONS)
+            return {"pending_message_id": msg_id, "messages": []}
         else:
-            # No free slot found — brief is the final output; let output send it.
+            # No free slot — brief is the final output
             return {"messages": [brief]}
 
     except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
         return {
             "messages": [f"⚠️ Could not generate brief: {e}\nProceeding with general study plan."],
         }
+
+
+# ---------------------------------------------------------------------------
+# Node: await_brief_confirmation  (interrupt lives here, not in generate_brief)
+# ---------------------------------------------------------------------------
+
+def await_brief_confirmation(state: AgentState) -> AgentState:
+    """interrupt() is the very first statement — no duplicate sends on resume."""
+    try:
+        chat_id = state.get("chat_id")
+        msg_id = state.get("pending_message_id")
+
+        booking_payload = interrupt("waiting for booking confirmation")
+
+        if msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        return {
+            "payload": booking_payload,
+            "pending_message_id": None,
+            "messages": [],
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        return {"messages": [f"⚠️ Booking confirmation failed: {e}"]}
 
 
 # ---------------------------------------------------------------------------
@@ -463,17 +427,25 @@ def generate_brief(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def book_events(state: AgentState) -> AgentState:
-    payload = (state.get("payload") or "").lower().strip()
-    if payload == "skip":
-        try:
-            _telegram.send_message("Okay, no study blocks booked. See you tomorrow! 👋")
-        except Exception as e:
-            logger.warning("[book_events] Failed to send skip message: %s", e)
-        return {}
-
     today = date.today()
     config = _load_config()
     tz = pytz.timezone(config["timezone"])
+
+    # Book in-progress [Study] events first (only when user confirmed, not on Skip)
+    booked_study: list[str] = []
+    try:
+        in_progress_topics = topic_repository.get_in_progress_topic_names()
+        events_today = _gcal.get_events(today)
+        timed_events_today = [e for e in events_today if "dateTime" in e.get("start", {})]
+        from src.agent.slot_builders import is_topic_in_summary
+        already_booked = {
+            t for t in in_progress_topics
+            if any(is_topic_in_summary(t, ev.get("summary", "")) for ev in timed_events_today)
+        }
+        rebook_study_events(in_progress_topics, timed_events_today, today, config)
+        booked_study = [t for t in in_progress_topics if t not in already_booked]
+    except Exception as e:
+        logger.warning("[book_events] Failed to rebook study events: %s", e, exc_info=True)
 
     booked: list[str] = []
     slots = state.get("proposed_slots")
@@ -511,18 +483,14 @@ def book_events(state: AgentState) -> AgentState:
         except Exception as e:
             logger.warning("[book_events] Calendar write failed: %s", e, exc_info=True)
 
-    if booked:
-        summary = "\n".join(f"  • {t}" for t in booked)
+    if booked or booked_study:
         try:
-            _telegram.send_message(f"✅ Booked {len(booked)} mock session(s):\n{summary}")
+            _telegram.send_message(messages.booked_sessions(booked_study, booked))
         except Exception as e:
             logger.warning("[book_events] Confirmation send failed: %s", e, exc_info=True)
     else:
         try:
-            _telegram.send_message(
-                "⚠️ Could not book any sessions — Google Calendar may be unavailable. "
-                "Please try confirming again."
-            )
+            _telegram.send_message(messages.BOOKING_FAILED)
         except Exception as e:
             logger.warning("[book_events] Failed to send booking-failure notice: %s", e, exc_info=True)
 
@@ -537,47 +505,109 @@ def done_parser(state: AgentState) -> AgentState:
     logger.info("done_parser: entered")
 
     try:
-        proposed_slots = state.get("proposed_slots") or []
-        if not proposed_slots:
-            return {"messages": ["No study sessions were planned today."]}
+        unlogged = topic_repository.get_active_unlogged_topics_today()
 
-        logged_names = session_repository.get_logged_topic_names_for_today()
-        unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+        # Scope to today's plan when proposed_slots are available; fall back to
+        # topics actually due today so /done on a weekend (no morning plan) doesn't
+        # present every active topic.
+        proposed_slots = state.get("proposed_slots") or []
+        planned_names = {s["topic"] for s in proposed_slots}
+        if planned_names:
+            unlogged = [t for t in unlogged if t["name"] in planned_names]
+        else:
+            due_names = {t["name"] for t in _sm2.get_due_topics()}
+            unlogged = [t for t in unlogged if t["name"] in due_names]
 
         if not unlogged:
-            return {"messages": ["All sessions already logged for today."]}
+            return {"messages": [messages.no_sessions_to_log()], "has_unlogged_sessions": False}
 
-        slot = unlogged[0]
-        topic_name = slot["topic"]
-        topic_id = topic_repository.get_topic_id_by_name(topic_name)
+        if len(unlogged) >= 2:
+            logger.info("done_parser: %d unlogged topics — sending picker", len(unlogged))
+            # One button per row so long topic names don't get truncated
+            picker_msg_id = _telegram.send_inline_buttons(*messages.topic_picker(unlogged))
+            return {
+                "current_topic_id": None,
+                "current_topic_name": None,
+                "quality_score": None,
+                "pending_message_id": picker_msg_id,
+                "has_unlogged_sessions": True,
+            }
 
-        if topic_id is None:
-            return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."]}
+        # Exactly one unlogged topic — skip picker
+        topic = unlogged[0]
+        topic_id = topic["id"]
+        topic_name = topic["name"]
+
+        proposed_slots = state.get("proposed_slots") or []
+        duration_min = next(
+            (s["duration_min"] for s in proposed_slots if s["topic"] == topic_name), 0
+        )
 
         logger.info("done_parser: sending rating buttons for %s", topic_name)
-        chat_id = state.get("chat_id")
-        rating_msg_id = _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
-
-        rating_payload = interrupt("waiting for rating")
-
-        if rating_msg_id and chat_id:
-            try:
-                _telegram.remove_buttons(chat_id, rating_msg_id)
-            except Exception:
-                pass
-
-        score_map = {"😕 hard": 2, "😐 ok": 3, "😊 easy": 5}
-        quality = score_map.get((rating_payload or "").lower().strip(), 3)
+        rating_msg_id = _telegram.send_buttons(*messages.rating_prompt(topic_name))
 
         return {
             "current_topic_id": topic_id,
             "current_topic_name": topic_name,
-            "quality_score": quality,
+            "duration_min": duration_min,
+            "quality_score": None,
+            "pending_message_id": rating_msg_id,
+            "has_unlogged_sessions": True,
         }
 
     except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
         logger.error("done_parser failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Done flow failed: {e}"]}
+
+
+# ---------------------------------------------------------------------------
+# Node: select_done_topic
+# ---------------------------------------------------------------------------
+
+def select_done_topic(state: AgentState) -> AgentState:
+    """interrupt() is first — on resume, receives selected topic name from picker button."""
+    try:
+        chat_id = state.get("chat_id")
+        picker_msg_id = state.get("pending_message_id")
+
+        # Interrupt at start — no side effects above this line
+        selected_name = interrupt("waiting for topic selection")
+
+        # Remove picker buttons after resume (idempotent)
+        if picker_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, picker_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        topic_name = (selected_name or "").strip()
+        topic_id = topic_repository.get_topic_id_by_name(topic_name)
+
+        if topic_id is None:
+            return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."], "has_unlogged_sessions": False}
+
+        proposed_slots = state.get("proposed_slots") or []
+        duration_min = next(
+            (s["duration_min"] for s in proposed_slots if s["topic"] == topic_name), 0
+        )
+
+        rating_msg_id = _telegram.send_buttons(*messages.rating_prompt(topic_name))
+
+        return {
+            "current_topic_id": topic_id,
+            "current_topic_name": topic_name,
+            "duration_min": duration_min,
+            "quality_score": None,
+            "pending_message_id": rating_msg_id,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("select_done_topic failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Topic selection failed: {e}"], "has_unlogged_sessions": False}
 
 
 # ---------------------------------------------------------------------------
@@ -585,39 +615,25 @@ def done_parser(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def log_session(state: AgentState) -> AgentState:
+    """interrupt() is first — on resume, no side-effects run before it."""
     try:
-        quality = state.get("quality_score")
+        chat_id = state.get("chat_id")
+        rating_msg_id = state.get("pending_message_id")
         topic_id = state.get("current_topic_id")
         topic_name = state.get("current_topic_name") or "topic"
 
-        if quality is None or topic_id is None:
-            # Loop case: find next unlogged topic and get rating via interrupt
-            proposed_slots = state.get("proposed_slots") or []
-            logged_names = session_repository.get_logged_topic_names_for_today()
-            unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+        # Interrupt at start — no side effects above this line
+        rating_payload = interrupt("waiting for rating")
 
-            if not unlogged:
-                return {"messages": ["All sessions logged for today. Great work! 💪"]}
+        # Remove rating buttons after resume (idempotent)
+        if rating_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, rating_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
-            slot = unlogged[0]
-            topic_name = slot["topic"]
-            topic_id = topic_repository.get_topic_id_by_name(topic_name)
-
-            if topic_id is None:
-                return {"messages": [f"⚠️ Topic '{topic_name}' not found in database."]}
-
-            chat_id = state.get("chat_id")
-            loop_rating_msg_id = _telegram.send_buttons(f"How did {topic_name} go?", ["😕 Hard", "😐 OK", "😊 Easy"])
-            rating_payload = interrupt("waiting for rating (loop)")
-
-            if loop_rating_msg_id and chat_id:
-                try:
-                    _telegram.remove_buttons(chat_id, loop_rating_msg_id)
-                except Exception:
-                    pass
-
-            score_map = {"😕 hard": 2, "😐 ok": 3, "😊 easy": 5}
-            quality = score_map.get((rating_payload or "").lower().strip(), 3)
+        score_map = {"😕 hard": 2, "😐 ok": 3, "😊 easy": 5}
+        quality = score_map.get((rating_payload or "").lower().strip(), 3)
 
         # Find duration from proposed_slots
         proposed_slots = state.get("proposed_slots") or []
@@ -627,35 +643,61 @@ def log_session(state: AgentState) -> AgentState:
                 duration_min = slot["duration_min"]
                 break
 
-        chat_id = state.get("chat_id")
         session_repository.upsert_today_session(
             topic_id=topic_id,
             duration_min=duration_min,
-            quality_score=quality,
+            student_quality=quality,
         )
-        _sm2_mod.update_topic_after_session(topic_id=topic_id, quality=quality)
+        teacher_quality = session_repository.get_today_teacher_quality(topic_id)
+        sm2_quality = teacher_quality if teacher_quality is not None else quality
+        _sm2.update_topic_after_session(topic_id=topic_id, quality=sm2_quality)
 
-        weak_areas_msg_id = _telegram.send_buttons(
-            "Any weak areas to note? Reply with text or tap Skip.",
-            ["Skip"]
-        )
-        weak_areas_payload = interrupt("waiting for weak areas")
-
-        if weak_areas_msg_id and chat_id:
-            try:
-                _telegram.remove_buttons(chat_id, weak_areas_msg_id)
-            except Exception:
-                pass
+        # Send type-specific first structured feedback question
+        topic_type = topic_repository.get_topic_type_by_id(topic_id) or "conceptual"
+        if topic_type == "dsa":
+            first_msg_id = _telegram.send_inline_buttons(*messages.weak_areas_q1_dsa())
+        elif topic_type == "system_design":
+            first_msg_id = _telegram.send_buttons(*messages.weak_areas_q1_system_design())
+        elif topic_type == "conceptual":
+            first_msg_id = _telegram.send_buttons(*messages.weak_areas_q1_conceptual())
+        else:  # behavioral
+            first_msg_id = _telegram.send_buttons(*messages.weak_areas_q1_behavioral())
 
         return {
             "current_topic_id": topic_id,
             "current_topic_name": topic_name,
-            "quality_score": None,  # clear so next loop iteration finds next topic
-            "payload": weak_areas_payload,
+            "quality_score": quality,
+            "payload": None,
+            "pending_message_id": first_msg_id,
         }
 
     except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
         return {"messages": [f"⚠️ Failed to log session: {e}"]}
+
+
+def _build_completion_message(topic_name: str, proposed_slots: list[dict]) -> str:
+    """Return the post-log completion message with any remaining unlogged topics.
+
+    Args:
+        topic_name: Name of the topic just logged.
+        proposed_slots: Proposed slots from state, used to scope remaining topics.
+
+    Returns:
+        Completion message string.
+    """
+    all_unlogged = topic_repository.get_active_unlogged_topics_today()
+    planned_names = {s["topic"] for s in proposed_slots}
+    if planned_names:
+        remaining = [t for t in all_unlogged if t["name"] in planned_names]
+    else:
+        due_names = {t["name"] for t in _sm2.get_due_topics()}
+        remaining = [t for t in all_unlogged if t["name"] in due_names]
+
+    if not remaining:
+        return messages.completion_all_done(topic_name)
+    return messages.completion_still_unlogged(topic_name, remaining)
 
 
 # ---------------------------------------------------------------------------
@@ -663,34 +705,154 @@ def log_session(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def log_weak_areas(state: AgentState) -> AgentState:
+    """Holds interrupt 1. On resume removes Q1 buttons and sends Q2 prompt."""
     try:
-        text = (state.get("payload") or "").strip()
+        chat_id = state.get("chat_id")
+        first_msg_id = state.get("pending_message_id")
         topic_id = state.get("current_topic_id")
 
+        # ── INTERRUPT 1 at top — no side effects before this ────────────────
+        first_answer = interrupt("waiting for first feedback")
+
+        if first_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, first_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        first_text = (first_answer or "").strip()
+
+        topic_type = topic_repository.get_topic_type_by_id(topic_id) if topic_id else None
+        topic_type = topic_type or "conceptual"
+
+        if topic_type == "dsa":
+            second_msg_id = _telegram.send_buttons(*messages.weak_areas_q2_dsa())
+        elif topic_type == "system_design":
+            second_msg_id = _telegram.send_inline_buttons(*messages.weak_areas_q2_system_design())
+        elif topic_type == "conceptual":
+            weak_json_str = json.dumps({"unclear": null_if_skip(first_text)})
+            session_id = session_repository.get_today_session_id(topic_id)
+            if session_id is not None:
+                session_repository.update_session_weak_areas(session_id, weak_json_str)
+                session_repository.update_session_student_weak_areas(session_id, weak_json_str)
+            topic_repository.update_topic_weak_areas(topic_id, weak_json_str)
+
+            topic_name = state.get("current_topic_name") or "topic"
+            proposed_slots = state.get("proposed_slots") or []
+            completion_msg = _build_completion_message(topic_name, proposed_slots)
+
+            return {
+                "messages": [completion_msg],
+                "weak_areas_first_answer": first_text,
+                "weak_areas_topic_type": topic_type,
+                "pending_message_id": None,
+                "has_unlogged_sessions": False,
+            }
+
+        else:  # behavioral
+            second_msg_id = _telegram.send_inline_buttons(*messages.weak_areas_q2_behavioral())
+
+        return {
+            "weak_areas_first_answer": first_text,
+            "weak_areas_topic_type": topic_type,
+            "pending_message_id": second_msg_id,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("log_weak_areas failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Failed to log weak areas: {e}"], "payload": None}
+
+
+# ---------------------------------------------------------------------------
+# Node: log_weak_areas_q2
+# ---------------------------------------------------------------------------
+
+def log_weak_areas_q2(state: AgentState) -> AgentState:
+    """Holds interrupt 2. Builds structured JSON and computes remaining topics."""
+    try:
+        chat_id = state.get("chat_id")
+        second_msg_id = state.get("pending_message_id")
+        topic_id = state.get("current_topic_id")
+        first_text = state.get("weak_areas_first_answer") or ""
+
+        # ── INTERRUPT 2 at top — no side effects before this ────────────────
+        second_answer = interrupt("waiting for second feedback")
+
+        if second_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, second_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        second_text = (second_answer or "").strip()
+
         if not topic_id:
-            return {}
+            return {
+                "pending_message_id": None,
+                "weak_areas_first_answer": None,
+                "weak_areas_topic_type": None,
+                "has_unlogged_sessions": False,
+                "current_topic_id": None,
+                "current_topic_name": None,
+            }
 
         session_id = session_repository.get_today_session_id(topic_id)
 
-        if text and text.lower() != "skip":
-            if session_id is not None:
-                session_repository.update_session_weak_areas(session_id, text)
-            topic_repository.update_topic_weak_areas(topic_id, text)
-        else:
-            topic_repository.update_topic_weak_areas(topic_id, None)
+        topic_type = state.get("weak_areas_topic_type") or "conceptual"
 
-        # Check if more slots remain — set final message if done
+        if topic_type == "dsa":
+            breakdown_text = first_text
+            problems_text = second_text
+            weak_json = {
+                "problems": null_if_skip(problems_text),
+                "breakdown": breakdown(breakdown_text, _DSA_ALL),
+            }
+        elif topic_type == "system_design":
+            scenario_text = first_text
+            breakdown_text = second_text
+            weak_json = {
+                "scenario": null_if_skip(scenario_text),
+                "breakdown": breakdown(breakdown_text, _SYSDESIGN_ALL),
+            }
+        elif topic_type == "conceptual":
+            unclear_text = first_text
+            weak_json = {
+                "unclear": null_if_skip(unclear_text),
+            }
+        else:  # behavioral
+            story_text = first_text
+            breakdown_text = second_text
+            weak_json = {
+                "story": null_if_skip(story_text),
+                "breakdown": breakdown(breakdown_text, _BEHAVIORAL_ALL),
+            }
+
+        weak_json_str = json.dumps(weak_json)
+
+        if session_id is not None:
+            session_repository.update_session_weak_areas(session_id, weak_json_str)
+            session_repository.update_session_student_weak_areas(session_id, weak_json_str)
+        topic_repository.update_topic_weak_areas(topic_id, weak_json_str)
+
+        topic_name = state.get("current_topic_name") or "topic"
         proposed_slots = state.get("proposed_slots") or []
-        logged_names = session_repository.get_logged_topic_names_for_today()
-        unlogged = [s for s in proposed_slots if s["topic"] not in logged_names]
+        msg = _build_completion_message(topic_name, proposed_slots)
 
-        if not unlogged:
-            return {"messages": ["All sessions logged for today. Great work! 💪"], "payload": None}
-
-        return {"payload": None}
+        return {
+            "messages": [msg],
+            "payload": None,
+            "pending_message_id": None,
+            "weak_areas_first_answer": None,
+            "weak_areas_topic_type": None,
+            "has_unlogged_sessions": False,
+        }
 
     except Exception as e:
-        logger.error("log_weak_areas failed: %s", e, exc_info=True)
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("log_weak_areas_q2 failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Failed to log weak areas: {e}"], "payload": None}
 
 
@@ -716,20 +878,20 @@ def study_topic(state: AgentState) -> AgentState:
     try:
         chat_id = state.get("chat_id")
 
-        # Clean up any leftover subtopic list
-        old_msg_id = state.get("pending_subtopic_message_id")
+        # Clean up any leftover button message from a previous abandoned /pick flow
+        old_msg_id = state.get("pending_message_id")
         if old_msg_id is not None and chat_id:
             try:
                 _telegram.remove_buttons(chat_id, old_msg_id)
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
 
         rows = topic_repository.get_inactive_topics_tier1_or2()
         tier1 = [r for r in rows if r["tier"] == 1]
         available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
 
         if not available:
-            return {"messages": ["No inactive topics available to start studying."], "pending_subtopic_message_id": None}
+            return {"messages": [messages.no_inactive_topics()], "pending_message_id": None}
 
         categories = sorted(set(
             r["name"].split(" - ")[0] if " - " in r["name"] else "Other"
@@ -737,27 +899,19 @@ def study_topic(state: AgentState) -> AgentState:
         ))
 
         buttons = [(c, f"category:{c}") for c in categories]
-        cat_msg_id = _telegram.send_inline_buttons("Which category?", buttons)
+        cat_msg_id = _telegram.send_inline_buttons(messages.CATEGORY_PICKER_PROMPT, buttons)
 
-        category_payload = interrupt("waiting for category selection")
-
-        # Remove category buttons after resume
-        if cat_msg_id and chat_id:
-            try:
-                _telegram.remove_buttons(chat_id, cat_msg_id)
-            except Exception:
-                pass
-
-        category = (category_payload or "")[len("category:"):] if (category_payload or "").startswith("category:") else category_payload
-
+        # Send buttons and return — interrupt lives in study_topic_category
         return {
-            "pending_subtopic_message_id": None,
-            "study_topic_category": category,
+            "pending_message_id": cat_msg_id,
+            "study_topic_category": None,  # clear any stale category
         }
 
     except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
         logger.error("study_topic failed: %s", e, exc_info=True)
-        return {"messages": [f"⚠️ Failed to load topics: {e}"], "pending_subtopic_message_id": None}
+        return {"messages": [f"⚠️ Failed to load topics: {e}"], "pending_message_id": None}
 
 
 # ---------------------------------------------------------------------------
@@ -765,12 +919,47 @@ def study_topic(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def study_topic_category(state: AgentState) -> AgentState:
+    """interrupt() is first — no duplicate category prompt on resume."""
     try:
-        category = state.get("study_topic_category")
-        if not category:
-            return {"messages": ["⚠️ No category selected."]}
-
         chat_id = state.get("chat_id")
+        cat_msg_id = state.get("pending_message_id")
+
+        # Interrupt at start — no side effects above this line
+        category_payload = interrupt("waiting for category selection")
+
+        # Remove category buttons after resume (idempotent)
+        if cat_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, cat_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+        # If the resume payload looks like a command (e.g. user typed /pick instead
+        # of tapping a button), re-send the category picker and prompt the user to
+        # use the buttons. This avoids treating a command string as a category
+        # name (which produced messages like "No topics found in category '/pick'").
+        if not category_payload or (isinstance(category_payload, str) and category_payload.startswith("/")):
+            # Recompute available categories and re-send the picker
+            rows = topic_repository.get_inactive_topics_tier1_or2()
+            tier1 = [r for r in rows if r["tier"] == 1]
+            available = tier1 if tier1 else [r for r in rows if r["tier"] == 2]
+
+            categories = sorted(set(
+                r["name"].split(" - ")[0] if " - " in r["name"] else "Other"
+                for r in available
+            ))
+            buttons = [(c, f"category:{c}") for c in categories]
+            try:
+                new_cat_msg_id = _telegram.send_inline_buttons(messages.CATEGORY_PICKER_PROMPT, buttons)
+            except RuntimeError as e:
+                if "timed out" in str(e).lower():
+                    logger.warning("send_inline_buttons timed out: %s", e)
+                    return {"messages": ["⚠️ Timed out while sending the category list. Please retry /pick."], "pending_message_id": None}
+                raise
+
+            return {"messages": [messages.CATEGORY_PICKER_FALLBACK], "pending_message_id": new_cat_msg_id}
+
+        category = (category_payload or "")[len("category:"):] \
+            if (category_payload or "").startswith("category:") else category_payload
 
         rows = topic_repository.get_inactive_topics_tier1_or2()
         tier1 = [r for r in rows if r["tier"] == 1]
@@ -782,43 +971,28 @@ def study_topic_category(state: AgentState) -> AgentState:
             subtopic_rows = [r for r in available if r["name"].startswith(f"{category} - ")]
 
         if not subtopic_rows:
-            return {"messages": [f"No topics found in category '{category}'."]}
+            return {"messages": [f"No topics found in category '{category}'."], "pending_message_id": None}
 
         buttons = [(r["name"], f"subtopic_id:{r['id']}") for r in subtopic_rows]
         try:
-            subtopic_msg_id = _telegram.send_inline_buttons("Which topic?", buttons)
+            subtopic_msg_id = _telegram.send_inline_buttons(messages.TOPIC_PICKER_PROMPT, buttons)
         except RuntimeError as e:
             if "timed out" in str(e).lower():
                 logger.warning("send_inline_buttons timed out: %s", e)
-                return {"messages": ["⚠️ Timed out while sending the topic list. Please retry /pick."]}
+                return {"messages": ["⚠️ Timed out while sending the topic list. Please retry /pick."], "pending_message_id": None}
             raise
 
-        subtopic_payload = interrupt("waiting for subtopic selection")
-
-        # Remove subtopic buttons after resume
-        if subtopic_msg_id and chat_id:
-            try:
-                _telegram.remove_buttons(chat_id, subtopic_msg_id)
-            except Exception:
-                pass
-
-        try:
-            topic_id = int((subtopic_payload or "")[len("subtopic_id:"):])
-        except (ValueError, TypeError):
-            return {"messages": ["⚠️ Invalid topic selection."]}
-
-        resolved_name = topic_service.get_topic_name_by_id(topic_id)
-        if resolved_name is None:
-            return {"messages": [f"⚠️ Topic not found."]}
-
+        # Send subtopic buttons and return — interrupt lives in study_topic_confirm
         return {
-            "pending_subtopic_message_id": subtopic_msg_id,
-            "proposed_topic": resolved_name,
+            "study_topic_category": category,
+            "pending_message_id": subtopic_msg_id,
         }
 
     except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
         logger.error("study_topic_category failed: %s", e, exc_info=True)
-        return {"messages": [f"⚠️ Failed to load subtopics: {e}"]}
+        return {"messages": [f"⚠️ Failed to load subtopics: {e}"], "pending_message_id": None}
 
 
 # ---------------------------------------------------------------------------
@@ -826,26 +1000,309 @@ def study_topic_category(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def study_topic_confirm(state: AgentState) -> AgentState:
+    """interrupt() is first — no duplicate subtopic list on resume."""
     try:
-        topic_name = state.get("proposed_topic")
-        if not topic_name:
-            return {"messages": ["⚠️ No topic selected."]}
+        chat_id = state.get("chat_id")
+        subtopic_msg_id = state.get("pending_message_id")
 
-        updated = topic_repository.set_topic_in_progress(topic_name)
+        # Interrupt at start — no side effects above this line
+        subtopic_payload = interrupt("waiting for subtopic selection")
+
+        # Remove subtopic buttons after resume (idempotent)
+        if subtopic_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, subtopic_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        try:
+            topic_id = int((subtopic_payload or "")[len("subtopic_id:"):])
+        except (ValueError, TypeError):
+            return {"messages": ["⚠️ Invalid topic selection."], "pending_message_id": None}
+
+        resolved_name = topic_service.get_topic_name_by_id(topic_id)
+        if resolved_name is None:
+            return {"messages": ["⚠️ Topic not found."], "pending_message_id": None}
+
+        updated = topic_repository.set_topic_in_progress(resolved_name)
         if not updated:
-            return {"messages": [f"⚠️ Topic '{topic_name}' not found or already in progress."]}
+            return {"messages": [f"⚠️ Topic '{resolved_name}' not found or already in progress."], "pending_message_id": None}
 
         return {
             "messages": [
-                f"✅ {topic_name} added to In Progress. "
-                "It will be booked on your calendar tomorrow morning."
+                messages.topic_added_to_in_progress(resolved_name)
             ],
-            "pending_subtopic_message_id": None,
+            "pending_message_id": None,
         }
 
     except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
         logger.error("study_topic_confirm failed: %s", e, exc_info=True)
-        return {"messages": [f"⚠️ Failed to set topic in progress: {e}"]}
+        return {"messages": [f"⚠️ Failed to set topic in progress: {e}"], "pending_message_id": None}
+
+
+# ---------------------------------------------------------------------------
+# Node: discuss_parser
+# ---------------------------------------------------------------------------
+
+def _weak_area_keys(raw: str | None) -> list[str]:
+    """Extract focus-area labels from a stored ``topics.weak_areas`` value.
+
+    ``topics.weak_areas`` is written by the /done flow as a structured dict
+    where top-level keys are schema labels (``"unclear"``, ``"breakdown"``,
+    ``"problems"``, ``"scenario"``, ``"story"``) and the *values* hold the
+    meaningful content (e.g. ``{"unclear": "CAP theorem vs PACELC"}`` or
+    ``{"breakdown": "Edge case, Time complexity"}``).  Surfacing the values
+    gives Diego actionable focus areas; surfacing the keys would only show
+    unhelpful structural labels.
+
+    Note: this is distinct from ``discuss_service._parse_weak_area_keys``,
+    which reads ``sessions.teacher_weak_areas`` — a field where the *keys*
+    are the identifiers used for repetition detection.
+
+    Args:
+        raw: Raw ``weak_areas`` value as stored in the topics table.
+
+    Returns:
+        List of non-empty string values; empty list when input is None,
+        empty, or not a JSON object.
+    """
+    if not raw or not raw.strip():
+        return []
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return [raw.strip()]
+        return [v for v in parsed.values() if v and isinstance(v, str)]
+    except Exception:
+        return [raw.strip()]
+
+
+def discuss_parser(state: AgentState) -> AgentState:
+    logger.info("discuss_parser: entered")
+
+    try:
+        chat_id = state.get("chat_id")
+
+        # Clean up stale button message from a previous abandoned flow
+        old_msg_id = state.get("pending_message_id")
+        if old_msg_id is not None and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, old_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        topics = topic_repository.get_in_progress_and_active_topics()
+
+        if not topics:
+            return {
+                "messages": ["No topics in progress or active to discuss."],
+                "pending_message_id": None,
+            }
+
+        if len(topics) >= 2:
+            logger.info("discuss_parser: %d topics — sending picker", len(topics))
+            buttons = [(t["name"], f"discuss_topic:{t['id']}") for t in topics]
+            picker_msg_id = _telegram.send_inline_buttons("Which topic are you discussing?", buttons)
+            return {
+                "messages": [],
+                "pending_message_id": picker_msg_id,
+            }
+
+        # Exactly one topic — handle inline, no interrupt needed
+        topic = topics[0]
+        topic_id = topic["id"]
+        topic_name = topic["name"]
+
+        topic_repository.set_topic_discussing(topic_id)
+        session_count = session_repository.get_discuss_session_count(topic_id)
+
+        msg = messages.discuss_session_ready(topic_name, session_count + 1)
+        return {
+            "messages": [msg],
+            "pending_message_id": None,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("discuss_parser failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Discuss flow failed: {e}"], "pending_message_id": None}
+
+
+# ---------------------------------------------------------------------------
+# Node: start_discuss
+# ---------------------------------------------------------------------------
+
+def start_discuss(state: AgentState) -> AgentState:
+    """interrupt() is first — on resume, receives the selected topic id payload."""
+    try:
+        chat_id = state.get("chat_id")
+        picker_msg_id = state.get("pending_message_id")
+
+        # Interrupt at start — no side effects above this line
+        selected_payload = interrupt("waiting for topic selection")
+
+        # Remove picker buttons after resume (idempotent)
+        if picker_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, picker_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        # If the user typed a command instead of tapping a button, the interrupt
+        # is already consumed and the graph is about to end — any buttons sent
+        # here would be dangling (has_pending_interrupt will be False so tapping
+        # them triggers a fresh no-op invoke).  Just tell the user to restart.
+        if not selected_payload or (
+            isinstance(selected_payload, str) and selected_payload.startswith("/")
+        ):
+            return {
+                "messages": [messages.DISCUSS_PICKER_FALLBACK],
+                "pending_message_id": None,
+            }
+
+        if not selected_payload.startswith("discuss_topic:"):
+            return {"messages": ["⚠️ Invalid topic selection."], "pending_message_id": None}
+
+        try:
+            topic_id = int(selected_payload[len("discuss_topic:"):])
+        except ValueError:
+            return {"messages": ["⚠️ Invalid topic id."], "pending_message_id": None}
+
+        topic_name = topic_repository.get_topic_name_by_id(topic_id)
+        if topic_name is None:
+            return {"messages": ["⚠️ Topic not found."], "pending_message_id": None}
+
+        topic_repository.set_topic_discussing(topic_id)
+        session_count = session_repository.get_discuss_session_count(topic_id)
+        msg = messages.discuss_session_ready(topic_name, session_count + 1)
+        return {
+            "messages": [msg],
+            "pending_message_id": None,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("start_discuss failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Failed to start discuss session: {e}"], "pending_message_id": None}
+
+
+# ---------------------------------------------------------------------------
+# Node: notify_discuss_ready
+# ---------------------------------------------------------------------------
+
+def notify_discuss_ready(state: AgentState) -> AgentState:
+    """Send the discuss-readiness activation buttons.
+
+    Reads ``current_topic_name`` from state (stored by
+    ``assess_discuss_readiness`` when it invokes the graph).  The interrupt
+    lives in ``await_discuss_activation`` — this node is side-effect only.
+
+    Args:
+        state: Current agent state.
+
+    Returns:
+        Partial state update with ``pending_message_id`` set and
+        ``messages`` cleared.
+    """
+    try:
+        topic_name = state.get("current_topic_name") or "topic"
+        is_reentry = state.get("current_topic_is_reentry") or False
+        prompt = (
+            messages.discuss_ready_reentry_prompt(topic_name)
+            if is_reentry
+            else messages.discuss_ready_prompt(topic_name)
+        )
+        msg_id = _telegram.send_buttons(prompt, messages.DISCUSS_ACTIVATION_BUTTONS)
+        return {"pending_message_id": msg_id, "messages": []}
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("notify_discuss_ready failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Could not send activation prompt: {e}"]}
+
+
+# ---------------------------------------------------------------------------
+# Node: await_discuss_activation
+# ---------------------------------------------------------------------------
+
+def await_discuss_activation(state: AgentState) -> AgentState:
+    """Wait for the user to confirm or defer discuss-readiness activation.
+
+    ``interrupt()`` is the very first statement so re-runs on resume are
+    side-effect-free.
+
+    Handles two resume values:
+    - ``"Yes, activate"`` — activates the topic via
+      ``topic_repository.activate_topic_from_discuss`` with
+      ``next_review = today`` so SM-2 schedules the first mock immediately.
+    - Anything else (``"Not yet"``) — sends a no-rush message without
+      changing the topic status.
+
+    Args:
+        state: Current agent state (must contain ``current_topic_id`` and
+            ``current_topic_name``).
+
+    Returns:
+        Partial state update with ``messages`` set and
+        ``pending_message_id`` cleared.
+    """
+    try:
+        chat_id = state.get("chat_id")
+        msg_id = state.get("pending_message_id")
+        topic_id = state.get("current_topic_id")
+        topic_name = state.get("current_topic_name") or "topic"
+
+        # Interrupt at start — no side effects above this line
+        payload = interrupt("waiting for activation confirmation")
+
+        if msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        if (payload or "").strip().lower() == "yes, activate":
+            if topic_id is None:
+                return {
+                    "messages": ["⚠️ No topic selected for activation."],
+                    "pending_message_id": None,
+                }
+            activated = topic_repository.activate_topic_from_discuss(topic_id)
+            if not activated:
+                # rowcount == 0: topic was deleted, renamed, or otherwise can't
+                # be updated.  Don't lie to the user with a success message.
+                logger.warning(
+                    "await_discuss_activation: activate_topic_from_discuss "
+                    "returned False for topic_id=%s", topic_id,
+                )
+                return {
+                    "messages": [
+                        "⚠️ Topic activation could not be completed. "
+                        "It may no longer exist or was not updated."
+                    ],
+                    "pending_message_id": None,
+                }
+            return {
+                "messages": [messages.discuss_activated(topic_name)],
+                "pending_message_id": None,
+            }
+
+        # "Not yet" or any other payload
+        return {
+            "messages": [messages.discuss_not_yet()],
+            "pending_message_id": None,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("await_discuss_activation failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Activation failed: {e}"], "pending_message_id": None}
 
 
 # ---------------------------------------------------------------------------
@@ -857,28 +1314,18 @@ def activate_topic(state: AgentState) -> AgentState:
         topics = topic_service.get_in_progress_topics()
 
         if not topics:
-            return {"messages": ["No topics currently in progress."]}
+            return {"messages": [messages.no_topics_in_progress()]}
 
-        chat_id = state.get("chat_id")
         buttons = [(t["name"], f"studied:{t['id']}") for t in topics]
-        topic_msg_id = _telegram.send_inline_buttons("Which topic did you just study?", buttons)
+        topic_msg_id = _telegram.send_inline_buttons(messages.ACTIVATE_TOPIC_PROMPT, buttons)
 
-        try:
-            studied_payload = interrupt("waiting for topic selection")
-        finally:
-            # Remove buttons after resume, even if the resume payload is invalid.
-            if topic_msg_id and chat_id:
-                try:
-                    _telegram.remove_buttons(chat_id, topic_msg_id)
-                except Exception:
-                    pass
-
-        if not isinstance(studied_payload, str) or not studied_payload.startswith("studied:"):
-            return {"messages": ["⚠️ Invalid topic selection."]}
-
-        return {"payload": studied_payload}
+        # Send buttons and return — interrupt lives in graduate_topic
+        # Clear stale messages so route_from_activate_topic doesn't mis-route to output
+        return {"pending_message_id": topic_msg_id, "messages": []}
 
     except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
         logger.error("activate_topic failed: %s", e, exc_info=True)
         return {"messages": [f"⚠️ Failed to load in-progress topics: {e}"]}
 
@@ -888,25 +1335,158 @@ def activate_topic(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def graduate_topic(state: AgentState) -> AgentState:
-    try:
-        payload = state.get("payload") or ""
+    """interrupt() is first — no duplicate topic list on resume.
 
-        if not payload.startswith("studied:"):
-            return {"messages": ["⚠️ Invalid topic selection."]}
+    Applies two pre-activation guards before promoting the topic:
+
+    - **Hard block** (``discussing`` status): the topic is mid-discuss; the
+      user must wait for Claude's readiness assessment.
+    - **Soft guard** (``in_progress``, zero discuss sessions): warns the user
+      they haven't discussed this topic yet and offers ["Yes, activate",
+      "Do discuss first"]; routes to ``confirm_graduate`` for the response.
+
+    All other cases proceed with normal activation.
+    """
+    try:
+        chat_id = state.get("chat_id")
+        topic_msg_id = state.get("pending_message_id")
+
+        # Interrupt at start — no side effects above this line
+        studied_payload = interrupt("waiting for topic selection")
+
+        # Remove buttons after resume (idempotent)
+        if topic_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, topic_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        if not isinstance(studied_payload, str) or not studied_payload.startswith("studied:"):
+            return {"messages": ["⚠️ Invalid topic selection."], "pending_message_id": None}
 
         try:
-            topic_id = int(payload[len("studied:"):])
+            topic_id = int(studied_payload[len("studied:"):])
         except ValueError:
-            return {"messages": ["⚠️ Invalid topic id."]}
+            return {"messages": ["⚠️ Invalid topic id."], "pending_message_id": None}
 
+        topic_name = topic_repository.get_topic_name_by_id(topic_id)
+        if topic_name is None:
+            return {"messages": ["⚠️ Topic not found."], "pending_message_id": None}
+
+        # --- Pre-activation guards ---
+        status = topic_repository.get_topic_status_by_id(topic_id)
+
+        if status == "discussing":
+            # Hard block: activating mid-discuss would break the readiness flow.
+            return {
+                "messages": [messages.activate_discussing_block(topic_name)],
+                "pending_message_id": None,
+            }
+
+        if status == "in_progress":
+            discuss_count = session_repository.get_discuss_session_count(topic_id)
+            if discuss_count == 0:
+                # Soft guard: topic has never been discussed; ask for confirmation.
+                prompt, buttons = messages.activate_no_discuss_warning(topic_name)
+                guard_msg_id = _telegram.send_buttons(prompt, buttons)
+                return {
+                    "current_topic_id": topic_id,
+                    "current_topic_name": topic_name,
+                    "pending_message_id": guard_msg_id,
+                    "messages": [],
+                }
+
+        # Normal activation (in_progress with prior discuss sessions, or any other status).
         topic_name = topic_service.graduate_topic(topic_id)
         return {
-            "messages": [
-                f"✅ {topic_name} graduated to active. "
-                "First SM-2 review scheduled for tomorrow."
-            ]
+            "messages": [messages.topic_graduated(topic_name)],
+            "pending_message_id": None,
         }
 
     except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
         logger.error("graduate_topic failed: %s", e, exc_info=True)
-        return {"messages": [f"⚠️ Failed to graduate topic: {e}"]}
+        return {"messages": [f"⚠️ Failed to graduate topic: {e}"], "pending_message_id": None}
+
+
+# ---------------------------------------------------------------------------
+# Node: confirm_graduate
+# ---------------------------------------------------------------------------
+
+def confirm_graduate(state: AgentState) -> AgentState:
+    """Handle the soft-guard response after graduate_topic sends a warning.
+
+    ``interrupt()`` is the very first statement so re-runs on resume are
+    side-effect-free.
+
+    Handles three resume cases:
+    - ``"Yes, activate"`` — proceeds with normal graduation (same as
+      ``/activate`` happy path; ``next_review = tomorrow``).
+    - ``"Do discuss first"`` — sets the topic to ``discussing`` status and
+      sends a discuss session-ready message without activating.
+    - Anything else (commands, free text, empty) — returns a warning without
+      mutating state.  Re-sending buttons is not viable: the interrupt is
+      already consumed and any new buttons would be dangling.  The user must
+      restart the flow with ``/activate``.
+
+    Args:
+        state: Current agent state (must contain ``current_topic_id`` and
+            ``current_topic_name`` set by ``graduate_topic``).
+
+    Returns:
+        Partial state update with ``messages`` set and
+        ``pending_message_id`` cleared.
+    """
+    try:
+        chat_id = state.get("chat_id")
+        guard_msg_id = state.get("pending_message_id")
+        topic_id = state.get("current_topic_id")
+        topic_name = state.get("current_topic_name") or "topic"
+
+        # Interrupt at start — no side effects above this line
+        payload = interrupt("waiting for activate confirmation")
+
+        if guard_msg_id and chat_id:
+            try:
+                _telegram.remove_buttons(chat_id, guard_msg_id)
+            except Exception as _e:
+                logger.debug("remove_buttons silently failed: %s", _e)
+
+        if topic_id is None:
+            return {"messages": ["⚠️ No topic selected."], "pending_message_id": None}
+
+        normalised = (payload or "").strip().lower() if isinstance(payload, str) else ""
+
+        if normalised == "yes, activate":
+            topic_name = topic_service.graduate_topic(topic_id)
+            return {
+                "messages": [messages.topic_graduated(topic_name)],
+                "pending_message_id": None,
+            }
+
+        if normalised == "do discuss first":
+            topic_repository.set_topic_discussing(topic_id)
+            session_count = session_repository.get_discuss_session_count(topic_id)
+            msg = messages.discuss_session_ready(topic_name, session_count + 1)
+            return {
+                "messages": [msg],
+                "pending_message_id": None,
+            }
+
+        # Unknown payload (typed command, free text, empty) — exit cleanly.
+        # Mutating state on an unrecognised resume value would silently flip
+        # the topic to 'discussing'; safer to ask the user to restart.
+        return {
+            "messages": [
+                "⚠️ Activation cancelled — please tap one of the buttons or "
+                "type /activate to retry."
+            ],
+            "pending_message_id": None,
+        }
+
+    except Exception as e:
+        if isinstance(e, GraphInterrupt):
+            raise
+        logger.error("confirm_graduate failed: %s", e, exc_info=True)
+        return {"messages": [f"⚠️ Activation failed: {e}"], "pending_message_id": None}

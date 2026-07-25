@@ -7,6 +7,7 @@ and node layers.
 from typing import Any
 
 from src.infrastructure.db import get_connection
+from src.repositories import session_repository
 
 
 def get_topic_name_by_id(topic_id: int) -> str | None:
@@ -46,6 +47,50 @@ def graduate_topic_to_active(topic_id: int) -> bool:
     return cursor.rowcount > 0
 
 
+def activate_topic_from_discuss(topic_id: int) -> bool:
+    """Set a topic active after a successful discuss-readiness assessment.
+
+    Like ``graduate_topic_to_active`` but sets ``next_review`` to *today*
+    so that the first SM-2 mock session is scheduled immediately rather than
+    deferred to tomorrow.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        ``True`` when a row was updated, else ``False``.
+    """
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """UPDATE topics
+               SET status = 'active',
+                   repetitions = 0,
+                   easiness_factor = 2.5,
+                   next_review = date('now'),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (topic_id,),
+        )
+    return cursor.rowcount > 0
+
+
+def get_topic_status_by_id(topic_id: int) -> str | None:
+    """Return the current status of a topic.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        Status string (e.g. ``'in_progress'``, ``'discussing'``, ``'active'``),
+        or ``None`` when the row does not exist.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM topics WHERE id = ?", (topic_id,)
+        ).fetchone()
+    return row["status"] if row else None
+
+
 def get_in_progress_topics() -> list[dict[str, int | str]]:
     """Return in-progress topics ordered by tier and name.
 
@@ -71,18 +116,55 @@ def get_in_progress_topic_names() -> list[str]:
 def get_topic_id_by_name(topic_name: str) -> int | None:
     """Return topic id for a case-insensitive topic name.
 
+    Tries an exact match first; if that fails, falls back to a substring
+    (LIKE) search and returns the id only when exactly one topic matches.
+    Raises ``ValueError`` with candidate names when multiple topics match
+    the substring, so the caller can surface them to the user.
+
     Args:
-        topic_name: Topic display name.
+        topic_name: Topic display name (exact or partial).
 
     Returns:
         Topic id, or ``None`` when no match exists.
+
+    Raises:
+        ValueError: If the substring matches more than one topic.
     """
     with get_connection() as conn:
         row = conn.execute(
             "SELECT id FROM topics WHERE name = ? COLLATE NOCASE",
             (topic_name,),
         ).fetchone()
-    return row["id"] if row else None
+        if row:
+            return row["id"]
+        rows = conn.execute(
+            "SELECT id, name FROM topics WHERE name LIKE ? COLLATE NOCASE",
+            (f"%{topic_name}%",),
+        ).fetchall()
+    if len(rows) == 1:
+        return rows[0]["id"]
+    if len(rows) > 1:
+        candidates = ", ".join(f'"{r["name"]}"' for r in rows)
+        raise ValueError(
+            f"Ambiguous topic name '{topic_name}'. Did you mean: {candidates}?"
+        )
+    return None
+
+
+def get_topic_type_by_id(topic_id: int) -> str | None:
+    """Return topic_type for a given topic id.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        Topic type string, or ``None`` when the row does not exist.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT topic_type FROM topics WHERE id = ?", (topic_id,)
+        ).fetchone()
+    return row["topic_type"] if row else None
 
 
 def get_topic_weak_areas_by_name(topic_name: str) -> str | None:
@@ -172,7 +254,7 @@ def fetch_due_today_topics(today_str: str) -> list[dict[str, Any]]:
 
 
 def fetch_in_progress_topics_with_weak_areas() -> list[dict[str, Any]]:
-    """Fetch in-progress topics with their weak areas.
+    """Fetch in-progress and discussing topics with their weak areas.
 
     Returns:
         List of dicts with ``name`` and ``weak_areas``, ordered by tier
@@ -181,10 +263,89 @@ def fetch_in_progress_topics_with_weak_areas() -> list[dict[str, Any]]:
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT name, weak_areas FROM topics
-               WHERE status = 'in_progress'
+               WHERE status IN ('in_progress', 'discussing')
                ORDER BY tier ASC, name ASC""",
         ).fetchall()
     return [{"name": r["name"], "weak_areas": r["weak_areas"]} for r in rows]
+
+
+def get_active_unlogged_topics_today() -> list[dict]:
+    """Return active topics not yet logged today, ordered by tier ASC, easiness_factor ASC.
+
+    Returns:
+        List of dicts with keys ``id`` and ``name``.
+    """
+    logged_names = session_repository.get_logged_topic_names_for_today()
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT id, name FROM topics
+               WHERE status = 'active'
+               ORDER BY tier ASC, easiness_factor ASC"""
+        ).fetchall()
+    return [{"id": row["id"], "name": row["name"]} for row in rows if row["name"] not in logged_names]
+
+
+def get_topic_context(topic_id: int) -> dict[str, Any]:
+    """Fetch SM-2 state and last session signal for a topic.
+
+    Joins topics with sessions (latest session only) to return both the
+    SM-2 scheduling fields and the most recent student signal.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        Dict with topic SM-2 fields and last-session data (session fields
+        are ``None`` when no session exists yet).
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT
+                   t.id, t.name, t.topic_type, t.easiness_factor,
+                   t.interval_days, t.repetitions, t.next_review, t.weak_areas,
+                   s.student_quality, s.studied_at, s.student_weak_areas
+               FROM topics t
+               LEFT JOIN sessions s ON s.topic_id = t.id
+               WHERE t.id = ?
+               ORDER BY s.studied_at DESC
+               LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+    if row is None:
+        return {}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "topic_type": row["topic_type"],
+        "easiness_factor": row["easiness_factor"],
+        "interval_days": row["interval_days"],
+        "repetitions": row["repetitions"],
+        "next_review": row["next_review"],
+        "weak_areas": row["weak_areas"],
+        "student_quality": row["student_quality"],
+        "studied_at": row["studied_at"],
+        "student_weak_areas": row["student_weak_areas"],
+    }
+
+
+def get_default_duration_by_name(topic_name: str) -> int:
+    """Return default_duration_minutes for a topic name, falling back to 30.
+
+    Args:
+        topic_name: Topic display name (case-insensitive lookup).
+
+    Returns:
+        Default session duration in minutes, or ``30`` when the topic is
+        not found or the column has not been seeded yet.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT default_duration_minutes FROM topics WHERE name = ? COLLATE NOCASE",
+            (topic_name,),
+        ).fetchone()
+    if row is None or row["default_duration_minutes"] is None:
+        return 30
+    return row["default_duration_minutes"]
 
 
 def set_topic_in_progress(topic_name: str) -> bool:
@@ -203,4 +364,68 @@ def set_topic_in_progress(topic_name: str) -> bool:
             (topic_name,),
         )
     return cursor.rowcount > 0
+
+
+def get_discussing_topics() -> list[dict[str, Any]]:
+    """Return all topics where status = 'discussing', ordered by tier and name.
+
+    Returns:
+        List of dicts with keys ``id`` and ``name``.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name FROM topics WHERE status = 'discussing' ORDER BY tier ASC, name ASC"
+        ).fetchall()
+    return [{"id": row["id"], "name": row["name"]} for row in rows]
+
+
+def set_topic_discussing(topic_id: int) -> None:
+    """Set a topic's status to 'discussing'.
+
+    Args:
+        topic_id: Topic primary key.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE topics SET status = 'discussing', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (topic_id,),
+        )
+
+
+def set_topic_back_to_in_progress(topic_id: int) -> bool:
+    """Return a topic from 'discussing' back to 'in_progress'.
+
+    Only acts when the topic's current status is 'discussing', preventing
+    accidental overwrites of active or in_progress topics.
+
+    Args:
+        topic_id: Topic primary key.
+
+    Returns:
+        ``True`` when a row was updated, ``False`` when no discussing topic
+        with that id exists.
+    """
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """UPDATE topics
+               SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND status = 'discussing'""",
+            (topic_id,),
+        )
+    return cursor.rowcount > 0
+
+
+def get_in_progress_and_active_topics() -> list[dict[str, Any]]:
+    """Return topics eligible as discuss targets (status 'in_progress' or 'active').
+
+    Returns:
+        List of dicts with keys ``id`` and ``name``, ordered by tier then name.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT id, name FROM topics
+               WHERE status IN ('in_progress', 'active')
+               ORDER BY tier ASC, name ASC""",
+        ).fetchall()
+    return [{"id": row["id"], "name": row["name"]} for row in rows]
 

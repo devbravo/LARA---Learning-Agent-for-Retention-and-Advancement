@@ -300,7 +300,7 @@ def test_help_message_returns_direct_response_without_graph():
 
     assert result.body == b'{"ok":true}'
     mock_send.assert_called_once()
-    assert "/study" in mock_send.call_args[0][0]
+    assert "/pick" in mock_send.call_args[0][0]
     assert "/help" in mock_send.call_args[0][0]
     mock_invoke.assert_not_called()
 

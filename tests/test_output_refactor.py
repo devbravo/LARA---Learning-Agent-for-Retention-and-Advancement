@@ -10,7 +10,7 @@ Covers:
   7.  book_events removes keyboard buttons when message_id is present
   8.  book_events continues booking remaining slots when one slot fails
   9.  log_session → END edge exists in graph.py (not log_session → output)
-  10. log_weak_areas → END edge exists in graph.py (not log_weak_areas → output)
+  10. log_weak_areas → output direct edge exists in graph.py (no loop)
 """
 
 import sys
@@ -19,7 +19,8 @@ from unittest.mock import MagicMock, patch
 
 
 from src.agent import nodes as _nodes
-from src.agent.nodes import book_events, output, route_from_router
+from src.agent.nodes import book_events, output
+from src.agent.routes import route_from_router
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +149,7 @@ def test_book_events_sends_confirmation_after_booking():
         book_events(state)
     mock_send.assert_called_once()
     message = mock_send.call_args[0][0]
-    assert "✅ Booked 1 mock session(s)" in message
+    assert "🎯 Booked 1 mock session(s)" in message
     assert "DSA - Arrays" in message
 
 
@@ -220,14 +221,15 @@ def test_log_session_edge_goes_to_log_weak_areas():
 
 
 # ---------------------------------------------------------------------------
-# 10. log_weak_areas → conditional edge (log_session | output) in graph.py
+# 10. log_weak_areas → output direct edge in graph.py (no loop — user re-triggers /done)
 # ---------------------------------------------------------------------------
 
-def test_log_weak_areas_has_conditional_edge():
-    """graph.py wires log_weak_areas with a conditional edge (HITL loop pattern)."""
+def test_log_weak_areas_routes_directly_to_output():
+    """graph.py routes log_weak_areas conditionally: conceptual → output, others → Q2."""
     src = (Path(__file__).parents[1] / "src" / "agent" / "graph.py").read_text()
-    assert 'route_from_log_weak_areas' in src
-    assert 'add_edge("log_weak_areas", END)' not in src
+    assert "route_from_log_weak_areas" in src
+    assert '"log_weak_areas"' in src
+    assert 'add_edge("log_weak_areas_q2", "output")' in src
 
 
 # ---------------------------------------------------------------------------

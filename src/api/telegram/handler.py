@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse
 from src.models.telegram import TelegramUpdate
 from src.api.telegram import dispatcher
 from src.api.telegram.intent_parser import extract_payload
+from src.integrations import telegram_client as _telegram
+from src.knowledge import graph as _kg_graph
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,16 @@ async def handle_update(update: TelegramUpdate) -> JSONResponse:
     if chat_id is None or not raw_payload:
         return JSONResponse({"ok": True})
 
+    # --- 2.5. /prepare <topic> — routed to the KG graph before normal parsing ---
+    if raw_payload.lower().startswith("/prepare"):
+        topic = raw_payload[len("/prepare"):].strip()
+        loop = asyncio.get_running_loop()
+        if not topic:
+            loop.run_in_executor(None, lambda: _telegram.send_message("Usage: /prepare <topic>"))
+        else:
+            loop.run_in_executor(None, lambda: _kg_graph.start(chat_id, topic))
+        return JSONResponse({"ok": True})
+
     # --- 3. Extract payload — direct responses for /help and /view ---
     result = extract_payload(raw_payload, chat_id, message_id=message_id)
 
@@ -63,9 +75,15 @@ async def handle_update(update: TelegramUpdate) -> JSONResponse:
 
     # --- 4. Fire-and-forget graph invocation ---
     loop = asyncio.get_running_loop()
-    loop.run_in_executor(
-        None,
-        lambda: dispatcher.invoke_safe(chat_id, payload, message_id=message_id),
-    )
+    if payload.startswith("kg_"):
+        loop.run_in_executor(
+            None,
+            lambda: _kg_graph.invoke_safe(chat_id, payload),
+        )
+    else:
+        loop.run_in_executor(
+            None,
+            lambda: dispatcher.invoke_safe(chat_id, payload, message_id=message_id),
+        )
 
     return JSONResponse({"ok": True})

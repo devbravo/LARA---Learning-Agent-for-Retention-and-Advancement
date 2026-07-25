@@ -19,6 +19,7 @@ from typing import Any
 import pytz
 import yaml
 from dotenv import load_dotenv
+from langgraph.errors import GraphInterrupt
 
 from src.agent import graph as _graph
 from src.integrations.telegram_client import send_message
@@ -69,6 +70,10 @@ def _run_weekday_planning() -> None:
     logger.info("Scheduler: firing Weekday briefing for chat_id=%s", chat_id)
     try:
         _graph.invoke(trigger="daily", chat_id=chat_id)
+    except GraphInterrupt:
+        # Expected: graph paused at interrupt() waiting for user confirmation.
+        # The checkpoint is saved; no error message needed.
+        logger.info("Weekday briefing paused at interrupt — waiting for user confirmation (chat_id=%s)", chat_id)
     except Exception as e:
         logger.error("Weekday briefing graph error: %s", e)
 
@@ -86,6 +91,8 @@ def _run_weekend_brief() -> None:
     logger.info("Scheduler: firing weekend briefing for chat_id=%s", chat_id)
     try:
         _graph.invoke(trigger="weekend", chat_id=chat_id)
+    except GraphInterrupt:
+        logger.info("Weekend brief paused at interrupt (chat_id=%s)", chat_id)
     except Exception as e:
         logger.error("Weekend briefing graph error: %s", e)
         try:
@@ -106,6 +113,8 @@ def _run_evening_brief() -> None:
     logger.info("Scheduler: firing evening briefing for chat_id=%s", chat_id)
     try:
         _graph.invoke(trigger="evening", chat_id=chat_id)
+    except GraphInterrupt:
+        logger.info("Evening brief paused at interrupt (chat_id=%s)", chat_id)
     except Exception as e:
         logger.error("Evening briefing graph error: %s", e)
         try:

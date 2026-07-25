@@ -40,12 +40,14 @@ def test_weekend_brief_due_topics_lists_topic_names():
     assert "topic(s) due" in msg
 
 
-def test_weekend_brief_due_topics_shows_weak_areas_focus():
+def test_weekend_brief_due_topics_does_not_show_weak_areas():
+    """Weak areas are collected after /done but not displayed in the weekend brief."""
     due = [
         {"name": "DSA - Trees", "next_review": date.today().isoformat(), "weak_areas": "BFS vs DFS"},
     ]
     result = _run(due_topics=due)
-    assert "focus: BFS vs DFS" in result["messages"][0]
+    assert "focus:" not in result["messages"][0]
+    assert "BFS vs DFS" not in result["messages"][0]
 
 
 def test_weekend_brief_due_topics_no_focus_when_no_weak_areas():

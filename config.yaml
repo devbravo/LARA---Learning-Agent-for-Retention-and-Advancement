@@ -1,26 +1,26 @@
 schedule:
   weekday_planning:
-    hour: 7
-    minute: 0
+    hour: 15
+    minute: 32
     misfire_grace_time: 3600
   weekend_brief:
     hour: 10
     minute: 0
     misfire_grace_time: 600
   evening_brief:
-    hour: 22
-    minute: 12
+    hour: 20
+    minute: 51
     misfire_grace_time: 600
 
 protected_blocks:
   - start: "15:00"
-    end: "19:00"
+    end: "15:31"
 
 focus_windows:
-  - start: "08:00"
-    end: "10:00"
-  - start: "10:00"
-    end: "16:00"
+  - start: "05:20"
+    end: "15:00"
+  - start: "20:00"
+    end: "22:00"
 
 timezone: "America/Paramaribo"
 

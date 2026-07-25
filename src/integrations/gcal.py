@@ -10,6 +10,8 @@ import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
+import yaml
+import pytz
 
 from dotenv import load_dotenv
 
@@ -17,6 +19,7 @@ load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google.auth.exceptions import RefreshError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -47,13 +50,28 @@ def _get_service() -> Any:
 
     creds = None
     if _TOKEN_PATH.exists():
-        creds = Credentials.from_authorized_user_file(_TOKEN_PATH, SCOPES)
+        creds = Credentials.from_authorized_user_file(str(_TOKEN_PATH), SCOPES)
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError as e:
+                # Token is expired or revoked. Remove the stale token file so the
+                # application can prompt for re-authorization on the next run.
+                try:
+                    if _TOKEN_PATH.exists():
+                        _TOKEN_PATH.unlink()
+                except Exception:
+                    # If removal fails, continue to raise a helpful error below
+                    pass
+                raise RuntimeError(
+                    "Google credentials refresh failed: token expired or revoked. "
+                    "Remove credentials/token.json and re-authorize by running the app "
+                    "locally to complete the OAuth flow."
+                ) from e
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(_CREDENTIALS_PATH, SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(str(_CREDENTIALS_PATH), SCOPES)
             creds = flow.run_local_server(port=0)
         _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
         _TOKEN_PATH.write_text(creds.to_json())
@@ -86,8 +104,31 @@ def get_events(day: date) -> list[dict[str, Any]]:
     """
     calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
 
-    time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
-    time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+    # Compute UTC bounds for the target local day. The application config
+    # contains the local timezone (e.g. 'America/Paramaribo'). If config.yaml
+    # is missing or malformed, fall back to UTC day bounds.
+    try:
+        config_path = Path(__file__).parents[2] / "config.yaml"
+        if config_path.exists():
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f)
+            tzname = cfg.get("timezone")
+            if tzname:
+                tz = pytz.timezone(tzname)
+                local_start = tz.localize(datetime(day.year, day.month, day.day, 0, 0, 0))
+                local_end = tz.localize(datetime(day.year, day.month, day.day, 23, 59, 59))
+                time_min = local_start.astimezone(pytz.UTC).isoformat()
+                time_max = local_end.astimezone(pytz.UTC).isoformat()
+            else:
+                time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+                time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+        else:
+            time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+            time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
+    except Exception:
+        # Any failure reading config or resolving timezone should default to UTC
+        time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
+        time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
 
     try:
         service = _get_service()

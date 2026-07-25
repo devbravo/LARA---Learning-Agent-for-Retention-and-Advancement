@@ -1,4 +1,5 @@
 .env
+.claude/settings.local.json
 credentials/
 db/*.db
 __pycache__/
@@ -20,3 +21,10 @@ logs/
 # SQLite runtime files
 *.db-wal
 *.db-shm
+
+# Images and media
+*.png
+*.jpg
+*.jpeg
+*.gif
+
