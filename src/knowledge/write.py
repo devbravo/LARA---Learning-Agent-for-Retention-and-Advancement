@@ -16,11 +16,42 @@ import logging
 
 import numpy as np
 
+from src.infrastructure.db import get_connection
 from src.infrastructure.time import local_now
 from src.knowledge.clients import KnowledgeClients, VOYAGE_MODEL
 from src.knowledge.resolve import resolve_concept
 
 logger = logging.getLogger(__name__)
+
+
+def record_declined_note(topic: str, synthesis_result: dict) -> None:
+    """Log a rejected concept note to SQLite for quality tracking.
+
+    Rejections never touch Neo4j and are invisible to
+    ``find_prior_concept_notes`` (which reaches SQLite only via Neo4j
+    links), so this is pure instrumentation: the discard rate per topic
+    over time is the pipeline's zero-cost quality metric.
+
+    Args:
+        topic: The search topic keyword.
+        synthesis_result: Dict returned by ``synthesize_concept_note``.
+    """
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO concept_notes
+                   (topic_keyword, synthesized_text, source_urls, created_at, user_interest)
+               VALUES (?, ?, ?, ?, 'declined')""",
+            (
+                topic,
+                synthesis_result["synthesized_note"],
+                json.dumps(synthesis_result["source_urls"]),
+                local_now(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def write_concept_note(
@@ -101,13 +132,16 @@ def write_concept_note(
 
     # ------------------------------------------------------------------
     # Step 3: Execute SQLite INSERT — do NOT commit yet.
-    # user_interest is intentionally omitted — DEFAULT 'pending' fires.
+    # user_interest is 'confirmed': this function is only reached after the
+    # user tapped Keep, and the row doubles as the approval log that
+    # ``record_declined_note`` mirrors for rejections.
     # clients.db is used directly (not get_connection()) so we hold the
     # transaction open until Neo4j commits successfully.
     # ------------------------------------------------------------------
     cursor = clients.db.execute(
-        """INSERT INTO concept_notes (topic_keyword, synthesized_text, source_urls, created_at)
-           VALUES (?, ?, ?, ?)""",
+        """INSERT INTO concept_notes
+               (topic_keyword, synthesized_text, source_urls, created_at, user_interest)
+           VALUES (?, ?, ?, ?, 'confirmed')""",
         (
             topic,
             synthesis_result["synthesized_note"],

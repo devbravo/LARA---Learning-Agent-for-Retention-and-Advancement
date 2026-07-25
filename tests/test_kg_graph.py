@@ -140,10 +140,15 @@ def test_kg_graph_rejection_skips_write():
         stack.enter_context(patch.object(_nodes._telegram, "remove_buttons"))
         stack.enter_context(patch.object(_nodes, "interrupt", return_value="kg_reject"))
         mock_write = stack.enter_context(patch.object(_nodes, "write_concept_note"))
+        mock_declined = stack.enter_context(
+            patch.object(_nodes, "record_declined_note")
+        )
 
         result = graph.invoke(initial_state, config=config)
 
     mock_write.assert_not_called()
+    # Rejection is logged for quality tracking (discard-rate metric).
+    mock_declined.assert_called_once_with("context management", _SYNTHESIS_RESULT)
     assert result.get("user_interest") == "rejected"
     assert result.get("write_result") is None
     assert result.get("pending_message_id") is None

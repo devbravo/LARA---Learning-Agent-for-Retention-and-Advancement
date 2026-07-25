@@ -21,7 +21,7 @@ from src.knowledge.lookup import find_prior_concept_notes
 from src.knowledge.search import search_blogs_for_topic, select_top_results
 from src.knowledge.state import KGState
 from src.knowledge.synthesize import synthesize_concept_note
-from src.knowledge.write import write_concept_note
+from src.knowledge.write import record_declined_note, write_concept_note
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +151,8 @@ def prepare_confirm_node(state: KGState) -> dict:
 
     interrupt() is the FIRST statement — no side effects before it.
     On resume, receives the raw callback_data string: "kg_approve" or "kg_reject".
+    A rejection is logged to ``concept_notes`` as ``'declined'`` (best-effort,
+    never fatal) so the discard rate is queryable for quality tracking.
 
     Args:
         state: Graph state; reads ``pending_message_id`` and ``chat_id``
@@ -179,6 +181,15 @@ def prepare_confirm_node(state: KGState) -> dict:
         user_choice,
         user_interest,
     )
+
+    if user_interest == "rejected":
+        # Instrumentation only — approvals are logged by write_concept_note
+        # ('confirmed'); rejections get a 'declined' row here so the discard
+        # rate is queryable. Must never break the flow.
+        try:
+            record_declined_note(state["topic"], state["synthesis_result"])
+        except Exception as e:
+            logger.warning("record_declined_note failed (non-fatal): %s", e)
 
     return {
         "pending_message_id": None,
