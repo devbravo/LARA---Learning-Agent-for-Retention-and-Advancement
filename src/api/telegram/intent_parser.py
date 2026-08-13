@@ -49,22 +49,3 @@ def extract_payload(
         return raw_payload.strip()
 
     return None
-
-
-# ---------------------------------------------------------------------------
-# Legacy shims — kept so existing imports don't break during transition
-# ---------------------------------------------------------------------------
-
-def parse_callback(
-    cb: str,
-    callback_data: str,
-    chat_id: int,
-    message_id: int | None,
-) -> ParseResult:
-    """Deprecated shim — use extract_payload instead."""
-    return extract_payload(callback_data, chat_id, message_id=message_id)
-
-
-def parse_message(message_text: str, chat_id: int) -> ParseResult:
-    """Deprecated shim — use extract_payload instead."""
-    return extract_payload(message_text, chat_id, message_id=None)
