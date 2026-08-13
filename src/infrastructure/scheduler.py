@@ -23,6 +23,7 @@ from langgraph.errors import GraphInterrupt
 
 from src.agent import graph as _graph
 from src.integrations.telegram_client import send_message
+from src.settings import _load_config
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -32,14 +33,6 @@ load_dotenv(_PROJECT_ROOT / ".env", override=True)
 
 logger = logging.getLogger(__name__)
 
-
-def _load_config() -> dict[str, Any]:
-    """Load ``config.yaml`` into a dictionary.
-    Returns:
-        Parsed configuration content.
-    """
-    with open(_PROJECT_ROOT / "config.yaml") as f:
-        return yaml.safe_load(f)
 
 _TZ = pytz.timezone(_load_config()["timezone"])
 logger.info("Current time in Paramaribo: %s", datetime.now(_TZ))

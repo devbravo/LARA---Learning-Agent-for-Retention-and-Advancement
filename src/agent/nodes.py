@@ -7,9 +7,7 @@ All exceptions are caught and surfaced as user-friendly messages in state.
 
 import json
 import pytz
-import yaml
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import cast
 
 import logging
@@ -43,12 +41,8 @@ from src.integrations import gcal as _gcal
 from src.integrations import telegram_client as _telegram
 from src.repositories import session_repository, topic_repository
 from src.services import topic_service
+from src.settings import _load_config
 
-_CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
-
-def _load_config() -> dict:
-    with open(_CONFIG_PATH) as f:
-        return yaml.safe_load(f)
 logger = logging.getLogger(__name__)
 
 

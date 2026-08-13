@@ -8,7 +8,6 @@ All 5 tools are decorated with @tool for LangGraph/LangChain compatibility.
 from datetime import date
 from pathlib import Path
 
-import yaml
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 
@@ -18,13 +17,7 @@ from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
 from src.integrations import gcal as _gcal
 from src.repositories import session_repository, topic_repository
-
-_CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
-
-
-def _load_config() -> dict:
-    with open(_CONFIG_PATH) as f:
-        return yaml.safe_load(f)
+from src.settings import _load_config
 
 
 # ---------------------------------------------------------------------------
