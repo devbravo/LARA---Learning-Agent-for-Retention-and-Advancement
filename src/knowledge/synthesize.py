@@ -27,6 +27,12 @@ from anthropic.types import (
 from anthropic.types.content_block import ToolUseBlock
 
 from src.knowledge.clients import KnowledgeClients
+from src.prompts import (
+    _MAP_SYSTEM_PROMPT, 
+    _MAP_USER_TEMPLATE, 
+    _SYNTH_SYSTEM_PROMPT, 
+    _EXTRACT_SYSTEM_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,25 +52,6 @@ _EXTRACT_MAX_TOKENS = 2048
 # Distillations shorter than this are junk (refusal, empty page, error text) —
 # too short to be a real technical bullet list from a validated article.
 _MIN_DISTILLATION_LENGTH = 200
-
-_MAP_SYSTEM_PROMPT = (
-    "You are an expert Machine Learning Infrastructure Engineer. "
-    "Your task is rigid information extraction. "
-    "Do not write introductory or concluding remarks. "
-    "Do not 'summarize'. Extract dense, technical facts."
-)
-
-_MAP_USER_TEMPLATE = (
-    "Extract the core engineering concepts related to the topic: '{topic}' "
-    "from the following article. Follow these strict rules:\n"
-    "1) Focus on the 'How' and 'Why': Extract specific algorithms, architecture "
-    "patterns, latency/cost trade-offs, and scaling bottlenecks.\n"
-    "2) Ignore the fluff: Completely ignore author bios, generic introductions, "
-    "marketing speak, and 'Further Reading' links.\n"
-    "3) Format: Output ONLY a Markdown list of dense bullet points. "
-    "Use sub-bullets for technical depth.\n\n"
-    "Article Text:\n{content}"
-)
 
 # The Reduce step is split into two focused calls so each does one job well:
 #   Reduce A (Sonnet) — write the note. Full attention on cross-referencing.
@@ -147,48 +134,6 @@ _CONCEPTS_TOOL: ToolParam = {
         "required": ["concepts", "proposed_relationships"],
     },
 }
-
-_SYNTH_SYSTEM_PROMPT = """\
-You are a technical study note synthesizer. You receive one or more distilled article \
-extracts on a topic and produce a single Concept Note for a learner preparing for a \
-technical interview.
-
-Rules for the synthesized note:
-- Write ONE integrated guide. Actively cross-reference: where sources cover the same concept, \
-combine them into one explanation. Where they differ or complement each other, note it explicitly.
-- Be dense and precise — this is a study reference, not a summary for a general audience.
-- Code examples in the sources are useful grounding. Reference what they DEMONSTRATE \
-(the technique or pattern) rather than reproducing the full snippet verbatim.
-
-If prior notes are provided:
-- Treat them as established knowledge the learner already has.
-- Focus the new note on what is genuinely new, different, or deeper \
-in the current sources versus the prior notes.
-- Explicitly flag where the new sources confirm, extend, or contradict \
-prior coverage. Do not silently re-summarize what prior notes already say.\
-"""
-
-_EXTRACT_SYSTEM_PROMPT = """\
-You are a concept extractor. You receive a finished technical Concept Note and \
-extract the concepts it teaches plus the relationships between them.
-
-Rules for concept extraction:
-- Extract the 5–10 most important concepts only. Quality over quantity.
-- Each concept must be a standalone idea a learner would need to understand independently. \
-Drop anything that is a detail, sub-component, or near-synonym of another concept already in your list.
-- Technique/idea level only (e.g. "speculative decoding", "prefix caching"). \
-Never code identifiers, library class names, author names, or paper titles.
-- Every concept must reflect something the note actually discusses. \
-Do not infer or coin new compound terms not present in the note.
-- If two terms refer to the same technique, use the more standard name and drop the other.
-
-Rules for proposed relationships:
-- Only between concepts in your own list. Only RELATED_TO or PREREQUISITE_OF.
-- 3–5 relationships maximum. Only the most load-bearing connections — \
-ones that would genuinely help a learner understand the dependency between two ideas. \
-Skip anything obvious or trivially implied.
-- Only propose a relationship where the note explicitly supports it.\
-"""
 
 
 def _is_distillation_valid(text: str) -> tuple[bool, str]:
