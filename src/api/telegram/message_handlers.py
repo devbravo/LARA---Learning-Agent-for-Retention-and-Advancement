@@ -12,26 +12,9 @@ from fastapi.responses import JSONResponse
 
 from src.integrations.telegram_client import send_message
 from src.services import view_service
+from src.prompts import HELP_TEXT
 
 logger = logging.getLogger(__name__)
-
-HELP_TEXT = (
-    "🤖 LARA — your study pipeline:\n\n"
-    "📋 Planning\n"
-    "/plan - See what's on your study agenda today\n"
-    "/view - Check where you stand: What's overdue, due today, and in progress\n\n"
-    "📚 Study pipeline\n"
-    "/pick - Choose a new topic to start learning\n"
-    "/discuss - Practice explaining a topic and get challenged on it\n"
-    "/mock - Run a mock interview on a topic\n"
-    "/done - Log a discuss or mock session and rate how well you did\n\n"
-    "🛠 Other\n"
-    "/help - Show this command guide\n\n"
-    "Notes:\n"
-    "- Study pipeline order: /pick → /discuss → /mock → /done\n"
-    "- Booking study blocks always requires confirmation"
-)
-
 
 def handle_help_command(chat_id: int) -> JSONResponse:
     """Handle /help by sending a concise command guide directly."""
