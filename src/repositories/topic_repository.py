@@ -2,6 +2,17 @@
 
 This module contains topic-specific database reads and writes used by service
 and node layers.
+
+Catalog-only lookups (``get_topic_name_by_id``, ``get_topic_id_by_name``,
+``get_topic_type_by_id``, ``get_default_duration_by_name``) query
+``topic_catalog`` directly and take no ``engineer_id`` — those fields are
+shared, training-team-owned data, not per-engineer state.
+
+Every other function is engineer-scoped and takes ``engineer_id: int`` as its
+first parameter. They query ``engineer_topic_progress`` (optionally joined to
+``topic_catalog``). Per-engineer progress rows are created lazily: an engineer
+who has never interacted with a topic has no row in ``engineer_topic_progress``,
+which is treated as ``status='inactive'`` with SM-2 defaults.
 """
 
 from typing import Any
@@ -11,110 +22,21 @@ from src.repositories import session_repository
 
 
 def get_topic_name_by_id(topic_id: int) -> str | None:
-    """Return topic name for a given id.
+    """Return catalog topic name for a given id.
 
     Args:
-        topic_id: Topic primary key.
+        topic_id: Topic catalog primary key.
 
     Returns:
         Topic name, or ``None`` when the row does not exist.
     """
     with get_connection() as conn:
-        row = conn.execute("SELECT name FROM topics WHERE id = ?", (topic_id,)).fetchone()
+        row = conn.execute("SELECT name FROM topic_catalog WHERE id = ?", (topic_id,)).fetchone()
     return row["name"] if row else None
 
 
-def graduate_topic_to_active(topic_id: int) -> bool:
-    """Set topic status to active and reset SM-2 progression fields.
-
-    Args:
-        topic_id: Topic primary key.
-
-    Returns:
-        ``True`` when a row was updated, else ``False``.
-    """
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """UPDATE topics
-               SET status = 'active',
-                   repetitions = 0,
-                   easiness_factor = 2.5,
-                   next_review = date('now', '+1 day'),
-                   updated_at = CURRENT_TIMESTAMP
-               WHERE id = ?""",
-            (topic_id,),
-        )
-    return cursor.rowcount > 0
-
-
-def activate_topic_from_discuss(topic_id: int) -> bool:
-    """Set a topic active after a successful discuss-readiness assessment.
-
-    Like ``graduate_topic_to_active`` but sets ``next_review`` to *today*
-    so that the first SM-2 mock session is scheduled immediately rather than
-    deferred to tomorrow.
-
-    Args:
-        topic_id: Topic primary key.
-
-    Returns:
-        ``True`` when a row was updated, else ``False``.
-    """
-    with get_connection() as conn:
-        cursor = conn.execute(
-            """UPDATE topics
-               SET status = 'active',
-                   repetitions = 0,
-                   easiness_factor = 2.5,
-                   next_review = date('now'),
-                   updated_at = CURRENT_TIMESTAMP
-               WHERE id = ?""",
-            (topic_id,),
-        )
-    return cursor.rowcount > 0
-
-
-def get_topic_status_by_id(topic_id: int) -> str | None:
-    """Return the current status of a topic.
-
-    Args:
-        topic_id: Topic primary key.
-
-    Returns:
-        Status string (e.g. ``'in_progress'``, ``'discussing'``, ``'active'``),
-        or ``None`` when the row does not exist.
-    """
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT status FROM topics WHERE id = ?", (topic_id,)
-        ).fetchone()
-    return row["status"] if row else None
-
-
-def get_in_progress_topics() -> list[dict[str, int | str]]:
-    """Return in-progress topics ordered by tier and name.
-
-    Returns:
-        List of dicts containing ``id`` and ``name``.
-    """
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT id, name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
-        ).fetchall()
-    return [{"id": row["id"], "name": row["name"]} for row in rows]
-
-
-def get_in_progress_topic_names() -> list[str]:
-    """Return in-progress topic names ordered by tier and name."""
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT name FROM topics WHERE status = 'in_progress' ORDER BY tier ASC, name ASC"
-        ).fetchall()
-    return [row["name"] for row in rows]
-
-
 def get_topic_id_by_name(topic_name: str) -> int | None:
-    """Return topic id for a case-insensitive topic name.
+    """Return catalog topic id for a case-insensitive topic name.
 
     Tries an exact match first; if that fails, falls back to a substring
     (LIKE) search and returns the id only when exactly one topic matches.
@@ -132,13 +54,13 @@ def get_topic_id_by_name(topic_name: str) -> int | None:
     """
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT id FROM topics WHERE name = ? COLLATE NOCASE",
+            "SELECT id FROM topic_catalog WHERE name = ? COLLATE NOCASE",
             (topic_name,),
         ).fetchone()
         if row:
             return row["id"]
         rows = conn.execute(
-            "SELECT id, name FROM topics WHERE name LIKE ? COLLATE NOCASE",
+            "SELECT id, name FROM topic_catalog WHERE name LIKE ? COLLATE NOCASE",
             (f"%{topic_name}%",),
         ).fetchall()
     if len(rows) == 1:
@@ -152,25 +74,164 @@ def get_topic_id_by_name(topic_name: str) -> int | None:
 
 
 def get_topic_type_by_id(topic_id: int) -> str | None:
-    """Return topic_type for a given topic id.
+    """Return catalog topic_type for a given topic id.
 
     Args:
-        topic_id: Topic primary key.
+        topic_id: Topic catalog primary key.
 
     Returns:
         Topic type string, or ``None`` when the row does not exist.
     """
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT topic_type FROM topics WHERE id = ?", (topic_id,)
+            "SELECT topic_type FROM topic_catalog WHERE id = ?", (topic_id,)
         ).fetchone()
     return row["topic_type"] if row else None
 
 
-def get_topic_weak_areas_by_name(topic_name: str) -> str | None:
-    """Return weak-areas text for a topic name.
+def get_default_duration_by_name(topic_name: str) -> int:
+    """Return default_duration_minutes for a catalog topic name, falling back to 30.
 
     Args:
+        topic_name: Topic display name (case-insensitive lookup).
+
+    Returns:
+        Default session duration in minutes, or ``30`` when the topic is
+        not found or the column has not been seeded yet.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT default_duration_minutes FROM topic_catalog WHERE name = ? COLLATE NOCASE",
+            (topic_name,),
+        ).fetchone()
+    if row is None or row["default_duration_minutes"] is None:
+        return 30
+    return row["default_duration_minutes"]
+
+
+def graduate_topic_to_active(engineer_id: int, topic_id: int) -> bool:
+    """Set an engineer's progress on a topic to active and reset SM-2 fields.
+
+    Args:
+        engineer_id: Engineer primary key.
+        topic_id: Topic catalog primary key.
+
+    Returns:
+        ``True`` when a progress row was updated, else ``False`` (e.g. the
+        engineer has no progress row yet for this topic).
+    """
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """UPDATE engineer_topic_progress
+               SET status = 'active',
+                   repetitions = 0,
+                   easiness_factor = 2.5,
+                   next_review = date('now', '+1 day'),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE engineer_id = ? AND topic_id = ?""",
+            (engineer_id, topic_id),
+        )
+    return cursor.rowcount > 0
+
+
+def activate_topic_from_discuss(engineer_id: int, topic_id: int) -> bool:
+    """Set an engineer's progress on a topic to active after discuss-readiness.
+
+    Like ``graduate_topic_to_active`` but sets ``next_review`` to *today*
+    so that the first SM-2 mock session is scheduled immediately rather than
+    deferred to tomorrow.
+
+    Args:
+        engineer_id: Engineer primary key.
+        topic_id: Topic catalog primary key.
+
+    Returns:
+        ``True`` when a progress row was updated, else ``False``.
+    """
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """UPDATE engineer_topic_progress
+               SET status = 'active',
+                   repetitions = 0,
+                   easiness_factor = 2.5,
+                   next_review = date('now'),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE engineer_id = ? AND topic_id = ?""",
+            (engineer_id, topic_id),
+        )
+    return cursor.rowcount > 0
+
+
+def get_topic_status_by_id(engineer_id: int, topic_id: int) -> str | None:
+    """Return an engineer's current status for a topic.
+
+    Args:
+        engineer_id: Engineer primary key.
+        topic_id: Topic catalog primary key.
+
+    Returns:
+        Status string (e.g. ``'in_progress'``, ``'discussing'``, ``'active'``).
+        ``'inactive'`` when the topic exists but the engineer has no progress
+        row yet (lazy row semantics). ``None`` when the topic itself does not
+        exist in the catalog.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM engineer_topic_progress WHERE engineer_id = ? AND topic_id = ?",
+            (engineer_id, topic_id),
+        ).fetchone()
+        if row:
+            return row["status"]
+        catalog_row = conn.execute(
+            "SELECT id FROM topic_catalog WHERE id = ?", (topic_id,)
+        ).fetchone()
+    return "inactive" if catalog_row else None
+
+
+def get_in_progress_topics(engineer_id: int) -> list[dict[str, int | str]]:
+    """Return an engineer's in-progress topics ordered by tier and name.
+
+    Args:
+        engineer_id: Engineer primary key.
+
+    Returns:
+        List of dicts containing ``id`` and ``name``.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT tc.id, tc.name
+               FROM topic_catalog tc
+               JOIN engineer_topic_progress etp ON etp.topic_id = tc.id AND etp.engineer_id = ?
+               WHERE etp.status = 'in_progress'
+               ORDER BY tc.tier ASC, tc.name ASC""",
+            (engineer_id,),
+        ).fetchall()
+    return [{"id": row["id"], "name": row["name"]} for row in rows]
+
+
+def get_in_progress_topic_names(engineer_id: int) -> list[str]:
+    """Return an engineer's in-progress topic names ordered by tier and name.
+
+    Args:
+        engineer_id: Engineer primary key.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT tc.name
+               FROM topic_catalog tc
+               JOIN engineer_topic_progress etp ON etp.topic_id = tc.id AND etp.engineer_id = ?
+               WHERE etp.status = 'in_progress'
+               ORDER BY tc.tier ASC, tc.name ASC""",
+            (engineer_id,),
+        ).fetchall()
+    return [row["name"] for row in rows]
+
+
+def get_topic_weak_areas_by_name(engineer_id: int, topic_name: str) -> str | None:
+    """Return an engineer's operational weak-areas text for a topic name.
+
+    Args:
+        engineer_id: Engineer primary key.
         topic_name: Topic display name (case-insensitive lookup).
 
     Returns:
@@ -178,45 +239,62 @@ def get_topic_weak_areas_by_name(topic_name: str) -> str | None:
     """
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT weak_areas FROM topics WHERE name = ? COLLATE NOCASE",
-            (topic_name,),
+            """SELECT etp.weak_areas
+               FROM topic_catalog tc
+               JOIN engineer_topic_progress etp ON etp.topic_id = tc.id AND etp.engineer_id = ?
+               WHERE tc.name = ? COLLATE NOCASE""",
+            (engineer_id, topic_name),
         ).fetchone()
     return row["weak_areas"] if row and row["weak_areas"] else None
 
 
-def update_topic_weak_areas(topic_id: int, weak_areas: str | None) -> None:
-    """Set or clear operational weak areas for a topic.
+def update_topic_weak_areas(engineer_id: int, topic_id: int, weak_areas: str | None) -> None:
+    """Set or clear an engineer's operational weak areas for a topic.
 
     Args:
-        topic_id: Topic primary key.
+        engineer_id: Engineer primary key.
+        topic_id: Topic catalog primary key.
         weak_areas: Weak-areas text or ``None`` to clear the field.
     """
     with get_connection() as conn:
         conn.execute(
-            "UPDATE topics SET weak_areas = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (weak_areas, topic_id),
+            """UPDATE engineer_topic_progress
+               SET weak_areas = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE engineer_id = ? AND topic_id = ?""",
+            (weak_areas, engineer_id, topic_id),
         )
 
 
-def get_inactive_topics_tier1_or2() -> list[dict[str, Any]]:
-    """Return inactive tier-1/2 topics ordered by tier and name.
+def get_inactive_topics_tier1_or2(engineer_id: int) -> list[dict[str, Any]]:
+    """Return an engineer's inactive tier-1/2 topics ordered by tier and name.
+
+    A topic with no progress row yet is treated as inactive (lazy row
+    semantics), so this LEFT JOINs against ``engineer_topic_progress``.
+
+    Args:
+        engineer_id: Engineer primary key.
 
     Returns:
         List of dicts with keys ``id``, ``name``, and ``tier``.
     """
     with get_connection() as conn:
         rows = conn.execute(
-            """SELECT id, name, tier FROM topics
-               WHERE status = 'inactive' AND tier IN (1, 2)
-               ORDER BY tier ASC, name ASC"""
+            """SELECT tc.id, tc.name, tc.tier
+               FROM topic_catalog tc
+               LEFT JOIN engineer_topic_progress etp
+                   ON etp.topic_id = tc.id AND etp.engineer_id = ?
+               WHERE tc.tier IN (1, 2) AND COALESCE(etp.status, 'inactive') = 'inactive'
+               ORDER BY tc.tier ASC, tc.name ASC""",
+            (engineer_id,),
         ).fetchall()
     return [{"id": row["id"], "name": row["name"], "tier": row["tier"]} for row in rows]
 
 
-def fetch_overdue_topics(today_str: str) -> list[dict[str, Any]]:
-    """Fetch active topics whose next review date is before today.
+def fetch_overdue_topics(engineer_id: int, today_str: str) -> list[dict[str, Any]]:
+    """Fetch an engineer's active topics whose next review date is before today.
 
     Args:
+        engineer_id: Engineer primary key.
         today_str: ISO date string (``YYYY-MM-DD``) for the cutoff.
 
     Returns:
@@ -225,18 +303,21 @@ def fetch_overdue_topics(today_str: str) -> list[dict[str, Any]]:
     """
     with get_connection() as conn:
         rows = conn.execute(
-            """SELECT name, next_review, weak_areas FROM topics
-               WHERE status = 'active' AND next_review < ?
-               ORDER BY next_review ASC""",
-            (today_str,),
+            """SELECT tc.name, etp.next_review, etp.weak_areas
+               FROM engineer_topic_progress etp
+               JOIN topic_catalog tc ON tc.id = etp.topic_id
+               WHERE etp.engineer_id = ? AND etp.status = 'active' AND etp.next_review < ?
+               ORDER BY etp.next_review ASC""",
+            (engineer_id, today_str),
         ).fetchall()
     return [{"name": r["name"], "next_review": r["next_review"], "weak_areas": r["weak_areas"]} for r in rows]
 
 
-def fetch_due_today_topics(today_str: str) -> list[dict[str, Any]]:
-    """Fetch active topics due for review today.
+def fetch_due_today_topics(engineer_id: int, today_str: str) -> list[dict[str, Any]]:
+    """Fetch an engineer's active topics due for review today.
 
     Args:
+        engineer_id: Engineer primary key.
         today_str: ISO date string (``YYYY-MM-DD``) for today.
 
     Returns:
@@ -245,16 +326,21 @@ def fetch_due_today_topics(today_str: str) -> list[dict[str, Any]]:
     """
     with get_connection() as conn:
         rows = conn.execute(
-            """SELECT name, weak_areas FROM topics
-               WHERE status = 'active' AND next_review = ?
-               ORDER BY tier ASC, easiness_factor ASC""",
-            (today_str,),
+            """SELECT tc.name, etp.weak_areas
+               FROM engineer_topic_progress etp
+               JOIN topic_catalog tc ON tc.id = etp.topic_id
+               WHERE etp.engineer_id = ? AND etp.status = 'active' AND etp.next_review = ?
+               ORDER BY tc.tier ASC, etp.easiness_factor ASC""",
+            (engineer_id, today_str),
         ).fetchall()
     return [{"name": r["name"], "weak_areas": r["weak_areas"]} for r in rows]
 
 
-def fetch_in_progress_topics_with_weak_areas() -> list[dict[str, Any]]:
-    """Fetch in-progress and discussing topics with their weak areas.
+def fetch_in_progress_topics_with_weak_areas(engineer_id: int) -> list[dict[str, Any]]:
+    """Fetch an engineer's in-progress and discussing topics with weak areas.
+
+    Args:
+        engineer_id: Engineer primary key.
 
     Returns:
         List of dicts with ``name`` and ``weak_areas``, ordered by tier
@@ -262,15 +348,23 @@ def fetch_in_progress_topics_with_weak_areas() -> list[dict[str, Any]]:
     """
     with get_connection() as conn:
         rows = conn.execute(
-            """SELECT name, weak_areas FROM topics
-               WHERE status IN ('in_progress', 'discussing')
-               ORDER BY tier ASC, name ASC""",
+            """SELECT tc.name, etp.weak_areas
+               FROM engineer_topic_progress etp
+               JOIN topic_catalog tc ON tc.id = etp.topic_id
+               WHERE etp.engineer_id = ? AND etp.status IN ('in_progress', 'discussing')
+               ORDER BY tc.tier ASC, tc.name ASC""",
+            (engineer_id,),
         ).fetchall()
     return [{"name": r["name"], "weak_areas": r["weak_areas"]} for r in rows]
 
 
-def get_active_unlogged_topics_today() -> list[dict]:
-    """Return active topics not yet logged today, ordered by tier ASC, easiness_factor ASC.
+def get_active_unlogged_topics_today(engineer_id: int) -> list[dict]:
+    """Return an engineer's active topics not yet logged today.
+
+    Ordered by tier ASC, easiness_factor ASC.
+
+    Args:
+        engineer_id: Engineer primary key.
 
     Returns:
         List of dicts with keys ``id`` and ``name``.
@@ -278,38 +372,49 @@ def get_active_unlogged_topics_today() -> list[dict]:
     logged_names = session_repository.get_logged_topic_names_for_today()
     with get_connection() as conn:
         rows = conn.execute(
-            """SELECT id, name FROM topics
-               WHERE status = 'active'
-               ORDER BY tier ASC, easiness_factor ASC"""
+            """SELECT tc.id, tc.name
+               FROM engineer_topic_progress etp
+               JOIN topic_catalog tc ON tc.id = etp.topic_id
+               WHERE etp.engineer_id = ? AND etp.status = 'active'
+               ORDER BY tc.tier ASC, etp.easiness_factor ASC""",
+            (engineer_id,),
         ).fetchall()
     return [{"id": row["id"], "name": row["name"]} for row in rows if row["name"] not in logged_names]
 
 
-def get_topic_context(topic_id: int) -> dict[str, Any]:
-    """Fetch SM-2 state and last session signal for a topic.
+def get_topic_context(engineer_id: int, topic_id: int) -> dict[str, Any]:
+    """Fetch an engineer's SM-2 state and last session signal for a topic.
 
-    Joins topics with sessions (latest session only) to return both the
-    SM-2 scheduling fields and the most recent student signal.
+    LEFT JOINs progress (lazy-row defaults apply when the engineer has never
+    interacted with the topic) and the engineer's most recent session for it.
 
     Args:
-        topic_id: Topic primary key.
+        engineer_id: Engineer primary key.
+        topic_id: Topic catalog primary key.
 
     Returns:
         Dict with topic SM-2 fields and last-session data (session fields
-        are ``None`` when no session exists yet).
+        are ``None`` when no session exists yet). Empty dict when the topic
+        does not exist in the catalog.
     """
     with get_connection() as conn:
         row = conn.execute(
             """SELECT
-                   t.id, t.name, t.topic_type, t.easiness_factor,
-                   t.interval_days, t.repetitions, t.next_review, t.weak_areas,
+                   tc.id, tc.name, tc.topic_type,
+                   COALESCE(etp.easiness_factor, 2.5) AS easiness_factor,
+                   COALESCE(etp.interval_days, 1) AS interval_days,
+                   COALESCE(etp.repetitions, 0) AS repetitions,
+                   etp.next_review, etp.weak_areas,
                    s.student_quality, s.studied_at, s.student_weak_areas
-               FROM topics t
-               LEFT JOIN sessions s ON s.topic_id = t.id
-               WHERE t.id = ?
+               FROM topic_catalog tc
+               LEFT JOIN engineer_topic_progress etp
+                   ON etp.topic_id = tc.id AND etp.engineer_id = ?
+               LEFT JOIN sessions s
+                   ON s.topic_id = tc.id AND s.engineer_id = ?
+               WHERE tc.id = ?
                ORDER BY s.studied_at DESC
                LIMIT 1""",
-            (topic_id,),
+            (engineer_id, engineer_id, topic_id),
         ).fetchone()
     if row is None:
         return {}
@@ -328,104 +433,119 @@ def get_topic_context(topic_id: int) -> dict[str, Any]:
     }
 
 
-def get_default_duration_by_name(topic_name: str) -> int:
-    """Return default_duration_minutes for a topic name, falling back to 30.
+def set_topic_in_progress(engineer_id: int, topic_name: str) -> bool:
+    """Set an engineer's status for a topic to in_progress.
+
+    Creates the engineer's progress row lazily if it doesn't exist yet
+    (a missing row is implicitly inactive); otherwise only transitions an
+    existing 'inactive' row.
 
     Args:
-        topic_name: Topic display name (case-insensitive lookup).
+        engineer_id: Engineer primary key.
+        topic_name: Topic display name (exact match).
 
     Returns:
-        Default session duration in minutes, or ``30`` when the topic is
-        not found or the column has not been seeded yet.
+        ``True`` when the row was created or updated, else ``False`` (unknown
+        topic name, or the engineer's existing status isn't 'inactive').
     """
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT default_duration_minutes FROM topics WHERE name = ? COLLATE NOCASE",
-            (topic_name,),
+        catalog_row = conn.execute(
+            "SELECT id FROM topic_catalog WHERE name = ?", (topic_name,)
         ).fetchone()
-    if row is None or row["default_duration_minutes"] is None:
-        return 30
-    return row["default_duration_minutes"]
+        if catalog_row is None:
+            return False
+        topic_id = catalog_row["id"]
 
-
-def set_topic_in_progress(topic_name: str) -> bool:
-    """Set topic status to in_progress for an inactive topic name.
-
-    Args:
-        topic_name: Topic display name.
-
-    Returns:
-        ``True`` when a row was updated, else ``False``.
-    """
-    with get_connection() as conn:
         cursor = conn.execute(
-            """UPDATE topics SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP
-               WHERE name = ? AND status = 'inactive'""",
-            (topic_name,),
+            """INSERT INTO engineer_topic_progress (engineer_id, topic_id, status, updated_at)
+               VALUES (?, ?, 'in_progress', CURRENT_TIMESTAMP)
+               ON CONFLICT(engineer_id, topic_id) DO UPDATE SET
+                   status = 'in_progress', updated_at = CURRENT_TIMESTAMP
+               WHERE engineer_topic_progress.status = 'inactive'""",
+            (engineer_id, topic_id),
         )
     return cursor.rowcount > 0
 
 
-def get_discussing_topics() -> list[dict[str, Any]]:
-    """Return all topics where status = 'discussing', ordered by tier and name.
+def get_discussing_topics(engineer_id: int) -> list[dict[str, Any]]:
+    """Return all of an engineer's topics with status 'discussing'.
+
+    Args:
+        engineer_id: Engineer primary key.
 
     Returns:
-        List of dicts with keys ``id`` and ``name``.
+        List of dicts with keys ``id`` and ``name``, ordered by tier and name.
     """
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, name FROM topics WHERE status = 'discussing' ORDER BY tier ASC, name ASC"
+            """SELECT tc.id, tc.name
+               FROM topic_catalog tc
+               JOIN engineer_topic_progress etp ON etp.topic_id = tc.id AND etp.engineer_id = ?
+               WHERE etp.status = 'discussing'
+               ORDER BY tc.tier ASC, tc.name ASC""",
+            (engineer_id,),
         ).fetchall()
     return [{"id": row["id"], "name": row["name"]} for row in rows]
 
 
-def set_topic_discussing(topic_id: int) -> None:
-    """Set a topic's status to 'discussing'.
+def set_topic_discussing(engineer_id: int, topic_id: int) -> None:
+    """Set an engineer's status for a topic to 'discussing'.
 
     Args:
-        topic_id: Topic primary key.
+        engineer_id: Engineer primary key.
+        topic_id: Topic catalog primary key.
     """
     with get_connection() as conn:
         conn.execute(
-            "UPDATE topics SET status = 'discussing', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (topic_id,),
+            """UPDATE engineer_topic_progress
+               SET status = 'discussing', updated_at = CURRENT_TIMESTAMP
+               WHERE engineer_id = ? AND topic_id = ?""",
+            (engineer_id, topic_id),
         )
 
 
-def set_topic_back_to_in_progress(topic_id: int) -> bool:
-    """Return a topic from 'discussing' back to 'in_progress'.
+def set_topic_back_to_in_progress(engineer_id: int, topic_id: int) -> bool:
+    """Return an engineer's topic from 'discussing' back to 'in_progress'.
 
-    Only acts when the topic's current status is 'discussing', preventing
-    accidental overwrites of active or in_progress topics.
+    Only acts when the current status is 'discussing', preventing accidental
+    overwrites of active or in_progress topics.
 
     Args:
-        topic_id: Topic primary key.
+        engineer_id: Engineer primary key.
+        topic_id: Topic catalog primary key.
 
     Returns:
-        ``True`` when a row was updated, ``False`` when no discussing topic
-        with that id exists.
+        ``True`` when a row was updated, ``False`` when no discussing
+        progress row with that id exists for this engineer.
     """
     with get_connection() as conn:
         cursor = conn.execute(
-            """UPDATE topics
+            """UPDATE engineer_topic_progress
                SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP
-               WHERE id = ? AND status = 'discussing'""",
-            (topic_id,),
+               WHERE engineer_id = ? AND topic_id = ? AND status = 'discussing'""",
+            (engineer_id, topic_id),
         )
     return cursor.rowcount > 0
 
 
-def get_in_progress_and_active_topics() -> list[dict[str, Any]]:
-    """Return topics eligible as discuss targets (status 'in_progress' or 'active').
+def get_in_progress_and_active_topics(engineer_id: int) -> list[dict[str, Any]]:
+    """Return an engineer's topics eligible as discuss targets.
+
+    Eligible statuses are 'in_progress' or 'active'.
+
+    Args:
+        engineer_id: Engineer primary key.
 
     Returns:
         List of dicts with keys ``id`` and ``name``, ordered by tier then name.
     """
     with get_connection() as conn:
         rows = conn.execute(
-            """SELECT id, name FROM topics
-               WHERE status IN ('in_progress', 'active')
-               ORDER BY tier ASC, name ASC""",
+            """SELECT tc.id, tc.name
+               FROM topic_catalog tc
+               JOIN engineer_topic_progress etp ON etp.topic_id = tc.id AND etp.engineer_id = ?
+               WHERE etp.status IN ('in_progress', 'active')
+               ORDER BY tc.tier ASC, tc.name ASC""",
+            (engineer_id,),
         ).fetchall()
     return [{"id": row["id"], "name": row["name"]} for row in rows]
-
