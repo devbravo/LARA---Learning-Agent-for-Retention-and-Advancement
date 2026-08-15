@@ -108,8 +108,46 @@ def init_db() -> None:
             conn.execute("ALTER TABLE sessions ADD COLUMN calibration_gap INTEGER")
         except sqlite3.OperationalError:
             pass
+        try:
+            conn.execute("ALTER TABLE sessions ADD COLUMN engineer_id INTEGER REFERENCES engineers(id)")
+        except sqlite3.OperationalError:
+            pass
 
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS engineers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                platform TEXT NOT NULL CHECK(platform IN ('telegram', 'slack')),
+                external_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(platform, external_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS topic_catalog (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                tier INTEGER NOT NULL,
+                topic_type TEXT NOT NULL DEFAULT 'conceptual',
+                default_duration_minutes INTEGER NOT NULL DEFAULT 30
+            );
+
+            CREATE TABLE IF NOT EXISTS engineer_topic_progress (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                engineer_id INTEGER NOT NULL REFERENCES engineers(id),
+                topic_id INTEGER NOT NULL REFERENCES topic_catalog(id),
+                status TEXT NOT NULL DEFAULT 'inactive',
+                easiness_factor REAL DEFAULT 2.5,
+                interval_days INTEGER DEFAULT 1,
+                repetitions INTEGER DEFAULT 0,
+                next_review DATE DEFAULT NULL,
+                weak_areas TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(engineer_id, topic_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_progress_engineer_status
+                ON engineer_topic_progress(engineer_id, status);
+
             CREATE TABLE IF NOT EXISTS topics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -127,6 +165,7 @@ def init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS sessions (
                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                engineer_id         INTEGER REFERENCES engineers(id),
                 topic_id            INTEGER NOT NULL REFERENCES topics(id),
                 studied_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 duration_min        INTEGER,
