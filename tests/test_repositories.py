@@ -765,24 +765,52 @@ class SessionRepositoryTests(RepositoryDbTestCase):
 
 class Sm2RepositoryTests(RepositoryDbTestCase):
     def test_fetch_due_topics_filters_and_orders(self) -> None:
+        engineer_id = self._insert_engineer()
         today = date.today().isoformat()
         tomorrow = (date.today() + timedelta(days=1)).isoformat()
-        self._insert_topic(name="Tier2", tier=2, status="active", easiness_factor=2.5, next_review=today)
-        self._insert_topic(name="Tier1Hard", tier=1, status="active", easiness_factor=1.5, next_review=today)
-        self._insert_topic(name="Inactive", tier=1, status="inactive", next_review=today)
-        self._insert_topic(name="Future", tier=1, status="active", next_review=tomorrow)
+        tier2 = self._insert_catalog_topic(name="Tier2", tier=2)
+        tier1_hard = self._insert_catalog_topic(name="Tier1Hard", tier=1)
+        inactive = self._insert_catalog_topic(name="Inactive", tier=1)
+        future = self._insert_catalog_topic(name="Future", tier=1)
+        self._insert_progress(engineer_id, tier2, status="active", easiness_factor=2.5, next_review=today)
+        self._insert_progress(engineer_id, tier1_hard, status="active", easiness_factor=1.5, next_review=today)
+        self._insert_progress(engineer_id, inactive, status="inactive", next_review=today)
+        self._insert_progress(engineer_id, future, status="active", next_review=tomorrow)
 
-        rows = sm2_repository.fetch_due_topics(date.today())
+        rows = sm2_repository.fetch_due_topics(engineer_id, date.today())
         self.assertEqual([r["name"] for r in rows], ["Tier1Hard", "Tier2"])
 
-    def test_fetch_and_update_sm2_state(self) -> None:
-        topic_id = self._insert_topic(name="SM2", easiness_factor=2.3, interval_days=4, repetitions=2)
+    def test_fetch_due_topics_only_returns_target_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        today = date.today().isoformat()
+        topic_id = self._insert_catalog_topic(name="Shared", tier=1)
+        self._insert_progress(engineer_a, topic_id, status="active", next_review=today)
+        self._insert_progress(engineer_b, topic_id, status="active", next_review=today)
 
-        state = sm2_repository.fetch_sm2_state(topic_id)
+        rows_a = sm2_repository.fetch_due_topics(engineer_a, date.today())
+        self.assertEqual(len(rows_a), 1)
+
+        # Deactivating engineer B's progress must not affect engineer A's due list.
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE engineer_topic_progress SET status = 'inactive' WHERE engineer_id = ?",
+                (engineer_b,),
+            )
+        rows_a_after = sm2_repository.fetch_due_topics(engineer_a, date.today())
+        self.assertEqual(len(rows_a_after), 1)
+
+    def test_fetch_and_update_sm2_state(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="SM2")
+        self._insert_progress(engineer_id, topic_id, easiness_factor=2.3, interval_days=4, repetitions=2)
+
+        state = sm2_repository.fetch_sm2_state(engineer_id, topic_id)
         self.assertIsNotNone(state)
         self.assertEqual(state["interval_days"], 4)
 
         sm2_repository.update_sm2_state(
+            engineer_id=engineer_id,
             topic_id=topic_id,
             easiness_factor=2.6,
             interval_days=6,
@@ -790,12 +818,37 @@ class Sm2RepositoryTests(RepositoryDbTestCase):
             next_review=(date.today() + timedelta(days=6)).isoformat(),
         )
 
-        state2 = sm2_repository.fetch_sm2_state(topic_id)
+        state2 = sm2_repository.fetch_sm2_state(engineer_id, topic_id)
         self.assertEqual(state2["easiness_factor"], 2.6)
         self.assertEqual(state2["interval_days"], 6)
         self.assertEqual(state2["repetitions"], 3)
 
-        self.assertIsNone(sm2_repository.fetch_sm2_state(99999))
+        self.assertIsNone(sm2_repository.fetch_sm2_state(engineer_id, 99999))
+
+    def test_fetch_sm2_state_returns_none_for_lazy_missing_row(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="Never Touched")
+        # No progress row inserted — lazy row semantics.
+        self.assertIsNone(sm2_repository.fetch_sm2_state(engineer_id, topic_id))
+
+    def test_update_sm2_state_only_affects_target_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        topic_id = self._insert_catalog_topic(name="Shared")
+        self._insert_progress(engineer_a, topic_id, easiness_factor=2.5)
+        self._insert_progress(engineer_b, topic_id, easiness_factor=2.5)
+
+        sm2_repository.update_sm2_state(
+            engineer_id=engineer_a,
+            topic_id=topic_id,
+            easiness_factor=1.8,
+            interval_days=1,
+            repetitions=0,
+            next_review=date.today().isoformat(),
+        )
+
+        state_b = sm2_repository.fetch_sm2_state(engineer_b, topic_id)
+        self.assertEqual(state_b["easiness_factor"], 2.5)
 
 
 class DiscussingTopicRepositoryTests(RepositoryDbTestCase):

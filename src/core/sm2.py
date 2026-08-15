@@ -6,7 +6,7 @@ for due-topic selection and post-session updates.
 
 from datetime import date, timedelta
 
-from src.repositories import sm2_repository
+from src.repositories import sm2_repository, topic_repository
 
 
 def calculate_next_review(
@@ -44,10 +44,11 @@ def calculate_next_review(
     return new_ef, new_interval, repetitions + 1
 
 
-def get_due_topics(target_date: date | None = None) -> list[dict]:
-    """Return topics where next_review <= target_date and status = 'active', ordered by tier ASC, easiness_factor ASC.
+def get_due_topics(engineer_id: int, target_date: date | None = None) -> list[dict]:
+    """Return an engineer's topics due on or before target_date, ordered by tier ASC, easiness_factor ASC.
 
     Args:
+        engineer_id: Engineer primary key.
         target_date: The date to check due topics against. Defaults to today.
                      Pass date.today() + timedelta(days=1) for tomorrow's due topics
                      (used by the evening briefing).
@@ -57,22 +58,30 @@ def get_due_topics(target_date: date | None = None) -> list[dict]:
     """
     if target_date is None:
         target_date = date.today()
-    return sm2_repository.fetch_due_topics(target_date=target_date)
+    return sm2_repository.fetch_due_topics(engineer_id=engineer_id, target_date=target_date)
 
 
-def update_topic_after_session(topic_id: int = 0, quality: int = 3) -> None:
-    """Recompute and persist SM-2 fields for a studied topic.
+def update_topic_after_session(engineer_id: int, topic_id: int = 0, quality: int = 3) -> None:
+    """Recompute and persist SM-2 fields for an engineer's studied topic.
 
     Args:
-        topic_id: Topic id to update.
+        engineer_id: Engineer primary key.
+        topic_id: Topic catalog primary key.
         quality: Session quality score (2, 3, or 5).
 
     Raises:
-        ValueError: If ``topic_id`` does not exist.
+        ValueError: If the topic doesn't exist in the catalog, or the topic
+            exists but this engineer has no progress row for it yet.
     """
-    row = sm2_repository.fetch_sm2_state(topic_id=topic_id)
+    row = sm2_repository.fetch_sm2_state(engineer_id=engineer_id, topic_id=topic_id)
     if row is None:
-        raise ValueError(f"Topic id={topic_id} not found")
+        topic_name = topic_repository.get_topic_name_by_id(topic_id)
+        if topic_name is None:
+            raise ValueError(f"Topic id={topic_id} not found in catalog")
+        raise ValueError(
+            f"Engineer id={engineer_id} has no progress record for "
+            f"topic id={topic_id} ('{topic_name}')"
+        )
 
     new_ef, new_interval, new_reps = calculate_next_review(
         quality=quality,
@@ -83,6 +92,7 @@ def update_topic_after_session(topic_id: int = 0, quality: int = 3) -> None:
     next_review = (date.today() + timedelta(days=new_interval)).isoformat()
 
     sm2_repository.update_sm2_state(
+        engineer_id=engineer_id,
         topic_id=topic_id,
         easiness_factor=new_ef,
         interval_days=new_interval,
