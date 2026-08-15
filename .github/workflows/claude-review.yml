@@ -27,36 +27,42 @@ jobs:
           claude_args: |
             --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api:*),Bash(gh pr comment:*),Read,Grep,Glob"
           prompt: |
-            You are reviewing pull request #${{ github.event.pull_request.number }}
-            in ${{ github.repository }}. The `gh` CLI is already authenticated,
-            scoped to this job's permissions.
+            You are the primary code reviewer for pull request
+            #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+            The `gh` CLI is already authenticated, scoped to this job's permissions.
+
+            This repo is trialing Claude as the primary automated reviewer
+            (previously GitHub Copilot). Do a full, thorough review — do not
+            limit yourself to uncertain or disputed findings.
 
             1. Run `gh pr diff ${{ github.event.pull_request.number }}` to see the changes.
             2. Run `gh pr view ${{ github.event.pull_request.number }} --comments` to see
                any existing review comments (including from other reviewers/bots like
-               GitHub Copilot).
+               GitHub Copilot) — used for comparison in step 4, not as a gate on whether
+               you review.
             3. Review the diff for correctness bugs and meaningful simplification/
                efficiency issues, reading surrounding code with Read/Grep/Glob as needed
-               to verify each finding rather than guessing from the diff alone.
+               to verify each finding rather than guessing from the diff alone. Skip
+               purely stylistic/subjective nitpicks — focus on issues that would actually
+               matter to a developer.
             4. For every finding, assign a confidence:
                - CONFIRMED: you traced the code and are sure this is a real issue.
                - PLAUSIBLE: you suspect an issue but couldn't fully verify it.
-               Also check each finding against the existing review comments from step 2:
+               Also check each finding against the existing review comments from step 2
+               and note the relationship when relevant:
                - CONTRADICTORY: your conclusion disagrees with an existing reviewer's
                  comment on the same code (either you think their flagged issue isn't
                  real, or you found a problem with something they approved/missed).
-            5. Escalation policy — only post a PR comment for a finding if it is
-               PLAUSIBLE or CONTRADICTORY. Do NOT post anything for CONFIRMED findings
-               that don't contradict another reviewer — stay silent on those to avoid
-               noise; a human doesn't need to be told about something you're already
-               sure of and no one disputed.
-            6. Post escalated findings with
+            5. Post every CONFIRMED or PLAUSIBLE finding as a PR comment — this is a
+               full review, not an escalation-only pass. Each comment must state its
+               confidence label, and when a finding is CONTRADICTORY, name which
+               existing comment it disagrees with and why — a developer reading it
+               should immediately understand how much to trust it and whether reviewers
+               disagree.
+            6. Post findings with
                `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
                as inline comments on the relevant file/line, or `gh pr comment` for a
-               general comment when a line anchor doesn't apply. Each comment must state
-               clearly why it's PLAUSIBLE (what you couldn't verify) or CONTRADICTORY
-               (which existing comment it disagrees with and why) — a developer reading
-               it should immediately understand what judgment call is being asked of them.
-            7. If nothing meets the escalation bar, post nothing and exit quietly —
+               general comment when a line anchor doesn't apply.
+            7. If the diff has no meaningful findings, post nothing and exit quietly —
                do not post a "looks good" comment; silence is the expected outcome for
                a clean PR.
