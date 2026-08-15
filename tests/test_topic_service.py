@@ -134,14 +134,33 @@ def test_graduate_topic_sets_active(tmp_path):
     assert row["next_review"] is not None  # date('now', '+1 day')
 
 
-def test_graduate_topic_raises_for_unknown_id(tmp_path):
-    """graduate_topic raises ValueError when the topic has no progress row for this engineer."""
+def test_graduate_topic_raises_for_unknown_catalog_topic(tmp_path):
+    """graduate_topic raises ValueError when the topic doesn't exist in the catalog at all."""
     db_path = _create_db(tmp_path)
     engineer_id = _insert_engineer(db_path)
 
     with patch("src.repositories.topic_repository.get_connection", side_effect=_make_conn_factory(db_path)):
-        with pytest.raises(ValueError, match="not found in DB"):
+        with pytest.raises(ValueError, match="not found in catalog"):
             topic_service.graduate_topic(engineer_id, 999)
+
+
+def test_graduate_topic_raises_when_engineer_has_no_progress_row(tmp_path):
+    """graduate_topic raises a distinct, actionable error when the catalog topic exists
+    but this engineer has no progress row for it yet (lazy-row semantics) — must not
+    claim the topic itself is missing."""
+    db_path = _create_db(tmp_path)
+    engineer_id = _insert_engineer(db_path)
+    _insert_catalog_topic(db_path, 1, "DSA - Arrays")
+    # No progress row inserted for this engineer — lazy row never created.
+
+    with patch("src.repositories.topic_repository.get_connection", side_effect=_make_conn_factory(db_path)):
+        with pytest.raises(ValueError) as exc_info:
+            topic_service.graduate_topic(engineer_id, 1)
+
+    message = str(exc_info.value)
+    assert "not found in catalog" not in message
+    assert str(engineer_id) in message
+    assert "DSA - Arrays" in message
 
 
 # ---------------------------------------------------------------------------

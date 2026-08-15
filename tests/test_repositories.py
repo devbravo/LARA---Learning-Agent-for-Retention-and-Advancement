@@ -566,7 +566,7 @@ class TopicRepositoryTests(RepositoryDbTestCase):
 
 class SessionRepositoryTests(RepositoryDbTestCase):
     def test_insert_and_read_session_helpers(self) -> None:
-        topic_id = self._insert_topic(name="System Design")
+        topic_id = self._insert_catalog_topic(name="System Design")
 
         session_repository.insert_session(topic_id, 45, 3, "latency")
         logged = session_repository.get_logged_topic_names_for_today()
@@ -627,7 +627,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
 
     def test_legacy_utc_row_is_found_by_today_helpers(self) -> None:
         """A legacy row stored as UTC timestamp (01:00 UTC = today local for UTC+X) is returned."""
-        topic_id = self._insert_topic(name="Legacy UTC Topic")
+        topic_id = self._insert_catalog_topic(name="Legacy UTC Topic")
 
         # Compute a UTC timestamp that falls inside today's local window.
         # local midnight in UTC + 1 hour is safely within "today local" for
@@ -654,7 +654,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         ensuring the timestamp is unambiguously outside today's local window
         regardless of the current UTC/local clock relationship.
         """
-        topic_id = self._insert_topic(name="Yesterday UTC Topic")
+        topic_id = self._insert_catalog_topic(name="Yesterday UTC Topic")
 
         tz = _tz()
         yesterday_local_noon = (

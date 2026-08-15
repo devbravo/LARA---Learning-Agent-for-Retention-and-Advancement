@@ -18,16 +18,18 @@ def graduate_topic(engineer_id: int, topic_id: int) -> str:
         Topic name for user-facing confirmation messages.
 
     Raises:
-        ValueError: If the engineer has no progress row for this topic, or
-            the topic cannot be found in the catalog.
+        ValueError: If the topic does not exist in the catalog, or the topic
+            exists but this engineer has no progress row for it yet.
     """
     updated = topic_repository.graduate_topic_to_active(engineer_id, topic_id)
-    if not updated:
-        raise ValueError(f"Topic id={topic_id} not found in DB")
-
     topic_name = topic_repository.get_topic_name_by_id(topic_id)
-    if topic_name is None:
-        raise ValueError(f"Topic id={topic_id} not found in DB")
+    if not updated:
+        if topic_name is None:
+            raise ValueError(f"Topic id={topic_id} not found in catalog")
+        raise ValueError(
+            f"Engineer id={engineer_id} has no progress record for "
+            f"topic id={topic_id} ('{topic_name}')"
+        )
     return topic_name
 
 
