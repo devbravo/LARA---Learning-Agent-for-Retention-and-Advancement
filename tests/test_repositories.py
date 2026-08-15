@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytz
 
@@ -49,7 +50,8 @@ class RepositoryDbTestCase(unittest.TestCase):
 
                 CREATE TABLE sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    topic_id INTEGER NOT NULL REFERENCES topics(id),
+                    engineer_id INTEGER,
+                    topic_id INTEGER NOT NULL,
                     studied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     duration_min INTEGER,
                     mode TEXT,
@@ -62,6 +64,37 @@ class RepositoryDbTestCase(unittest.TestCase):
                     teacher_weak_areas TEXT,
                     teacher_source TEXT,
                     calibration_gap INTEGER
+                );
+
+                CREATE TABLE engineers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    platform TEXT NOT NULL CHECK(platform IN ('telegram', 'slack')),
+                    external_id TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(platform, external_id)
+                );
+
+                CREATE TABLE topic_catalog (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    tier INTEGER NOT NULL,
+                    topic_type TEXT NOT NULL DEFAULT 'conceptual',
+                    default_duration_minutes INTEGER NOT NULL DEFAULT 30
+                );
+
+                CREATE TABLE engineer_topic_progress (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    engineer_id INTEGER NOT NULL REFERENCES engineers(id),
+                    topic_id INTEGER NOT NULL REFERENCES topic_catalog(id),
+                    status TEXT NOT NULL DEFAULT 'inactive',
+                    easiness_factor REAL DEFAULT 2.5,
+                    interval_days INTEGER DEFAULT 1,
+                    repetitions INTEGER DEFAULT 0,
+                    next_review DATE DEFAULT NULL,
+                    weak_areas TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(engineer_id, topic_id)
                 );
                 """
             )
@@ -100,33 +133,119 @@ class RepositoryDbTestCase(unittest.TestCase):
         finally:
             conn.close()
 
+    def _insert_engineer(self, **kwargs) -> int:
+        defaults = {"name": "Diego", "platform": "telegram", "external_id": "1"}
+        defaults.update(kwargs)
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                "INSERT INTO engineers (name, platform, external_id) VALUES (:name, :platform, :external_id)",
+                defaults,
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def _insert_catalog_topic(self, **kwargs) -> int:
+        defaults = {
+            "name": "Topic",
+            "tier": 1,
+            "topic_type": "conceptual",
+            "default_duration_minutes": 30,
+        }
+        defaults.update(kwargs)
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                """INSERT INTO topic_catalog (name, tier, topic_type, default_duration_minutes)
+                   VALUES (:name, :tier, :topic_type, :default_duration_minutes)""",
+                defaults,
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def _insert_progress(self, engineer_id: int, topic_id: int, **kwargs) -> int:
+        defaults = {
+            "status": "active",
+            "easiness_factor": 2.5,
+            "interval_days": 1,
+            "repetitions": 0,
+            "next_review": date.today().isoformat(),
+            "weak_areas": None,
+        }
+        defaults.update(kwargs)
+        defaults["engineer_id"] = engineer_id
+        defaults["topic_id"] = topic_id
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                """INSERT INTO engineer_topic_progress
+                       (engineer_id, topic_id, status, easiness_factor, interval_days, repetitions, next_review, weak_areas)
+                   VALUES (:engineer_id, :topic_id, :status, :easiness_factor, :interval_days, :repetitions, :next_review, :weak_areas)""",
+                defaults,
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
 
 class TopicRepositoryTests(RepositoryDbTestCase):
-    def test_topic_lookup_helpers(self) -> None:
-        topic_id = self._insert_topic(name="LangGraph Core")
+    # ------------------------------------------------------------------
+    # Catalog-only lookups — no engineer_id, query topic_catalog directly
+    # ------------------------------------------------------------------
+
+    def test_topic_lookup_helpers_are_catalog_only(self) -> None:
+        topic_id = self._insert_catalog_topic(name="LangGraph Core")
 
         self.assertEqual(topic_repository.get_topic_name_by_id(topic_id), "LangGraph Core")
         self.assertEqual(topic_repository.get_topic_id_by_name("langgraph core"), topic_id)
         self.assertIsNone(topic_repository.get_topic_id_by_name("missing"))
 
+    def test_get_default_duration_returns_seeded_value(self) -> None:
+        self._insert_catalog_topic(name="DSA - Trees", default_duration_minutes=45)
+        result = topic_repository.get_default_duration_by_name("DSA - Trees")
+        self.assertEqual(result, 45)
+
+    def test_get_default_duration_is_case_insensitive(self) -> None:
+        self._insert_catalog_topic(name="DSA - Trees", default_duration_minutes=45)
+        result = topic_repository.get_default_duration_by_name("dsa - trees")
+        self.assertEqual(result, 45)
+
+    def test_get_default_duration_returns_30_for_unknown_topic(self) -> None:
+        result = topic_repository.get_default_duration_by_name("Nonexistent Topic")
+        self.assertEqual(result, 30)
+
+    def test_get_topic_type_by_id_is_catalog_only(self) -> None:
+        topic_id = self._insert_catalog_topic(name="RAG", topic_type="dsa")
+        self.assertEqual(topic_repository.get_topic_type_by_id(topic_id), "dsa")
+        self.assertIsNone(topic_repository.get_topic_type_by_id(99999))
+
+    # ------------------------------------------------------------------
+    # graduate_topic_to_active / activate_topic_from_discuss — engineer-scoped
+    # ------------------------------------------------------------------
+
     def test_graduate_topic_to_active_resets_sm2_fields(self) -> None:
-        topic_id = self._insert_topic(
-            name="RAG",
-            status="in_progress",
-            repetitions=5,
-            easiness_factor=1.7,
-            interval_days=10,
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="RAG")
+        self._insert_progress(
+            engineer_id, topic_id,
+            status="in_progress", repetitions=5, easiness_factor=1.7, interval_days=10,
         )
 
-        updated = topic_repository.graduate_topic_to_active(topic_id)
+        updated = topic_repository.graduate_topic_to_active(engineer_id, topic_id)
         self.assertTrue(updated)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
-                "SELECT status, repetitions, easiness_factor, next_review FROM topics WHERE id = ?",
-                (topic_id,),
+                """SELECT status, repetitions, easiness_factor, next_review
+                   FROM engineer_topic_progress WHERE engineer_id = ? AND topic_id = ?""",
+                (engineer_id, topic_id),
             ).fetchone()
         finally:
             conn.close()
@@ -136,36 +255,318 @@ class TopicRepositoryTests(RepositoryDbTestCase):
         self.assertEqual(row["easiness_factor"], 2.5)
         self.assertIsNotNone(row["next_review"])
 
+    def test_graduate_topic_to_active_returns_false_when_no_progress_row(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="RAG")
+        # No progress row inserted — lazy row never created for this engineer.
+        self.assertFalse(topic_repository.graduate_topic_to_active(engineer_id, topic_id))
+
+    def test_graduate_topic_to_active_only_affects_target_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        topic_id = self._insert_catalog_topic(name="RAG")
+        self._insert_progress(engineer_a, topic_id, status="in_progress")
+        self._insert_progress(engineer_b, topic_id, status="in_progress")
+
+        topic_repository.graduate_topic_to_active(engineer_a, topic_id)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row_b = conn.execute(
+                "SELECT status FROM engineer_topic_progress WHERE engineer_id = ? AND topic_id = ?",
+                (engineer_b, topic_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row_b["status"], "in_progress")
+
+    def test_activate_topic_from_discuss_sets_next_review_today(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="RAG")
+        self._insert_progress(engineer_id, topic_id, status="discussing")
+
+        updated = topic_repository.activate_topic_from_discuss(engineer_id, topic_id)
+        self.assertTrue(updated)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT status, next_review FROM engineer_topic_progress WHERE engineer_id = ? AND topic_id = ?",
+                (engineer_id, topic_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["status"], "active")
+        self.assertEqual(row["next_review"], date.today().isoformat())
+
+    # ------------------------------------------------------------------
+    # get_topic_status_by_id — lazy-row semantics
+    # ------------------------------------------------------------------
+
+    def test_get_topic_status_by_id_returns_inactive_for_lazy_missing_row(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="RAG")
+        # No progress row — engineer has never touched this topic.
+        self.assertEqual(topic_repository.get_topic_status_by_id(engineer_id, topic_id), "inactive")
+
+    def test_get_topic_status_by_id_returns_existing_status(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="RAG")
+        self._insert_progress(engineer_id, topic_id, status="discussing")
+        self.assertEqual(topic_repository.get_topic_status_by_id(engineer_id, topic_id), "discussing")
+
+    def test_get_topic_status_by_id_returns_none_for_unknown_topic(self) -> None:
+        engineer_id = self._insert_engineer()
+        self.assertIsNone(topic_repository.get_topic_status_by_id(engineer_id, 99999))
+
+    # ------------------------------------------------------------------
+    # get_in_progress_topics / get_in_progress_topic_names / set_topic_in_progress
+    # ------------------------------------------------------------------
+
     def test_in_progress_queries_and_set_in_progress(self) -> None:
-        self._insert_topic(name="A", tier=2, status="in_progress")
-        self._insert_topic(name="B", tier=1, status="in_progress")
-        self._insert_topic(name="C", tier=1, status="inactive")
+        engineer_id = self._insert_engineer()
+        topic_a = self._insert_catalog_topic(name="A", tier=2)
+        topic_b = self._insert_catalog_topic(name="B", tier=1)
+        self._insert_catalog_topic(name="C", tier=1)  # no progress row — lazy inactive
+        self._insert_progress(engineer_id, topic_a, status="in_progress")
+        self._insert_progress(engineer_id, topic_b, status="in_progress")
 
-        topics = topic_repository.get_in_progress_topics()
+        topics = topic_repository.get_in_progress_topics(engineer_id)
         self.assertEqual([t["name"] for t in topics], ["B", "A"])
-        self.assertEqual(topic_repository.get_in_progress_topic_names(), ["B", "A"])
+        self.assertEqual(topic_repository.get_in_progress_topic_names(engineer_id), ["B", "A"])
 
-        self.assertTrue(topic_repository.set_topic_in_progress("C"))
-        self.assertFalse(topic_repository.set_topic_in_progress("C"))
+        self.assertTrue(topic_repository.set_topic_in_progress(engineer_id, "C"))
+        self.assertFalse(topic_repository.set_topic_in_progress(engineer_id, "C"))
 
-    def test_get_default_duration_returns_seeded_value(self) -> None:
-        self._insert_topic(name="DSA - Trees", default_duration_minutes=45)
-        result = topic_repository.get_default_duration_by_name("DSA - Trees")
-        self.assertEqual(result, 45)
+    def test_set_topic_in_progress_creates_lazy_row_when_none_exists(self) -> None:
+        engineer_id = self._insert_engineer()
+        self._insert_catalog_topic(name="C", tier=1)
 
-    def test_get_default_duration_is_case_insensitive(self) -> None:
-        self._insert_topic(name="DSA - Trees", default_duration_minutes=45)
-        result = topic_repository.get_default_duration_by_name("dsa - trees")
-        self.assertEqual(result, 45)
+        self.assertTrue(topic_repository.set_topic_in_progress(engineer_id, "C"))
 
-    def test_get_default_duration_returns_30_for_unknown_topic(self) -> None:
-        result = topic_repository.get_default_duration_by_name("Nonexistent Topic")
-        self.assertEqual(result, 30)
+        self.assertEqual(topic_repository.get_in_progress_topic_names(engineer_id), ["C"])
+
+    def test_set_topic_in_progress_does_not_overwrite_active_status(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="C", tier=1)
+        self._insert_progress(engineer_id, topic_id, status="active")
+
+        self.assertFalse(topic_repository.set_topic_in_progress(engineer_id, "C"))
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT status FROM engineer_topic_progress WHERE engineer_id = ? AND topic_id = ?",
+                (engineer_id, topic_id),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["status"], "active")
+
+    def test_set_topic_in_progress_returns_false_for_unknown_topic_name(self) -> None:
+        engineer_id = self._insert_engineer()
+        self.assertFalse(topic_repository.set_topic_in_progress(engineer_id, "Nonexistent"))
+
+    def test_set_topic_in_progress_only_affects_target_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        self._insert_catalog_topic(name="C", tier=1)
+
+        topic_repository.set_topic_in_progress(engineer_a, "C")
+
+        self.assertEqual(topic_repository.get_in_progress_topic_names(engineer_a), ["C"])
+        self.assertEqual(topic_repository.get_in_progress_topic_names(engineer_b), [])
+
+    # ------------------------------------------------------------------
+    # get_topic_weak_areas_by_name / update_topic_weak_areas
+    # ------------------------------------------------------------------
+
+    def test_get_topic_weak_areas_by_name_returns_engineer_scoped_value(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="RAG")
+        self._insert_progress(engineer_id, topic_id, weak_areas="confuses HNSW with IVF")
+
+        result = topic_repository.get_topic_weak_areas_by_name(engineer_id, "rag")
+        self.assertEqual(result, "confuses HNSW with IVF")
+
+    def test_get_topic_weak_areas_by_name_returns_none_when_empty(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="RAG")
+        self._insert_progress(engineer_id, topic_id, weak_areas=None)
+
+        self.assertIsNone(topic_repository.get_topic_weak_areas_by_name(engineer_id, "RAG"))
+
+    def test_update_topic_weak_areas_sets_value(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="RAG")
+        self._insert_progress(engineer_id, topic_id, weak_areas=None)
+
+        topic_repository.update_topic_weak_areas(engineer_id, topic_id, "new gap")
+
+        self.assertEqual(topic_repository.get_topic_weak_areas_by_name(engineer_id, "RAG"), "new gap")
+
+    def test_update_topic_weak_areas_clears_with_none(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="RAG")
+        self._insert_progress(engineer_id, topic_id, weak_areas="old gap")
+
+        topic_repository.update_topic_weak_areas(engineer_id, topic_id, None)
+
+        self.assertIsNone(topic_repository.get_topic_weak_areas_by_name(engineer_id, "RAG"))
+
+    # ------------------------------------------------------------------
+    # get_inactive_topics_tier1_or2 — lazy-row LEFT JOIN semantics
+    # ------------------------------------------------------------------
+
+    def test_get_inactive_topics_includes_lazy_missing_rows(self) -> None:
+        engineer_id = self._insert_engineer()
+        self._insert_catalog_topic(name="Never Touched", tier=1)
+
+        names = [t["name"] for t in topic_repository.get_inactive_topics_tier1_or2(engineer_id)]
+        self.assertIn("Never Touched", names)
+
+    def test_get_inactive_topics_excludes_active_and_in_progress(self) -> None:
+        engineer_id = self._insert_engineer()
+        active_id = self._insert_catalog_topic(name="Active", tier=1)
+        ip_id = self._insert_catalog_topic(name="InProgress", tier=1)
+        self._insert_progress(engineer_id, active_id, status="active")
+        self._insert_progress(engineer_id, ip_id, status="in_progress")
+
+        names = [t["name"] for t in topic_repository.get_inactive_topics_tier1_or2(engineer_id)]
+        self.assertNotIn("Active", names)
+        self.assertNotIn("InProgress", names)
+
+    def test_get_inactive_topics_excludes_tier3(self) -> None:
+        engineer_id = self._insert_engineer()
+        self._insert_catalog_topic(name="Advanced", tier=3)
+
+        names = [t["name"] for t in topic_repository.get_inactive_topics_tier1_or2(engineer_id)]
+        self.assertNotIn("Advanced", names)
+
+    # ------------------------------------------------------------------
+    # fetch_overdue_topics / fetch_due_today_topics / fetch_in_progress_topics_with_weak_areas
+    # ------------------------------------------------------------------
+
+    def test_fetch_overdue_topics_returns_only_past_due_active(self) -> None:
+        engineer_id = self._insert_engineer()
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        today = date.today().isoformat()
+        overdue_id = self._insert_catalog_topic(name="Overdue")
+        current_id = self._insert_catalog_topic(name="Current")
+        self._insert_progress(engineer_id, overdue_id, status="active", next_review=yesterday, weak_areas="gap")
+        self._insert_progress(engineer_id, current_id, status="active", next_review=today)
+
+        rows = topic_repository.fetch_overdue_topics(engineer_id, today)
+        self.assertEqual([r["name"] for r in rows], ["Overdue"])
+        self.assertEqual(rows[0]["weak_areas"], "gap")
+
+    def test_fetch_due_today_topics_orders_by_tier_then_easiness(self) -> None:
+        engineer_id = self._insert_engineer()
+        today = date.today().isoformat()
+        hard_id = self._insert_catalog_topic(name="Hard", tier=1)
+        easy_id = self._insert_catalog_topic(name="Easy", tier=1)
+        self._insert_progress(engineer_id, hard_id, status="active", next_review=today, easiness_factor=1.5)
+        self._insert_progress(engineer_id, easy_id, status="active", next_review=today, easiness_factor=2.8)
+
+        rows = topic_repository.fetch_due_today_topics(engineer_id, today)
+        self.assertEqual([r["name"] for r in rows], ["Hard", "Easy"])
+
+    def test_fetch_in_progress_with_weak_areas_includes_discussing(self) -> None:
+        engineer_id = self._insert_engineer()
+        ip_id = self._insert_catalog_topic(name="IP")
+        dis_id = self._insert_catalog_topic(name="DIS")
+        act_id = self._insert_catalog_topic(name="ACT")
+        self._insert_progress(engineer_id, ip_id, status="in_progress", weak_areas="area1")
+        self._insert_progress(engineer_id, dis_id, status="discussing", weak_areas="area2")
+        self._insert_progress(engineer_id, act_id, status="active", weak_areas="area3")
+
+        names = [t["name"] for t in topic_repository.fetch_in_progress_topics_with_weak_areas(engineer_id)]
+        self.assertIn("IP", names)
+        self.assertIn("DIS", names)
+        self.assertNotIn("ACT", names)
+
+    # ------------------------------------------------------------------
+    # get_topic_context — LEFT JOIN progress + engineer-scoped sessions
+    # ------------------------------------------------------------------
+
+    def test_get_topic_context_returns_progress_and_last_session(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="RAG", topic_type="conceptual")
+        self._insert_progress(engineer_id, topic_id, easiness_factor=2.3, weak_areas="gap")
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO sessions (engineer_id, topic_id, student_quality, studied_at) VALUES (?, ?, ?, ?)",
+            (engineer_id, topic_id, 3, "2026-01-01 10:00:00"),
+        )
+        conn.commit()
+        conn.close()
+
+        ctx = topic_repository.get_topic_context(engineer_id, topic_id)
+        self.assertEqual(ctx["name"], "RAG")
+        self.assertEqual(ctx["easiness_factor"], 2.3)
+        self.assertEqual(ctx["weak_areas"], "gap")
+        self.assertEqual(ctx["student_quality"], 3)
+
+    def test_get_topic_context_defaults_when_no_progress_row(self) -> None:
+        """Lazy-row semantics: a never-touched topic still returns catalog fields with SM-2 defaults."""
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="Never Touched")
+
+        ctx = topic_repository.get_topic_context(engineer_id, topic_id)
+        self.assertEqual(ctx["name"], "Never Touched")
+        self.assertEqual(ctx["easiness_factor"], 2.5)
+        self.assertEqual(ctx["repetitions"], 0)
+        self.assertIsNone(ctx["student_quality"])
+
+    def test_get_topic_context_returns_empty_dict_for_unknown_topic(self) -> None:
+        engineer_id = self._insert_engineer()
+        self.assertEqual(topic_repository.get_topic_context(engineer_id, 99999), {})
+
+    def test_get_topic_context_does_not_leak_other_engineers_sessions(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        topic_id = self._insert_catalog_topic(name="RAG")
+        self._insert_progress(engineer_a, topic_id)
+        self._insert_progress(engineer_b, topic_id)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO sessions (engineer_id, topic_id, student_quality, studied_at) VALUES (?, ?, ?, ?)",
+            (engineer_b, topic_id, 5, "2026-01-01 10:00:00"),
+        )
+        conn.commit()
+        conn.close()
+
+        ctx = topic_repository.get_topic_context(engineer_a, topic_id)
+        self.assertIsNone(ctx["student_quality"])
+
+    # ------------------------------------------------------------------
+    # get_active_unlogged_topics_today
+    # ------------------------------------------------------------------
+
+    def test_get_active_unlogged_topics_today_excludes_logged(self) -> None:
+        engineer_id = self._insert_engineer()
+        logged_id = self._insert_catalog_topic(name="Logged")
+        unlogged_id = self._insert_catalog_topic(name="Unlogged")
+        self._insert_progress(engineer_id, logged_id, status="active")
+        self._insert_progress(engineer_id, unlogged_id, status="active")
+
+        with patch.object(
+            topic_repository.session_repository,
+            "get_logged_topic_names_for_today",
+            return_value={"Logged"},
+        ):
+            result = topic_repository.get_active_unlogged_topics_today(engineer_id)
+
+        names = [t["name"] for t in result]
+        self.assertEqual(names, ["Unlogged"])
 
 
 class SessionRepositoryTests(RepositoryDbTestCase):
     def test_insert_and_read_session_helpers(self) -> None:
-        topic_id = self._insert_topic(name="System Design")
+        topic_id = self._insert_catalog_topic(name="System Design")
 
         session_repository.insert_session(topic_id, 45, 3, "latency")
         logged = session_repository.get_logged_topic_names_for_today()
@@ -226,7 +627,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
 
     def test_legacy_utc_row_is_found_by_today_helpers(self) -> None:
         """A legacy row stored as UTC timestamp (01:00 UTC = today local for UTC+X) is returned."""
-        topic_id = self._insert_topic(name="Legacy UTC Topic")
+        topic_id = self._insert_catalog_topic(name="Legacy UTC Topic")
 
         # Compute a UTC timestamp that falls inside today's local window.
         # local midnight in UTC + 1 hour is safely within "today local" for
@@ -253,7 +654,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         ensuring the timestamp is unambiguously outside today's local window
         regardless of the current UTC/local clock relationship.
         """
-        topic_id = self._insert_topic(name="Yesterday UTC Topic")
+        topic_id = self._insert_catalog_topic(name="Yesterday UTC Topic")
 
         tz = _tz()
         yesterday_local_noon = (
@@ -398,19 +799,24 @@ class Sm2RepositoryTests(RepositoryDbTestCase):
 
 
 class DiscussingTopicRepositoryTests(RepositoryDbTestCase):
-    """Tests for the discussing-status topic repository functions."""
+    """Tests for the discussing-status topic repository functions (engineer-scoped)."""
 
     # ------------------------------------------------------------------
     # get_discussing_topics
     # ------------------------------------------------------------------
 
     def test_get_discussing_topics_returns_discussing_only(self) -> None:
-        self._insert_topic(name="D1", tier=1, status="discussing")
-        self._insert_topic(name="D2", tier=2, status="discussing")
-        self._insert_topic(name="Active", tier=1, status="active")
-        self._insert_topic(name="InProgress", tier=1, status="in_progress")
+        engineer_id = self._insert_engineer()
+        d1 = self._insert_catalog_topic(name="D1", tier=1)
+        d2 = self._insert_catalog_topic(name="D2", tier=2)
+        active_id = self._insert_catalog_topic(name="Active", tier=1)
+        ip_id = self._insert_catalog_topic(name="InProgress", tier=1)
+        self._insert_progress(engineer_id, d1, status="discussing")
+        self._insert_progress(engineer_id, d2, status="discussing")
+        self._insert_progress(engineer_id, active_id, status="active")
+        self._insert_progress(engineer_id, ip_id, status="in_progress")
 
-        result = topic_repository.get_discussing_topics()
+        result = topic_repository.get_discussing_topics(engineer_id)
         names = [t["name"] for t in result]
         self.assertIn("D1", names)
         self.assertIn("D2", names)
@@ -418,52 +824,81 @@ class DiscussingTopicRepositoryTests(RepositoryDbTestCase):
         self.assertNotIn("InProgress", names)
 
     def test_get_discussing_topics_empty_when_none(self) -> None:
-        self._insert_topic(name="Active", tier=1, status="active")
-        self.assertEqual(topic_repository.get_discussing_topics(), [])
+        engineer_id = self._insert_engineer()
+        active_id = self._insert_catalog_topic(name="Active", tier=1)
+        self._insert_progress(engineer_id, active_id, status="active")
+        self.assertEqual(topic_repository.get_discussing_topics(engineer_id), [])
 
     def test_get_discussing_topics_ordered_by_tier_then_name(self) -> None:
-        self._insert_topic(name="Z", tier=1, status="discussing")
-        self._insert_topic(name="A", tier=2, status="discussing")
-        self._insert_topic(name="M", tier=1, status="discussing")
+        engineer_id = self._insert_engineer()
+        z_id = self._insert_catalog_topic(name="Z", tier=1)
+        a_id = self._insert_catalog_topic(name="A", tier=2)
+        m_id = self._insert_catalog_topic(name="M", tier=1)
+        for tid in (z_id, a_id, m_id):
+            self._insert_progress(engineer_id, tid, status="discussing")
 
-        names = [t["name"] for t in topic_repository.get_discussing_topics()]
+        names = [t["name"] for t in topic_repository.get_discussing_topics(engineer_id)]
         self.assertEqual(names, ["M", "Z", "A"])
 
     def test_get_discussing_topics_returns_id_and_name(self) -> None:
-        tid = self._insert_topic(name="D", tier=1, status="discussing")
-        result = topic_repository.get_discussing_topics()
+        engineer_id = self._insert_engineer()
+        tid = self._insert_catalog_topic(name="D", tier=1)
+        self._insert_progress(engineer_id, tid, status="discussing")
+
+        result = topic_repository.get_discussing_topics(engineer_id)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["id"], tid)
         self.assertEqual(result[0]["name"], "D")
+
+    def test_get_discussing_topics_only_returns_target_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        tid = self._insert_catalog_topic(name="D", tier=1)
+        self._insert_progress(engineer_b, tid, status="discussing")
+
+        self.assertEqual(topic_repository.get_discussing_topics(engineer_a), [])
 
     # ------------------------------------------------------------------
     # set_topic_discussing
     # ------------------------------------------------------------------
 
     def test_set_topic_discussing_changes_status(self) -> None:
-        tid = self._insert_topic(name="T", tier=1, status="in_progress")
-        topic_repository.set_topic_discussing(tid)
+        engineer_id = self._insert_engineer()
+        tid = self._insert_catalog_topic(name="T", tier=1)
+        self._insert_progress(engineer_id, tid, status="in_progress")
+
+        topic_repository.set_topic_discussing(engineer_id, tid)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
-            row = conn.execute("SELECT status FROM topics WHERE id = ?", (tid,)).fetchone()
+            row = conn.execute(
+                "SELECT status FROM engineer_topic_progress WHERE engineer_id = ? AND topic_id = ?",
+                (engineer_id, tid),
+            ).fetchone()
         finally:
             conn.close()
         self.assertEqual(row["status"], "discussing")
 
     def test_set_topic_discussing_nonexistent_id_is_noop(self) -> None:
+        engineer_id = self._insert_engineer()
         # Should not raise even when the id doesn't exist
-        topic_repository.set_topic_discussing(99999)
+        topic_repository.set_topic_discussing(engineer_id, 99999)
 
     def test_set_topic_discussing_from_active_status(self) -> None:
-        tid = self._insert_topic(name="ActiveTopic", tier=1, status="active")
-        topic_repository.set_topic_discussing(tid)
+        engineer_id = self._insert_engineer()
+        tid = self._insert_catalog_topic(name="ActiveTopic", tier=1)
+        self._insert_progress(engineer_id, tid, status="active")
+
+        topic_repository.set_topic_discussing(engineer_id, tid)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
-            row = conn.execute("SELECT status FROM topics WHERE id = ?", (tid,)).fetchone()
+            row = conn.execute(
+                "SELECT status FROM engineer_topic_progress WHERE engineer_id = ? AND topic_id = ?",
+                (engineer_id, tid),
+            ).fetchone()
         finally:
             conn.close()
         self.assertEqual(row["status"], "discussing")
@@ -473,51 +908,75 @@ class DiscussingTopicRepositoryTests(RepositoryDbTestCase):
     # ------------------------------------------------------------------
 
     def test_set_topic_back_to_in_progress_changes_status(self) -> None:
-        tid = self._insert_topic(name="T", tier=1, status="discussing")
-        topic_repository.set_topic_back_to_in_progress(tid)
+        engineer_id = self._insert_engineer()
+        tid = self._insert_catalog_topic(name="T", tier=1)
+        self._insert_progress(engineer_id, tid, status="discussing")
+
+        topic_repository.set_topic_back_to_in_progress(engineer_id, tid)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
-            row = conn.execute("SELECT status FROM topics WHERE id = ?", (tid,)).fetchone()
+            row = conn.execute(
+                "SELECT status FROM engineer_topic_progress WHERE engineer_id = ? AND topic_id = ?",
+                (engineer_id, tid),
+            ).fetchone()
         finally:
             conn.close()
         self.assertEqual(row["status"], "in_progress")
 
     def test_set_topic_back_to_in_progress_returns_true_on_success(self) -> None:
-        tid = self._insert_topic(name="T2", tier=1, status="discussing")
-        self.assertTrue(topic_repository.set_topic_back_to_in_progress(tid))
+        engineer_id = self._insert_engineer()
+        tid = self._insert_catalog_topic(name="T2", tier=1)
+        self._insert_progress(engineer_id, tid, status="discussing")
+        self.assertTrue(topic_repository.set_topic_back_to_in_progress(engineer_id, tid))
 
     def test_set_topic_back_to_in_progress_returns_false_for_nonexistent_id(self) -> None:
-        self.assertFalse(topic_repository.set_topic_back_to_in_progress(99999))
+        engineer_id = self._insert_engineer()
+        self.assertFalse(topic_repository.set_topic_back_to_in_progress(engineer_id, 99999))
 
     def test_set_topic_back_to_in_progress_does_not_overwrite_active_status(self) -> None:
-        tid = self._insert_topic(name="ActiveTopic", tier=1, status="active")
-        result = topic_repository.set_topic_back_to_in_progress(tid)
+        engineer_id = self._insert_engineer()
+        tid = self._insert_catalog_topic(name="ActiveTopic", tier=1)
+        self._insert_progress(engineer_id, tid, status="active")
+
+        result = topic_repository.set_topic_back_to_in_progress(engineer_id, tid)
         self.assertFalse(result)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
-            row = conn.execute("SELECT status FROM topics WHERE id = ?", (tid,)).fetchone()
+            row = conn.execute(
+                "SELECT status FROM engineer_topic_progress WHERE engineer_id = ? AND topic_id = ?",
+                (engineer_id, tid),
+            ).fetchone()
         finally:
             conn.close()
         self.assertEqual(row["status"], "active")
 
     def test_set_topic_back_to_in_progress_does_not_overwrite_in_progress_status(self) -> None:
-        tid = self._insert_topic(name="IPTopic", tier=1, status="in_progress")
-        result = topic_repository.set_topic_back_to_in_progress(tid)
+        engineer_id = self._insert_engineer()
+        tid = self._insert_catalog_topic(name="IPTopic", tier=1)
+        self._insert_progress(engineer_id, tid, status="in_progress")
+
+        result = topic_repository.set_topic_back_to_in_progress(engineer_id, tid)
         self.assertFalse(result)
 
     def test_set_then_restore_roundtrip(self) -> None:
-        tid = self._insert_topic(name="RT", tier=1, status="in_progress")
-        topic_repository.set_topic_discussing(tid)
-        topic_repository.set_topic_back_to_in_progress(tid)
+        engineer_id = self._insert_engineer()
+        tid = self._insert_catalog_topic(name="RT", tier=1)
+        self._insert_progress(engineer_id, tid, status="in_progress")
+
+        topic_repository.set_topic_discussing(engineer_id, tid)
+        topic_repository.set_topic_back_to_in_progress(engineer_id, tid)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
-            row = conn.execute("SELECT status FROM topics WHERE id = ?", (tid,)).fetchone()
+            row = conn.execute(
+                "SELECT status FROM engineer_topic_progress WHERE engineer_id = ? AND topic_id = ?",
+                (engineer_id, tid),
+            ).fetchone()
         finally:
             conn.close()
         self.assertEqual(row["status"], "in_progress")
@@ -527,47 +986,37 @@ class DiscussingTopicRepositoryTests(RepositoryDbTestCase):
     # ------------------------------------------------------------------
 
     def test_get_in_progress_and_active_topics_includes_both_statuses(self) -> None:
-        self._insert_topic(name="Active", tier=1, status="active")
-        self._insert_topic(name="InProgress", tier=1, status="in_progress")
-        self._insert_topic(name="Inactive", tier=1, status="inactive")
-        self._insert_topic(name="Discussing", tier=1, status="discussing")
+        engineer_id = self._insert_engineer()
+        active_id = self._insert_catalog_topic(name="Active", tier=1)
+        ip_id = self._insert_catalog_topic(name="InProgress", tier=1)
+        self._insert_catalog_topic(name="Inactive", tier=1)  # lazy, no progress row
+        dis_id = self._insert_catalog_topic(name="Discussing", tier=1)
+        self._insert_progress(engineer_id, active_id, status="active")
+        self._insert_progress(engineer_id, ip_id, status="in_progress")
+        self._insert_progress(engineer_id, dis_id, status="discussing")
 
-        names = [t["name"] for t in topic_repository.get_in_progress_and_active_topics()]
+        names = [t["name"] for t in topic_repository.get_in_progress_and_active_topics(engineer_id)]
         self.assertIn("Active", names)
         self.assertIn("InProgress", names)
         self.assertNotIn("Inactive", names)
         self.assertNotIn("Discussing", names)
 
     def test_get_in_progress_and_active_topics_empty_when_none(self) -> None:
-        self._insert_topic(name="Inactive", tier=1, status="inactive")
-        self.assertEqual(topic_repository.get_in_progress_and_active_topics(), [])
+        engineer_id = self._insert_engineer()
+        self._insert_catalog_topic(name="Inactive", tier=1)
+        self.assertEqual(topic_repository.get_in_progress_and_active_topics(engineer_id), [])
 
     def test_get_in_progress_and_active_topics_ordered_by_tier_then_name(self) -> None:
-        self._insert_topic(name="Z", tier=1, status="active")
-        self._insert_topic(name="A", tier=2, status="in_progress")
-        self._insert_topic(name="M", tier=1, status="in_progress")
+        engineer_id = self._insert_engineer()
+        z_id = self._insert_catalog_topic(name="Z", tier=1)
+        a_id = self._insert_catalog_topic(name="A", tier=2)
+        m_id = self._insert_catalog_topic(name="M", tier=1)
+        self._insert_progress(engineer_id, z_id, status="active")
+        self._insert_progress(engineer_id, a_id, status="in_progress")
+        self._insert_progress(engineer_id, m_id, status="in_progress")
 
-        names = [t["name"] for t in topic_repository.get_in_progress_and_active_topics()]
+        names = [t["name"] for t in topic_repository.get_in_progress_and_active_topics(engineer_id)]
         self.assertEqual(names, ["M", "Z", "A"])
-
-    # ------------------------------------------------------------------
-    # fetch_in_progress_topics_with_weak_areas (updated to include discussing)
-    # ------------------------------------------------------------------
-
-    def test_fetch_in_progress_with_weak_areas_includes_discussing(self) -> None:
-        self._insert_topic(name="IP", tier=1, status="in_progress", weak_areas="area1")
-        self._insert_topic(name="DIS", tier=1, status="discussing", weak_areas="area2")
-        self._insert_topic(name="ACT", tier=1, status="active", weak_areas="area3")
-
-        names = [t["name"] for t in topic_repository.fetch_in_progress_topics_with_weak_areas()]
-        self.assertIn("IP", names)
-        self.assertIn("DIS", names)
-        self.assertNotIn("ACT", names)
-
-    def test_fetch_in_progress_with_weak_areas_excludes_inactive(self) -> None:
-        self._insert_topic(name="INACT", tier=1, status="inactive", weak_areas="area")
-        names = [t["name"] for t in topic_repository.fetch_in_progress_topics_with_weak_areas()]
-        self.assertNotIn("INACT", names)
 
 
 class DiscussSessionRepositoryTests(RepositoryDbTestCase):
