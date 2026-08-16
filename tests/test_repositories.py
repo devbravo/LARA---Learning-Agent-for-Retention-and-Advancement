@@ -801,8 +801,16 @@ class Sm2RepositoryTests(RepositoryDbTestCase):
         self.assertEqual(len(rows_a_after), 1)
 
     def test_fetch_and_update_sm2_state(self) -> None:
-        engineer_id = self._insert_engineer()
+        # Two throwaway engineers but only one throwaway topic inserted first,
+        # so the two AUTOINCREMENT sequences diverge and engineer_id/topic_id
+        # never coincidentally share a value — otherwise a transposed
+        # WHERE clause (engineer_id <-> topic_id swapped) would pass unnoticed.
+        self._insert_engineer(external_id="throwaway1")
+        self._insert_engineer(external_id="throwaway2")
+        self._insert_catalog_topic(name="Throwaway")
+        engineer_id = self._insert_engineer(external_id="real")
         topic_id = self._insert_catalog_topic(name="SM2")
+        self.assertNotEqual(engineer_id, topic_id)
         self._insert_progress(engineer_id, topic_id, easiness_factor=2.3, interval_days=4, repetitions=2)
 
         state = sm2_repository.fetch_sm2_state(engineer_id, topic_id)
@@ -835,7 +843,12 @@ class Sm2RepositoryTests(RepositoryDbTestCase):
         engineer_a = self._insert_engineer(external_id="a")
         engineer_b = self._insert_engineer(external_id="b")
         topic_id = self._insert_catalog_topic(name="Shared")
+        # A second, untouched topic for engineer A pins the topic_id
+        # predicate — if it were dropped from the UPDATE, this row would
+        # get overwritten too, since it belongs to the same engineer_id.
+        other_topic_id = self._insert_catalog_topic(name="Untouched")
         self._insert_progress(engineer_a, topic_id, easiness_factor=2.5)
+        self._insert_progress(engineer_a, other_topic_id, easiness_factor=2.5)
         self._insert_progress(engineer_b, topic_id, easiness_factor=2.5)
 
         sm2_repository.update_sm2_state(
@@ -846,6 +859,12 @@ class Sm2RepositoryTests(RepositoryDbTestCase):
             repetitions=0,
             next_review=date.today().isoformat(),
         )
+
+        state_a = sm2_repository.fetch_sm2_state(engineer_a, topic_id)
+        self.assertEqual(state_a["easiness_factor"], 1.8)
+
+        state_a_other = sm2_repository.fetch_sm2_state(engineer_a, other_topic_id)
+        self.assertEqual(state_a_other["easiness_factor"], 2.5)
 
         state_b = sm2_repository.fetch_sm2_state(engineer_b, topic_id)
         self.assertEqual(state_b["easiness_factor"], 2.5)

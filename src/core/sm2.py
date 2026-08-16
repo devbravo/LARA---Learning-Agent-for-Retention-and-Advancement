@@ -64,6 +64,18 @@ def get_due_topics(engineer_id: int, target_date: date | None = None) -> list[di
 def update_topic_after_session(engineer_id: int, topic_id: int = 0, quality: int = 3) -> None:
     """Recompute and persist SM-2 fields for an engineer's studied topic.
 
+    Unlike the read-path lazy-row helpers in topic_repository (which treat a
+    missing progress row as 'inactive' with SM-2 defaults), this function
+    deliberately raises instead of upserting a default row. A session should
+    never reach this point for a topic the engineer hasn't activated —
+    get_active_unlogged_topics_today only surfaces 'active' topics, and both
+    activation paths (graduate_topic_to_active, activate_topic_from_discuss)
+    already reject a missing progress row before returning success. If this
+    branch fires, it means a session got logged without a valid activation
+    record, i.e. a genuine data-integrity bug — silently fabricating a
+    plausible-looking progress row here would hide that bug rather than
+    surface it.
+
     Args:
         engineer_id: Engineer primary key.
         topic_id: Topic catalog primary key.
