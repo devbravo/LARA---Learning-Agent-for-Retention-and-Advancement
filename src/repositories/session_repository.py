@@ -41,13 +41,21 @@ def get_logged_topic_names_for_today() -> set[str]:
 
     Matches new local-time rows by calendar date and legacy UTC rows by the
     UTC window that corresponds to the current local day.
+
+    Not engineer-scoped: this returns topic names logged by *any* engineer
+    today. ``insert_session``/``upsert_today_session`` don't yet write
+    ``engineer_id`` on session rows, so a correct per-engineer filter isn't
+    possible until that write-path work lands (multi-user data layer
+    Ticket 4). Callers relying on this for engineer-specific "already
+    logged today" checks (e.g. ``topic_repository.get_active_unlogged_topics_today``)
+    inherit this limitation.
     """
     local = local_today()
     utc_start, utc_end = _legacy_utc_range()
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT DISTINCT t.name FROM sessions s
-               JOIN topics t ON t.id = s.topic_id
+               JOIN topic_catalog t ON t.id = s.topic_id
                WHERE s.student_quality IS NOT NULL
                  AND (DATE(s.studied_at) = ?
                       OR (s.studied_at >= ? AND s.studied_at < ?))""",

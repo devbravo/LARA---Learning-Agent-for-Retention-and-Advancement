@@ -1,0 +1,69 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+  id-token: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Action version, input names, and the claude_args --allowedTools "Bash(gh ...)"
+      # syntax below were verified against the live action.yml and docs/security.md
+      # at github.com/anthropics/claude-code-action on 2026-08-14.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --model sonnet
+            --allowedTools "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh api:*),Bash(gh pr comment:*),Read,Grep,Glob"
+          prompt: |
+            You are the primary code reviewer for pull request
+            #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+            The `gh` CLI is already authenticated, scoped to this job's permissions.
+
+            This repo is trialing Claude as the primary automated reviewer
+            (previously GitHub Copilot). Do a full, thorough review — do not
+            limit yourself to uncertain or disputed findings.
+
+            1. Run `gh pr diff ${{ github.event.pull_request.number }}` to see the changes.
+            2. Run `gh pr view ${{ github.event.pull_request.number }} --comments` to see
+               any existing review comments (including from other reviewers/bots like
+               GitHub Copilot) — used for comparison in step 4, not as a gate on whether
+               you review.
+            3. Review the diff for correctness bugs and meaningful simplification/
+               efficiency issues, reading surrounding code with Read/Grep/Glob as needed
+               to verify each finding rather than guessing from the diff alone. Skip
+               purely stylistic/subjective nitpicks — focus on issues that would actually
+               matter to a developer.
+            4. For every finding, assign a confidence:
+               - CONFIRMED: you traced the code and are sure this is a real issue.
+               - PLAUSIBLE: you suspect an issue but couldn't fully verify it.
+               Also check each finding against the existing review comments from step 2
+               and note the relationship when relevant:
+               - CONTRADICTORY: your conclusion disagrees with an existing reviewer's
+                 comment on the same code (either you think their flagged issue isn't
+                 real, or you found a problem with something they approved/missed).
+            5. Post every CONFIRMED or PLAUSIBLE finding as a PR comment — this is a
+               full review, not an escalation-only pass. Each comment must state its
+               confidence label, and when a finding is CONTRADICTORY, name which
+               existing comment it disagrees with and why — a developer reading it
+               should immediately understand how much to trust it and whether reviewers
+               disagree.
+            6. Post findings with
+               `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments`
+               as inline comments on the relevant file/line, or `gh pr comment` for a
+               general comment when a line anchor doesn't apply.
+            7. If the diff has no meaningful findings, post nothing and exit quietly —
+               do not post a "looks good" comment; silence is the expected outcome for
+               a clean PR.
