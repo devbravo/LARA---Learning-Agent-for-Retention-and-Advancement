@@ -32,7 +32,7 @@ def _get_service() -> Any:
     Returns:
         Google API service object for Calendar v3.
     """
-    required = {"GOOGLE_CALENDAR_ID", "GOOGLECREDENTIALS_PATH"}
+    required = {"GOOGLE_CALENDAR_ID", "GOOGLE_CREDENTIALS_PATH"}
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
         raise EnvironmentError(f"Missing required env vars: {', '.join(missing)}")
