@@ -9,7 +9,8 @@ import logging
 
 import numpy as np
 
-from src.knowledge.clients import KnowledgeClients, VOYAGE_MODEL
+from src.knowledge.clients import KnowledgeClients
+from src.settings import VOYAGE_MODEL
 
 logger = logging.getLogger(__name__)
 
