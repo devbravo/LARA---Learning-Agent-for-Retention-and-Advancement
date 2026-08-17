@@ -5,16 +5,14 @@ Reads timezone from config.yaml so nothing is hardcoded.
 
 from datetime import datetime
 from functools import lru_cache
-from src.settings import CONFIG_PATH
+from src.settings import lara_config
 
 import pytz
-import yaml
 
 
 @lru_cache(maxsize=1)
 def _tz() -> pytz.BaseTzInfo:
-    with open(CONFIG_PATH) as f:
-        return pytz.timezone(yaml.safe_load(f)["timezone"])
+    return pytz.timezone(lara_config["timezone"])
 
 
 def local_now() -> str:

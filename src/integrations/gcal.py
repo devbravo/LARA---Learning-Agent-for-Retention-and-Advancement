@@ -16,7 +16,8 @@ from src.settings import (
     CREDENTIALS_PATH, 
     TOKEN_PATH, 
     SCOPES, 
-    CONFIG_PATH
+    CONFIG_PATH,
+    lara_config
 )
 
 from google.auth.transport.requests import Request
@@ -99,15 +100,13 @@ def get_events(day: date) -> list[dict[str, Any]]:
     """
     calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
 
-    # Compute UTC bounds for the target local day. The application config
-    # contains the local timezone (e.g. 'America/Paramaribo'). If config.yaml
+    # Compute UTC bounds for the target locl day. The application config
+    # contains the local timezone (e.g. 'Amearica/Paramaribo'). If config.yaml
     # is missing or malformed, fall back to UTC day bounds.
     try:
         config_path = CONFIG_PATH
         if config_path.exists():
-            with open(config_path) as f:
-                cfg = yaml.safe_load(f)
-            tzname = cfg.get("timezone")
+            tzname = lara_config.get("timezone")
             if tzname:
                 tz = pytz.timezone(tzname)
                 local_start = tz.localize(datetime(day.year, day.month, day.day, 0, 0, 0))
