@@ -38,12 +38,9 @@ def load_config() -> dict:
 
 try:
     lara_config = load_config()
-except FileNotFoundError:
-    print(f"CRITICAL ERROR: Configuration file not found at '{CONFIG_PATH}'. The system cannot start without it.", file=sys.stderr)
-    sys.exit(1)
+except FileNotFoundError as exc:
+    raise RuntimeError(f"Configuration file not found at '{CONFIG_PATH}'. The system cannot start without it.") from exc
 except yaml.YAMLError as exc:
-    print(f"CRITICAL ERROR: Failed to parse the configuration file '{CONFIG_PATH}'. Ensure it is valid YAML.\nDetails: {exc}", file=sys.stderr)
-    sys.exit(1)
+    raise RuntimeError(f"Failed to parse the configuration file '{CONFIG_PATH}'. Ensure it is valid YAML.\nDetails: {exc}") from exc
 except Exception as exc:
-    print(f"CRITICAL ERROR: An unexpected error occurred while loading the configuration: {exc}", file=sys.stderr)
-    sys.exit(1)
+    raise RuntimeError(f"An unexpected error occurred while loading the configuration: {exc}") from exc
