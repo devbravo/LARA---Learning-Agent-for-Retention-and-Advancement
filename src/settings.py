@@ -3,7 +3,7 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 
-# PATHS
+# STATIC PATHS
 _PROJECT_ROOT = Path(__file__).parents[1]
 ENV_FILE = _PROJECT_ROOT / ".env"
 TOPICS_PATH = _PROJECT_ROOT / "topics.yaml"
@@ -11,9 +11,6 @@ CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
 DB_DIR = _PROJECT_ROOT / "db"
 DB_PATH = DB_DIR / "learning.db"
 LOG_DIR = _PROJECT_ROOT / "logs"
-CREDENTIALS_PATH = Path(
-    os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials/gcal_credentials.json")
-)
 TOKEN_PATH = Path("credentials/token.json")
 
 # VOYAGE CONFIGS
@@ -25,6 +22,9 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 # ENV LOADING
 load_dotenv(ENV_FILE, override=True)
+CREDENTIALS_PATH = Path( # Get GOOGLE_CREDENTIALS_PATH after loading the .env file
+    os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials/gcal_credentials.json")
+)
 
 # CONFIG LOADING
 def load_config() -> dict:
