@@ -1,6 +1,7 @@
 import yaml
 from pathlib import Path
 import os
+import sys
 from dotenv import load_dotenv
 
 # STATIC PATHS
@@ -35,4 +36,14 @@ def load_config() -> dict:
     with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
 
-lara_config = load_config()
+try:
+    lara_config = load_config()
+except FileNotFoundError:
+    print(f"CRITICAL ERROR: Configuration file not found at '{CONFIG_PATH}'. The system cannot start without it.", file=sys.stderr)
+    sys.exit(1)
+except yaml.YAMLError as exc:
+    print(f"CRITICAL ERROR: Failed to parse the configuration file '{CONFIG_PATH}'. Ensure it is valid YAML.\nDetails: {exc}", file=sys.stderr)
+    sys.exit(1)
+except Exception as exc:
+    print(f"CRITICAL ERROR: An unexpected error occurred while loading the configuration: {exc}", file=sys.stderr)
+    sys.exit(1)
