@@ -1,6 +1,7 @@
 import yaml
 from pathlib import Path
 import os
+from dotenv import load_dotenv
 
 # PATHS
 _PROJECT_ROOT = Path(__file__).parents[1]
@@ -22,6 +23,10 @@ VOYAGE_RERANK_MODEL = "rerank-2"
 # GOOGLE SCOPES
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
+# ENV LOADING
+load_dotenv(ENV_FILE, override=True)
+
+# CONFIG LOADING
 def load_config() -> dict:
     """Load ``config.yaml`` into a dictionary.
     Returns:

@@ -12,17 +12,10 @@ import sqlite3
 
 import anthropic
 import voyageai
-from dotenv import load_dotenv
 from neo4j import GraphDatabase, Driver
 
 from src.infrastructure.db import get_connection
-
-from src.settings import ENV_FILE
-load_dotenv(ENV_FILE, override=True)
-
-VOYAGE_MODEL = "voyage-4-lite"
-VOYAGE_RERANK_MODEL = "rerank-2"
-
+from src.settings import VOYAGE_MODEL, VOYAGE_RERANK_MODEL # TODO: Add actual usage
 
 class KnowledgeClients:
     """Shared clients for the knowledge-graph feature. Instantiate once,

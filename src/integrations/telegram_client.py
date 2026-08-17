@@ -14,11 +14,11 @@ import os
 import threading
 from typing import Any, Coroutine, TypeVar
 
-from dotenv import load_dotenv
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError, TimedOut
 from telegram.error import BadRequest
 
+from dotenv import load_dotenv
 from src.settings import ENV_FILE
 
 load_dotenv(ENV_FILE, override=True)

@@ -10,12 +10,9 @@ import asyncio
 import logging
 
 import uvicorn
-from dotenv import load_dotenv
 
+from src.settings import LOG_DIR
 from src.api.app import app
-from src.settings import LOG_DIR, ENV_FILE
-
-load_dotenv(ENV_FILE, override=True)
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 

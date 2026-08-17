@@ -12,16 +12,12 @@ from typing import Any
 import yaml
 import pytz
 
-from dotenv import load_dotenv
 from src.settings import (
-    ENV_FILE, 
     CREDENTIALS_PATH, 
     TOKEN_PATH, 
     SCOPES, 
     CONFIG_PATH
 )
-
-load_dotenv(ENV_FILE, override=True)
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials

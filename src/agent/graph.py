@@ -24,10 +24,8 @@ Thread ID: chat_id from state (one thread per user).
 
 from typing import Any, cast
 
-from dotenv import load_dotenv
 
-from src.settings import ENV_FILE, DB_DIR
-load_dotenv(ENV_FILE, override=True)
+from src.settings import DB_DIR
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -279,6 +277,7 @@ if __name__ == "__main__":
     import os
     from datetime import date
     from unittest.mock import patch
+
 
     CHAT_ID = int(os.environ.get("TELEGRAM_CHAT_ID", "0"))
 

@@ -13,20 +13,16 @@ Guard:    never invoke weekday planning during the 15:00–19:00 protected block
 import os
 import logging
 from datetime import datetime
-from typing import Any
 
 import pytz
-import yaml
-from dotenv import load_dotenv
 from langgraph.errors import GraphInterrupt
 
 from src.agent import graph as _graph
 from src.integrations.telegram_client import send_message
-from src.settings import load_config, ENV_FILE
+from src.settings import load_config
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-load_dotenv(ENV_FILE, override=True)
 
 logger = logging.getLogger(__name__)
 

@@ -7,11 +7,8 @@ All 5 tools are decorated with @tool for LangGraph/LangChain compatibility.
 
 from datetime import date
 
-from dotenv import load_dotenv
 from langchain_core.tools import tool
-from src.settings import load_config, ENV_FILE
-
-load_dotenv(ENV_FILE, override=True)
+from src.settings import load_config
 
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
