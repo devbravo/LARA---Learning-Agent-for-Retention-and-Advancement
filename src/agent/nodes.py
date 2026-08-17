@@ -41,7 +41,7 @@ from src.integrations import gcal as _gcal
 from src.integrations import telegram_client as _telegram
 from src.repositories import session_repository, topic_repository
 from src.services import topic_service
-from src.settings import _load_config
+from src.settings import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def daily_planning(state: AgentState) -> AgentState:
 
         today = date.today()
         target_date = today + timedelta(days=1) if is_evening else today
-        config = _load_config()
+        config = load_config()
 
         events = _gcal.get_events(target_date)
         due_topics = _sm2.get_due_topics(target_date=target_date)
@@ -311,7 +311,7 @@ def on_demand(state: AgentState) -> AgentState:
             }
 
         # Find a free window of the requested duration
-        config = _load_config()
+        config = load_config()
         today = date.today()
         events = _gcal.get_events(today)
         _TZ = pytz.timezone(config["timezone"])
@@ -422,7 +422,7 @@ def await_brief_confirmation(state: AgentState) -> AgentState:
 
 def book_events(state: AgentState) -> AgentState:
     today = date.today()
-    config = _load_config()
+    config = load_config()
     tz = pytz.timezone(config["timezone"])
 
     # Book in-progress [Study] events first (only when user confirmed, not on Skip)

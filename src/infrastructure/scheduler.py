@@ -12,7 +12,6 @@ Guard:    never invoke weekday planning during the 15:00–19:00 protected block
 
 import os
 import logging
-from pathlib import Path
 from datetime import datetime
 from typing import Any
 
@@ -23,18 +22,16 @@ from langgraph.errors import GraphInterrupt
 
 from src.agent import graph as _graph
 from src.integrations.telegram_client import send_message
-from src.settings import _load_config
+from src.settings import load_config, ENV_FILE
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-_PROJECT_ROOT = Path(__file__).parents[2]
-
-load_dotenv(_PROJECT_ROOT / ".env", override=True)
+load_dotenv(ENV_FILE, override=True)
 
 logger = logging.getLogger(__name__)
 
 
-_TZ = pytz.timezone(_load_config()["timezone"])
+_TZ = pytz.timezone(load_config()["timezone"])
 logger.info("Current time in Paramaribo: %s", datetime.now(_TZ))
 
 
@@ -43,7 +40,7 @@ def _is_protected_block() -> bool:
     Returns:
         ``True`` when now is inside any configured protected interval.
     """
-    config = _load_config()
+    config = load_config()
     now = datetime.now(_TZ).time()
     for block in config.get("protected_blocks", []):
         start = datetime.strptime(block["start"], "%H:%M").time()
@@ -121,7 +118,7 @@ def build_scheduler() -> AsyncIOScheduler:
     Returns:
         ``AsyncIOScheduler`` with weekday planning, weekend brief, and evening brief jobs.
     """
-    config = _load_config()
+    config = load_config()
     scheduler = AsyncIOScheduler(timezone=_TZ)
 
     weekday = config["schedule"]["weekday_planning"]

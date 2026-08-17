@@ -5,13 +5,13 @@ for concise study-brief generation.
 """
 
 import os
-from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
 from src.prompts import _SYSTEM_PROMPT
+from src.settings import ENV_FILE
 
-load_dotenv(Path(__file__).parents[2] / ".env", override=True)
+load_dotenv(ENV_FILE, override=True)
 
 
 def _get_client() -> anthropic.Anthropic:

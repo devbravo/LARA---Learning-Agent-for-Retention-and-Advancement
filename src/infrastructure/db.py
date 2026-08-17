@@ -11,8 +11,7 @@ from typing import Any
 
 import yaml
 
-DB_PATH = Path(__file__).parents[2] / "db" / "learning.db"
-TOPICS_PATH = Path(__file__).parents[2] / "topics.yaml"
+from src.settings import DB_PATH, TOPICS_PATH
 
 logger = logging.getLogger(__name__)
 

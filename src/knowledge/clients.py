@@ -9,7 +9,6 @@ functions that accept ``clients: KnowledgeClients`` as a parameter.
 
 import os
 import sqlite3
-from pathlib import Path
 
 import anthropic
 import voyageai
@@ -18,7 +17,8 @@ from neo4j import GraphDatabase, Driver
 
 from src.infrastructure.db import get_connection
 
-load_dotenv(Path(__file__).parents[2] / ".env", override=True)
+from src.settings import ENV_FILE
+load_dotenv(ENV_FILE, override=True)
 
 VOYAGE_MODEL = "voyage-4-lite"
 VOYAGE_RERANK_MODEL = "rerank-2"

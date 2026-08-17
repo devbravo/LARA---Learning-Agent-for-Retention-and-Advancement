@@ -22,13 +22,12 @@ Checkpointer: SqliteSaver backed by db/state.db.
 Thread ID: chat_id from state (one thread per user).
 """
 
-import sqlite3
-from pathlib import Path
 from typing import Any, cast
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parents[2] / ".env", override=True)
+from src.settings import ENV_FILE, DB_DIR
+load_dotenv(ENV_FILE, override=True)
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -77,10 +76,6 @@ from src.agent.routes import (
     route_from_study_topic,
     route_from_study_topic_category,
 )
-
-_DB_DIR = Path(__file__).parents[2] / "db"
-_STATE_DB_PATH = str(_DB_DIR / "state.db")
-
 
 def build_graph(checkpointer=None):
     """Construct and compile the LangGraph StateGraph."""
@@ -228,7 +223,7 @@ def build_graph(checkpointer=None):
     builder.add_edge("output", END)
 
     if checkpointer is None:
-        _DB_DIR.mkdir(parents=True, exist_ok=True)
+        DB_DIR.mkdir(parents=True, exist_ok=True)
         # Use an in-memory saver by default for local runs/tests. If you
         # need durable persistence across restarts, pass a persistent
         # checkpointer explicitly when calling build_graph().

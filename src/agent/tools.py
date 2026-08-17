@@ -6,18 +6,17 @@ All 5 tools are decorated with @tool for LangGraph/LangChain compatibility.
 """
 
 from datetime import date
-from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_core.tools import tool
+from src.settings import load_config, ENV_FILE
 
-load_dotenv(Path(__file__).parents[2] / ".env", override=True)
+load_dotenv(ENV_FILE, override=True)
 
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
 from src.integrations import gcal as _gcal
 from src.repositories import session_repository, topic_repository
-from src.settings import _load_config
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +50,7 @@ def find_free_windows(date_str: str) -> list[dict]:
     """
     target = date.fromisoformat(date_str)
     events = _gcal.get_events(target)
-    config = _load_config()
+    config = load_config()
     return _gap_finder.find_free_windows(events, target, config)
 
 

@@ -12,7 +12,6 @@ import atexit
 import asyncio
 import os
 import threading
-from pathlib import Path
 from typing import Any, Coroutine, TypeVar
 
 from dotenv import load_dotenv
@@ -20,7 +19,9 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError, TimedOut
 from telegram.error import BadRequest
 
-load_dotenv(Path(__file__).parents[2] / ".env", override=True)
+from src.settings import ENV_FILE
+
+load_dotenv(ENV_FILE, override=True)
 
 T = TypeVar("T")
 

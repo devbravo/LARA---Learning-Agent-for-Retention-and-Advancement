@@ -5,8 +5,7 @@ Reads timezone from config.yaml so nothing is hardcoded.
 
 from datetime import datetime
 from functools import lru_cache
-from pathlib import Path
-from src.settings import _CONFIG_PATH
+from src.settings import CONFIG_PATH
 
 import pytz
 import yaml
@@ -14,7 +13,7 @@ import yaml
 
 @lru_cache(maxsize=1)
 def _tz() -> pytz.BaseTzInfo:
-    with open(_CONFIG_PATH) as f:
+    with open(CONFIG_PATH) as f:
         return pytz.timezone(yaml.safe_load(f)["timezone"])
 
 
