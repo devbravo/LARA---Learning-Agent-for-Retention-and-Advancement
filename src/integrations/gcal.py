@@ -15,7 +15,6 @@ from src.settings import (
     CREDENTIALS_PATH, 
     TOKEN_PATH, 
     SCOPES, 
-    CONFIG_PATH,
     lara_config
 )
 
