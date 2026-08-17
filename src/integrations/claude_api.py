@@ -52,6 +52,10 @@ def generate_brief(topic: str, duration_min: int, context: str) -> str:
 
 
 if __name__ == "__main__":
+    from src.settings import ENV_FILE
+    from dotenv import load_dotenv
+    load_dotenv(ENV_FILE, override=True)
+
     brief = generate_brief(
         topic="System Design",
         duration_min=45,

@@ -249,5 +249,9 @@ def get_chat_id() -> int:
 
 
 if __name__ == "__main__":
+    from src.settings import ENV_FILE
+    from dotenv import load_dotenv
+    load_dotenv(ENV_FILE, override=True)
+
     send_message("Learning Manager online ✅")
     print("Message sent.")
