@@ -8,7 +8,7 @@ All 5 tools are decorated with @tool for LangGraph/LangChain compatibility.
 from datetime import date
 
 from langchain_core.tools import tool
-from src.settings import load_config
+from src.settings import lara_config
 
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
@@ -47,8 +47,7 @@ def find_free_windows(date_str: str) -> list[dict]:
     """
     target = date.fromisoformat(date_str)
     events = _gcal.get_events(target)
-    config = load_config()
-    return _gap_finder.find_free_windows(events, target, config)
+    return _gap_finder.find_free_windows(events, target, lara_config)
 
 
 @tool

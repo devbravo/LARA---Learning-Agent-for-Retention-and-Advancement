@@ -34,3 +34,5 @@ def load_config() -> dict:
     """
     with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
+
+lara_config = load_config()

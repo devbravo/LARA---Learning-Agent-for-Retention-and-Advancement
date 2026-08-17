@@ -89,7 +89,7 @@ def test_book_events_writes_gcal_for_all_proposed_slots():
         "proposed_slot": None,
     }
     mock_write = MagicMock()
-    with patch("src.agent.nodes._load_config", return_value=_CONFIG), \
+    with patch.dict(_nodes.lara_config, _CONFIG, clear=True), \
          patch.object(_nodes._gcal, "write_event", mock_write), \
          patch.object(_nodes._telegram, "send_message"), \
          patch.object(_nodes._telegram, "remove_buttons"):
@@ -115,7 +115,7 @@ def test_book_events_falls_back_to_single_slot():
         "proposed_slot": {"start": "14:00", "end": "15:00", "duration_min": 60},
     }
     mock_write = MagicMock()
-    with patch("src.agent.nodes._load_config", return_value=_CONFIG), \
+    with patch.dict(_nodes.lara_config, _CONFIG, clear=True), \
          patch.object(_nodes._gcal, "write_event", mock_write), \
          patch.object(_nodes._telegram, "send_message"), \
          patch.object(_nodes._telegram, "remove_buttons"):
@@ -142,7 +142,7 @@ def test_book_events_sends_confirmation_after_booking():
         "proposed_slot": None,
     }
     mock_send = MagicMock()
-    with patch("src.agent.nodes._load_config", return_value=_CONFIG), \
+    with patch.dict(_nodes.lara_config, _CONFIG, clear=True), \
          patch.object(_nodes._gcal, "write_event"), \
          patch.object(_nodes._telegram, "send_message", mock_send), \
          patch.object(_nodes._telegram, "remove_buttons"):
@@ -169,7 +169,7 @@ def test_book_events_does_not_call_remove_buttons():
         "proposed_slot": None,
     }
     mock_remove = MagicMock()
-    with patch("src.agent.nodes._load_config", return_value=_CONFIG), \
+    with patch.dict(_nodes.lara_config, _CONFIG, clear=True), \
          patch.object(_nodes._gcal, "write_event"), \
          patch.object(_nodes._telegram, "send_message"), \
          patch.object(_nodes._telegram, "remove_buttons", mock_remove):
@@ -195,7 +195,7 @@ def test_book_events_continues_when_one_slot_fails():
     }
     mock_write = MagicMock(side_effect=[Exception("GCal unavailable"), None])
     mock_send = MagicMock()
-    with patch("src.agent.nodes._load_config", return_value=_CONFIG), \
+    with patch.dict(_nodes.lara_config, _CONFIG, clear=True), \
          patch.object(_nodes._gcal, "write_event", mock_write), \
          patch.object(_nodes._telegram, "send_message", mock_send), \
          patch.object(_nodes._telegram, "remove_buttons"):

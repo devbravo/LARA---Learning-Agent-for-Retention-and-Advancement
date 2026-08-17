@@ -41,7 +41,7 @@ from src.integrations import gcal as _gcal
 from src.integrations import telegram_client as _telegram
 from src.repositories import session_repository, topic_repository
 from src.services import topic_service
-from src.settings import load_config
+from src.settings import lara_config
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,6 @@ def daily_planning(state: AgentState) -> AgentState:
 
         today = date.today()
         target_date = today + timedelta(days=1) if is_evening else today
-        config = load_config()
 
         events = _gcal.get_events(target_date)
         due_topics = _sm2.get_due_topics(target_date=target_date)
@@ -80,23 +79,23 @@ def daily_planning(state: AgentState) -> AgentState:
         if is_evening:
             in_progress_topics = topic_repository.get_in_progress_topic_names()
             evening_state = build_evening_preview_state(
-                target_date, events, timed_events, due_topics, config,
+                target_date, events, timed_events, due_topics, lara_config,
                 in_progress_topics=in_progress_topics,
             )
             return cast(AgentState, evening_state)
 
         # --- Morning briefing ---
-        _TZ = pytz.timezone(config["timezone"])
+        _TZ = pytz.timezone(lara_config["timezone"])
         after_time = datetime.now(_TZ).time()
 
         in_progress_topics = topic_repository.get_in_progress_topic_names()
 
         study_busy_events = build_missing_study_events(
-            in_progress_topics, timed_events, target_date, config
+            in_progress_topics, timed_events, target_date, lara_config
         )
 
         free_windows = _gap_finder.find_free_windows(
-            events + study_busy_events, target_date, config, after_time
+            events + study_busy_events, target_date, lara_config, after_time
         )
         prebooked = get_prebooked_topics(timed_events, due_topics)
 
@@ -105,7 +104,7 @@ def daily_planning(state: AgentState) -> AgentState:
         append_calendar_lines(lines, timed_events, "📅 Your day: No meetings today")
 
         available_topics = [t for t in due_topics if t["name"] not in prebooked]
-        min_window_minutes = config.get("min_window_minutes", 25)
+        min_window_minutes = lara_config.get("min_window_minutes", 25)
         proposed_topic, proposed_slot, proposed_slots = pack_mock_slots(
             target_date,
             free_windows,
@@ -311,12 +310,11 @@ def on_demand(state: AgentState) -> AgentState:
             }
 
         # Find a free window of the requested duration
-        config = load_config()
         today = date.today()
         events = _gcal.get_events(today)
-        _TZ = pytz.timezone(config["timezone"])
+        _TZ = pytz.timezone(lara_config["timezone"])
         after_time = datetime.now(_TZ).time()
-        free_windows = _gap_finder.find_free_windows(events, today, config, after_time)
+        free_windows = _gap_finder.find_free_windows(events, today, lara_config, after_time)
 
         proposed_slot = None
         for window in free_windows:
@@ -422,8 +420,7 @@ def await_brief_confirmation(state: AgentState) -> AgentState:
 
 def book_events(state: AgentState) -> AgentState:
     today = date.today()
-    config = load_config()
-    tz = pytz.timezone(config["timezone"])
+    tz = pytz.timezone(lara_config["timezone"])
 
     # Book in-progress [Study] events first (only when user confirmed, not on Skip)
     booked_study: list[str] = []
@@ -436,7 +433,7 @@ def book_events(state: AgentState) -> AgentState:
             t for t in in_progress_topics
             if any(is_topic_in_summary(t, ev.get("summary", "")) for ev in timed_events_today)
         }
-        rebook_study_events(in_progress_topics, timed_events_today, today, config)
+        rebook_study_events(in_progress_topics, timed_events_today, today, lara_config)
         booked_study = [t for t in in_progress_topics if t not in already_booked]
     except Exception as e:
         logger.warning("[book_events] Failed to rebook study events: %s", e, exc_info=True)

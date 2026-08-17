@@ -8,6 +8,7 @@ finder inside ``daily_planning``.
 from datetime import date, datetime, time
 from unittest.mock import MagicMock, patch
 
+from src.agent import nodes as _nodes
 from src.agent.nodes import daily_planning
 
 
@@ -33,7 +34,7 @@ def test_daily_planning_moves_mock_slots_after_synthesized_study_blocks():
     ]
 
     mock_send_buttons = MagicMock(return_value=None)
-    with patch("src.agent.nodes._load_config", return_value=config), \
+    with patch.dict(_nodes.lara_config, config, clear=True), \
          patch("src.agent.nodes._gcal.get_events", return_value=[]), \
          patch("src.agent.nodes._sm2.get_due_topics", return_value=due_topics), \
          patch("src.agent.nodes.datetime", _MorningDateTime), \
@@ -61,7 +62,7 @@ def test_daily_planning_with_many_in_progress_topics_does_not_crash():
         "protected_blocks": [],
         "min_window_minutes": 25,
     }
-    with patch("src.agent.nodes._load_config", return_value=config), \
+    with patch.dict(_nodes.lara_config, config, clear=True), \
          patch("src.agent.nodes._gcal.get_events", return_value=[]), \
          patch("src.agent.nodes._sm2.get_due_topics", return_value=[]), \
          patch(

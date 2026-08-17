@@ -23,18 +23,17 @@ def test_get_calendar_events_parses_date_and_calls_gcal():
     assert result == expected
 
 
-def test_find_free_windows_loads_config_and_calls_gap_finder():
+def test_find_free_windows_passes_config_and_calls_gap_finder():
     fake_config = {"focus_windows": [{"start": "08:00", "end": "09:00"}]}
     fake_events = [{"summary": "Standup"}]
     fake_windows = [{"start": "08:00", "end": "09:00", "duration_min": 60}]
 
-    with patch("src.agent.tools._load_config", return_value=fake_config) as mock_cfg, \
+    with patch.dict(tools.lara_config, fake_config, clear=True), \
          patch("src.agent.tools._gcal.get_events", return_value=fake_events) as mock_events, \
          patch("src.agent.tools._gap_finder.find_free_windows", return_value=fake_windows) as mock_windows:
         result = _call_tool(tools.find_free_windows, "2026-04-03")
 
     target = date(2026, 4, 3)
-    mock_cfg.assert_called_once()
     mock_events.assert_called_once_with(target)
     mock_windows.assert_called_once_with(fake_events, target, fake_config)
     assert result == fake_windows

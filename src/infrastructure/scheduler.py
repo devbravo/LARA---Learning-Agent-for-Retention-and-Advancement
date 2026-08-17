@@ -19,7 +19,7 @@ from langgraph.errors import GraphInterrupt
 
 from src.agent import graph as _graph
 from src.integrations.telegram_client import send_message
-from src.settings import load_config
+from src.settings import lara_config
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -27,7 +27,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 logger = logging.getLogger(__name__)
 
 
-_TZ = pytz.timezone(load_config()["timezone"])
+_TZ = pytz.timezone(lara_config["timezone"])
 logger.info("Current time in Paramaribo: %s", datetime.now(_TZ))
 
 
@@ -36,9 +36,8 @@ def _is_protected_block() -> bool:
     Returns:
         ``True`` when now is inside any configured protected interval.
     """
-    config = load_config()
     now = datetime.now(_TZ).time()
-    for block in config.get("protected_blocks", []):
+    for block in lara_config.get("protected_blocks", []):
         start = datetime.strptime(block["start"], "%H:%M").time()
         end = datetime.strptime(block["end"], "%H:%M").time()
         if start <= now < end:
@@ -114,12 +113,11 @@ def build_scheduler() -> AsyncIOScheduler:
     Returns:
         ``AsyncIOScheduler`` with weekday planning, weekend brief, and evening brief jobs.
     """
-    config = load_config()
     scheduler = AsyncIOScheduler(timezone=_TZ)
 
-    weekday = config["schedule"]["weekday_planning"]
-    weekend = config["schedule"]["weekend_brief"]
-    evening = config["schedule"]["evening_brief"]
+    weekday = lara_config["schedule"]["weekday_planning"]
+    weekend = lara_config["schedule"]["weekend_brief"]
+    evening = lara_config["schedule"]["evening_brief"]
 
     # Mon–Fri at 07:00
     scheduler.add_job(
