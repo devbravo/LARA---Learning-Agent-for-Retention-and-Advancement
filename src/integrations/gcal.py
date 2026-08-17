@@ -9,7 +9,6 @@ import json
 import os
 from datetime import date, datetime, timezone
 from typing import Any
-import yaml
 import pytz
 
 from src.settings import (
