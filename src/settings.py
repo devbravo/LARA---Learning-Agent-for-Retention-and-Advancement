@@ -12,7 +12,7 @@ DB_DIR = _PROJECT_ROOT / "db"
 DB_PATH = DB_DIR / "learning.db"
 LOG_DIR = _PROJECT_ROOT / "logs"
 CREDENTIALS_PATH = Path(
-    os.environ.get("GOOGLECREDENTIALS_PATH", "credentials/gcal_credentials.json")
+    os.environ.get("GOOGLE_CREDENTIALS_PATH", "credentials/gcal_credentials.json")
 )
 TOKEN_PATH = Path("credentials/token.json")
 
