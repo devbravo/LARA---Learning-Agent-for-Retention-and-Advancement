@@ -6,25 +6,14 @@ All 5 tools are decorated with @tool for LangGraph/LangChain compatibility.
 """
 
 from datetime import date
-from pathlib import Path
 
-import yaml
-from dotenv import load_dotenv
 from langchain_core.tools import tool
-
-load_dotenv(Path(__file__).parents[2] / ".env", override=True)
+from src.settings import lara_config
 
 from src.core import gap_finder as _gap_finder
 from src.core import sm2 as _sm2
 from src.integrations import gcal as _gcal
 from src.repositories import session_repository, topic_repository
-
-_CONFIG_PATH = Path(__file__).parents[2] / "config.yaml"
-
-
-def _load_config() -> dict:
-    with open(_CONFIG_PATH) as f:
-        return yaml.safe_load(f)
 
 
 # ---------------------------------------------------------------------------
@@ -58,8 +47,7 @@ def find_free_windows(date_str: str) -> list[dict]:
     """
     target = date.fromisoformat(date_str)
     events = _gcal.get_events(target)
-    config = _load_config()
-    return _gap_finder.find_free_windows(events, target, config)
+    return _gap_finder.find_free_windows(events, target, lara_config)
 
 
 @tool

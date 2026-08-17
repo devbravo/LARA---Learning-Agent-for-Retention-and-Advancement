@@ -18,8 +18,10 @@ import numpy as np
 
 from src.infrastructure.db import get_connection
 from src.infrastructure.time import local_now
-from src.knowledge.clients import KnowledgeClients, VOYAGE_MODEL
+from src.knowledge.clients import KnowledgeClients
 from src.knowledge.resolve import resolve_concept
+from src.settings import VOYAGE_MODEL
+
 
 logger = logging.getLogger(__name__)
 

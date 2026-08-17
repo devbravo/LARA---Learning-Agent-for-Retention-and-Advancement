@@ -9,7 +9,6 @@ session graph which uses bare ``str(chat_id)``.
 """
 
 import logging
-from pathlib import Path
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
@@ -22,14 +21,12 @@ from src.knowledge.nodes import (
     write_node,
 )
 from src.knowledge.state import KGState
+from src.settings import DB_DIR
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+DB_DIR.mkdir(parents=True, exist_ok=True)
 
-
-_DB_DIR = Path(__file__).parents[3] / "db"
-_DB_DIR.mkdir(parents=True, exist_ok=True)
-
-_conn = sqlite3.connect(str(_DB_DIR / "state.db"), check_same_thread=False)
+_conn = sqlite3.connect(str(DB_DIR / "state.db"), check_same_thread=False)
 checkpointer = SqliteSaver(_conn)
 
 logger = logging.getLogger(__name__)

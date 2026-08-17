@@ -12,36 +12,22 @@ Guard:    never invoke weekday planning during the 15:00–19:00 protected block
 
 import os
 import logging
-from pathlib import Path
 from datetime import datetime
-from typing import Any
 
 import pytz
-import yaml
-from dotenv import load_dotenv
 from langgraph.errors import GraphInterrupt
 
 from src.agent import graph as _graph
 from src.integrations.telegram_client import send_message
+from src.settings import lara_config
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-_PROJECT_ROOT = Path(__file__).parents[2]
-
-load_dotenv(_PROJECT_ROOT / ".env", override=True)
 
 logger = logging.getLogger(__name__)
 
 
-def _load_config() -> dict[str, Any]:
-    """Load ``config.yaml`` into a dictionary.
-    Returns:
-        Parsed configuration content.
-    """
-    with open(_PROJECT_ROOT / "config.yaml") as f:
-        return yaml.safe_load(f)
-
-_TZ = pytz.timezone(_load_config()["timezone"])
+_TZ = pytz.timezone(lara_config["timezone"])
 logger.info("Current time in Paramaribo: %s", datetime.now(_TZ))
 
 
@@ -50,9 +36,8 @@ def _is_protected_block() -> bool:
     Returns:
         ``True`` when now is inside any configured protected interval.
     """
-    config = _load_config()
     now = datetime.now(_TZ).time()
-    for block in config.get("protected_blocks", []):
+    for block in lara_config.get("protected_blocks", []):
         start = datetime.strptime(block["start"], "%H:%M").time()
         end = datetime.strptime(block["end"], "%H:%M").time()
         if start <= now < end:
@@ -128,12 +113,11 @@ def build_scheduler() -> AsyncIOScheduler:
     Returns:
         ``AsyncIOScheduler`` with weekday planning, weekend brief, and evening brief jobs.
     """
-    config = _load_config()
     scheduler = AsyncIOScheduler(timezone=_TZ)
 
-    weekday = config["schedule"]["weekday_planning"]
-    weekend = config["schedule"]["weekend_brief"]
-    evening = config["schedule"]["evening_brief"]
+    weekday = lara_config["schedule"]["weekday_planning"]
+    weekend = lara_config["schedule"]["weekend_brief"]
+    evening = lara_config["schedule"]["evening_brief"]
 
     # Mon–Fri at 07:00
     scheduler.add_job(

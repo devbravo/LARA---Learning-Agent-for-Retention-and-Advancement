@@ -10,16 +10,11 @@ import asyncio
 import logging
 
 import uvicorn
-from pathlib import Path
-from dotenv import load_dotenv
 
+from src.settings import LOG_DIR
 from src.api.app import app
 
-
-load_dotenv(Path(__file__).parents[1] / ".env", override=True)
-
-_LOG_DIR = Path(__file__).parents[1] / "logs"
-_LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,

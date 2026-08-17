@@ -23,7 +23,8 @@ from urllib.parse import urlparse
 
 import requests
 
-from src.knowledge.clients import KnowledgeClients, VOYAGE_RERANK_MODEL
+from src.knowledge.clients import KnowledgeClients
+from src.settings import VOYAGE_RERANK_MODEL
 
 logger = logging.getLogger(__name__)
 

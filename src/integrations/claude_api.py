@@ -5,13 +5,8 @@ for concise study-brief generation.
 """
 
 import os
-from pathlib import Path
-
 import anthropic
-from dotenv import load_dotenv
 from src.prompts import _SYSTEM_PROMPT
-
-load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -57,6 +52,10 @@ def generate_brief(topic: str, duration_min: int, context: str) -> str:
 
 
 if __name__ == "__main__":
+    from src.settings import ENV_FILE
+    from dotenv import load_dotenv
+    load_dotenv(ENV_FILE, override=True)
+
     brief = generate_brief(
         topic="System Design",
         duration_min=45,

@@ -12,15 +12,11 @@ import atexit
 import asyncio
 import os
 import threading
-from pathlib import Path
 from typing import Any, Coroutine, TypeVar
 
-from dotenv import load_dotenv
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError, TimedOut
 from telegram.error import BadRequest
-
-load_dotenv(Path(__file__).parents[2] / ".env", override=True)
 
 T = TypeVar("T")
 
@@ -253,5 +249,9 @@ def get_chat_id() -> int:
 
 
 if __name__ == "__main__":
+    from src.settings import ENV_FILE
+    from dotenv import load_dotenv
+    load_dotenv(ENV_FILE, override=True)
+
     send_message("Learning Manager online ✅")
     print("Message sent.")
