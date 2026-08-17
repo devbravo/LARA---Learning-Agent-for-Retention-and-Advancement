@@ -18,11 +18,6 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError, TimedOut
 from telegram.error import BadRequest
 
-from dotenv import load_dotenv
-from src.settings import ENV_FILE
-
-load_dotenv(ENV_FILE, override=True)
-
 T = TypeVar("T")
 
 # ---------------------------------------------------------------------------
