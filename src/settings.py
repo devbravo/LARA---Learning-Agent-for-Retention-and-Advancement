@@ -1,7 +1,6 @@
 import yaml
 from pathlib import Path
 import os
-import sys
 from dotenv import load_dotenv
 
 # STATIC PATHS
