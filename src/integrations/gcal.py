@@ -100,26 +100,16 @@ def get_events(day: date) -> list[dict[str, Any]]:
     calendar_id = os.environ["GOOGLE_CALENDAR_ID"]
 
     # Compute UTC bounds for the target locl day. The application config
-    # contains the local timezone (e.g. 'Amearica/Paramaribo'). If config.yaml
-    # is missing or malformed, fall back to UTC day bounds.
-    try:
-        config_path = CONFIG_PATH
-        if config_path.exists():
-            tzname = lara_config.get("timezone")
-            if tzname:
-                tz = pytz.timezone(tzname)
-                local_start = tz.localize(datetime(day.year, day.month, day.day, 0, 0, 0))
-                local_end = tz.localize(datetime(day.year, day.month, day.day, 23, 59, 59))
-                time_min = local_start.astimezone(pytz.UTC).isoformat()
-                time_max = local_end.astimezone(pytz.UTC).isoformat()
-            else:
-                time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
-                time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
-        else:
-            time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
-            time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
-    except Exception:
-        # Any failure reading config or resolving timezone should default to UTC
+    # contains the local timezone (e.g. 'Amearica/Paramaribo'). If timezone
+    # not found in config.yaml, fall back to UTC day bounds.
+    tzname = lara_config.get("timezone")
+    if tzname:
+        tz = pytz.timezone(tzname)
+        local_start = tz.localize(datetime(day.year, day.month, day.day, 0, 0, 0))
+        local_end = tz.localize(datetime(day.year, day.month, day.day, 23, 59, 59))
+        time_min = local_start.astimezone(pytz.UTC).isoformat()
+        time_max = local_end.astimezone(pytz.UTC).isoformat()
+    else:
         time_min = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc).isoformat()
         time_max = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc).isoformat()
 
