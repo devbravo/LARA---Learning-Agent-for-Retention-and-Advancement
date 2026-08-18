@@ -363,22 +363,13 @@ def get_active_unlogged_topics_today(engineer_id: int) -> list[dict]:
 
     Ordered by tier ASC, easiness_factor ASC.
 
-    The "not yet logged" check itself is NOT engineer-scoped — it delegates
-    to ``session_repository.get_logged_topic_names_for_today()``, which
-    returns names logged by any engineer (see that function's docstring).
-    A topic could be incorrectly excluded here if a different engineer
-    logged a same-named topic today. Fixing this requires
-    ``insert_session``/``upsert_today_session`` to write ``engineer_id``
-    (multi-user data layer Ticket 4); the ``engineer_id`` param on *this*
-    function only scopes the active-topics half of the query.
-
     Args:
         engineer_id: Engineer primary key.
 
     Returns:
         List of dicts with keys ``id`` and ``name``.
     """
-    logged_names = session_repository.get_logged_topic_names_for_today()
+    logged_names = session_repository.get_logged_topic_names_for_today(engineer_id)
     with get_connection() as conn:
         rows = conn.execute(
             """SELECT tc.id, tc.name

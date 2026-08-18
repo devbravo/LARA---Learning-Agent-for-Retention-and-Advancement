@@ -557,22 +557,38 @@ class TopicRepositoryTests(RepositoryDbTestCase):
             topic_repository.session_repository,
             "get_logged_topic_names_for_today",
             return_value={"Logged"},
-        ):
+        ) as mock_get_logged:
             result = topic_repository.get_active_unlogged_topics_today(engineer_id)
 
+        mock_get_logged.assert_called_once_with(engineer_id)
         names = [t["name"] for t in result]
         self.assertEqual(names, ["Unlogged"])
+
+    def test_get_active_unlogged_topics_today_is_engineer_scoped_end_to_end(self) -> None:
+        """Without mocking: a topic another engineer logged today must not exclude this engineer's."""
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        topic_id = self._insert_catalog_topic(name="Shared")
+        self._insert_progress(engineer_a, topic_id, status="active")
+        self._insert_progress(engineer_b, topic_id, status="active")
+        session_repository.insert_session(engineer_b, topic_id, 30, 5, None)
+
+        names_a = [t["name"] for t in topic_repository.get_active_unlogged_topics_today(engineer_a)]
+        names_b = [t["name"] for t in topic_repository.get_active_unlogged_topics_today(engineer_b)]
+        self.assertEqual(names_a, ["Shared"])
+        self.assertEqual(names_b, [])
 
 
 class SessionRepositoryTests(RepositoryDbTestCase):
     def test_insert_and_read_session_helpers(self) -> None:
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_catalog_topic(name="System Design")
 
-        session_repository.insert_session(topic_id, 45, 3, "latency")
-        logged = session_repository.get_logged_topic_names_for_today()
+        session_repository.insert_session(engineer_id, topic_id, 45, 3, "latency")
+        logged = session_repository.get_logged_topic_names_for_today(engineer_id)
         self.assertEqual(logged, {"System Design"})
 
-        session_id = session_repository.get_today_session_id(topic_id)
+        session_id = session_repository.get_today_session_id(engineer_id, topic_id)
         self.assertIsNotNone(session_id)
 
         session_repository.update_session_weak_areas(session_id, "caching")
@@ -588,11 +604,40 @@ class SessionRepositoryTests(RepositoryDbTestCase):
             conn.close()
         self.assertEqual(row["weak_areas"], "caching")
 
+    def test_insert_session_writes_engineer_id(self) -> None:
+        engineer_id = self._insert_engineer()
+        topic_id = self._insert_catalog_topic(name="System Design")
+
+        session_repository.insert_session(engineer_id, topic_id, 45, 3, "latency")
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT engineer_id FROM sessions WHERE topic_id = ?", (topic_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["engineer_id"], engineer_id)
+
+    def test_get_logged_topic_names_for_today_only_returns_target_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        topic_id = self._insert_catalog_topic(name="Shared Topic")
+
+        session_repository.insert_session(engineer_b, topic_id, 30, 3, None)
+
+        self.assertEqual(session_repository.get_logged_topic_names_for_today(engineer_a), set())
+        self.assertEqual(
+            session_repository.get_logged_topic_names_for_today(engineer_b), {"Shared Topic"}
+        )
+
     def test_upsert_today_session_updates_existing_row(self) -> None:
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_topic(name="Agents")
 
-        session_repository.upsert_today_session(topic_id, 30, 2)
-        session_repository.upsert_today_session(topic_id, 60, 5)
+        session_repository.upsert_today_session(engineer_id, topic_id, 30, 2)
+        session_repository.upsert_today_session(engineer_id, topic_id, 60, 5)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -608,17 +653,39 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         self.assertEqual(rows[0]["duration_min"], 60)
         self.assertEqual(rows[0]["student_quality"], 5)
 
+    def test_upsert_today_session_creates_separate_rows_per_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        topic_id = self._insert_topic(name="Shared Agents")
+
+        session_repository.upsert_today_session(engineer_a, topic_id, 30, 2)
+        session_repository.upsert_today_session(engineer_b, topic_id, 45, 5)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT engineer_id, duration_min, student_quality FROM sessions WHERE topic_id = ? ORDER BY engineer_id",
+                (topic_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["duration_min"], 30)
+        self.assertEqual(rows[1]["duration_min"], 45)
+
     # ------------------------------------------------------------------
     # Legacy UTC row compat — day-boundary tests
     # ------------------------------------------------------------------
 
-    def _insert_session_with_studied_at(self, topic_id: int, studied_at: str) -> int:
+    def _insert_session_with_studied_at(self, engineer_id: int, topic_id: int, studied_at: str) -> int:
         """Insert a session row with an explicit studied_at value (bypasses repo)."""
         conn = sqlite3.connect(self.db_path)
         try:
             cursor = conn.execute(
-                "INSERT INTO sessions (topic_id, duration_min, student_quality, studied_at) VALUES (?, ?, ?, ?)",
-                (topic_id, 30, 3, studied_at),
+                "INSERT INTO sessions (engineer_id, topic_id, duration_min, student_quality, studied_at) VALUES (?, ?, ?, ?, ?)",
+                (engineer_id, topic_id, 30, 3, studied_at),
             )
             conn.commit()
             return cursor.lastrowid
@@ -627,6 +694,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
 
     def test_legacy_utc_row_is_found_by_today_helpers(self) -> None:
         """A legacy row stored as UTC timestamp (01:00 UTC = today local for UTC+X) is returned."""
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_catalog_topic(name="Legacy UTC Topic")
 
         # Compute a UTC timestamp that falls inside today's local window.
@@ -639,12 +707,12 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         utc_ts = (today_local_midnight + timedelta(hours=1)).astimezone(timezone.utc)
         studied_at_utc = utc_ts.strftime("%Y-%m-%d %H:%M:%S")
 
-        self._insert_session_with_studied_at(topic_id, studied_at_utc)
+        self._insert_session_with_studied_at(engineer_id, topic_id, studied_at_utc)
 
-        logged = session_repository.get_logged_topic_names_for_today()
+        logged = session_repository.get_logged_topic_names_for_today(engineer_id)
         self.assertIn("Legacy UTC Topic", logged)
 
-        session_id = session_repository.get_today_session_id(topic_id)
+        session_id = session_repository.get_today_session_id(engineer_id, topic_id)
         self.assertIsNotNone(session_id)
 
     def test_legacy_utc_row_from_yesterday_is_not_found(self) -> None:
@@ -654,6 +722,7 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         ensuring the timestamp is unambiguously outside today's local window
         regardless of the current UTC/local clock relationship.
         """
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_catalog_topic(name="Yesterday UTC Topic")
 
         tz = _tz()
@@ -662,16 +731,17 @@ class SessionRepositoryTests(RepositoryDbTestCase):
         ).replace(hour=12, minute=0, second=0, microsecond=0)
         studied_at_utc = yesterday_local_noon.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-        self._insert_session_with_studied_at(topic_id, studied_at_utc)
+        self._insert_session_with_studied_at(engineer_id, topic_id, studied_at_utc)
 
-        logged = session_repository.get_logged_topic_names_for_today()
+        logged = session_repository.get_logged_topic_names_for_today(engineer_id)
         self.assertNotIn("Yesterday UTC Topic", logged)
 
-        session_id = session_repository.get_today_session_id(topic_id)
+        session_id = session_repository.get_today_session_id(engineer_id, topic_id)
         self.assertIsNone(session_id)
 
     def test_upsert_does_not_duplicate_legacy_utc_row(self) -> None:
         """upsert_today_session must UPDATE a legacy UTC row, not INSERT a second one."""
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_topic(name="No Duplicate")
 
         # Insert a legacy UTC row falling inside today local
@@ -680,10 +750,10 @@ class SessionRepositoryTests(RepositoryDbTestCase):
             hour=0, minute=0, second=0, microsecond=0
         )
         utc_ts = (today_local_midnight + timedelta(hours=1)).astimezone(timezone.utc)
-        self._insert_session_with_studied_at(topic_id, utc_ts.strftime("%Y-%m-%d %H:%M:%S"))
+        self._insert_session_with_studied_at(engineer_id, topic_id, utc_ts.strftime("%Y-%m-%d %H:%M:%S"))
 
         # Now upsert — should update, not insert
-        session_repository.upsert_today_session(topic_id, 60, 5)
+        session_repository.upsert_today_session(engineer_id, topic_id, 60, 5)
 
         conn = sqlite3.connect(self.db_path)
         try:
@@ -703,28 +773,48 @@ class SessionRepositoryTests(RepositoryDbTestCase):
     # ------------------------------------------------------------------
 
     def test_get_today_teacher_quality_returns_none_when_no_session(self) -> None:
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_topic(name="No Session")
-        result = session_repository.get_today_teacher_quality(topic_id)
+        result = session_repository.get_today_teacher_quality(engineer_id, topic_id)
         self.assertIsNone(result)
 
     def test_get_today_teacher_quality_returns_none_when_only_student_logged(self) -> None:
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_topic(name="Student Only")
-        session_repository.upsert_today_session(topic_id, 30, 3)
-        result = session_repository.get_today_teacher_quality(topic_id)
+        session_repository.upsert_today_session(engineer_id, topic_id, 30, 3)
+        result = session_repository.get_today_teacher_quality(engineer_id, topic_id)
         self.assertIsNone(result)
 
     def test_get_today_teacher_quality_returns_value_after_teacher_logs(self) -> None:
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_topic(name="Teacher Logged")
-        session_repository.log_teacher_session(topic_id, 2, {}, "claude", "mock")
-        result = session_repository.get_today_teacher_quality(topic_id)
+        session_repository.log_teacher_session(engineer_id, topic_id, 2, {}, "claude", "mock")
+        result = session_repository.get_today_teacher_quality(engineer_id, topic_id)
         self.assertEqual(result, 2)
 
     def test_get_today_teacher_quality_returns_value_when_both_logged(self) -> None:
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_topic(name="Both Logged")
-        session_repository.upsert_today_session(topic_id, 30, 5)
-        session_repository.log_teacher_session(topic_id, 3, {}, "claude", "mock")
-        result = session_repository.get_today_teacher_quality(topic_id)
+        session_repository.upsert_today_session(engineer_id, topic_id, 30, 5)
+        session_repository.log_teacher_session(engineer_id, topic_id, 3, {}, "claude", "mock")
+        result = session_repository.get_today_teacher_quality(engineer_id, topic_id)
         self.assertEqual(result, 3)
+
+    def test_log_teacher_session_only_affects_target_engineers_row(self) -> None:
+        """Two engineers logging teacher assessments for the same topic today must not collide."""
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        topic_id = self._insert_topic(name="Shared Teacher Logged")
+
+        session_repository.log_teacher_session(engineer_a, topic_id, 2, {}, "claude", "mock")
+        session_repository.log_teacher_session(engineer_b, topic_id, 5, {}, "claude", "mock")
+
+        self.assertEqual(
+            session_repository.get_today_teacher_quality(engineer_a, topic_id), 2
+        )
+        self.assertEqual(
+            session_repository.get_today_teacher_quality(engineer_b, topic_id), 5
+        )
 
     # ------------------------------------------------------------------
     # calibration_gap written by both paths
@@ -732,9 +822,10 @@ class SessionRepositoryTests(RepositoryDbTestCase):
 
     def test_calibration_gap_set_when_student_logs_after_teacher(self) -> None:
         """upsert_today_session computes calibration_gap when teacher row exists."""
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_topic(name="Teacher First")
-        session_repository.log_teacher_session(topic_id, 3, {}, "claude", "mock")
-        session_repository.upsert_today_session(topic_id, 30, 5)
+        session_repository.log_teacher_session(engineer_id, topic_id, 3, {}, "claude", "mock")
+        session_repository.upsert_today_session(engineer_id, topic_id, 30, 5)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -748,9 +839,10 @@ class SessionRepositoryTests(RepositoryDbTestCase):
 
     def test_calibration_gap_set_when_teacher_logs_after_student(self) -> None:
         """log_teacher_session computes calibration_gap when student row exists."""
+        engineer_id = self._insert_engineer()
         topic_id = self._insert_topic(name="Student First")
-        session_repository.upsert_today_session(topic_id, 30, 2)
-        session_repository.log_teacher_session(topic_id, 5, {}, "claude", "mock")
+        session_repository.upsert_today_session(engineer_id, topic_id, 30, 2)
+        session_repository.log_teacher_session(engineer_id, topic_id, 5, {}, "claude", "mock")
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -1094,10 +1186,10 @@ class DiscussingTopicRepositoryTests(RepositoryDbTestCase):
 class DiscussSessionRepositoryTests(RepositoryDbTestCase):
     """Tests for discuss-mode session repository functions."""
 
-    def _insert_session_raw(self, topic_id: int, **kwargs) -> int:
+    def _insert_session_raw(self, engineer_id: int, topic_id: int, **kwargs) -> int:
         """Bypass the repository and insert a session row directly."""
-        fields = {"topic_id": topic_id, "mode": None, "teacher_quality": None,
-                  "teacher_weak_areas": None, "weak_areas": None,
+        fields = {"engineer_id": engineer_id, "topic_id": topic_id, "mode": None,
+                  "teacher_quality": None, "teacher_weak_areas": None, "weak_areas": None,
                   "student_quality": None, "quality_score": None,
                   "studied_at": "2025-01-01 10:00:00"}
         fields.update(kwargs)
@@ -1105,9 +1197,9 @@ class DiscussSessionRepositoryTests(RepositoryDbTestCase):
         try:
             cursor = conn.execute(
                 """INSERT INTO sessions
-                       (topic_id, mode, teacher_quality, teacher_weak_areas,
+                       (engineer_id, topic_id, mode, teacher_quality, teacher_weak_areas,
                         weak_areas, student_quality, quality_score, studied_at)
-                   VALUES (:topic_id, :mode, :teacher_quality, :teacher_weak_areas,
+                   VALUES (:engineer_id, :topic_id, :mode, :teacher_quality, :teacher_weak_areas,
                            :weak_areas, :student_quality, :quality_score, :studied_at)""",
                 fields,
             )
@@ -1121,8 +1213,9 @@ class DiscussSessionRepositoryTests(RepositoryDbTestCase):
     # ------------------------------------------------------------------
 
     def test_insert_discuss_session_stores_all_fields(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        session_repository.insert_discuss_session(tid, 3, '{"gap": "weak"}')
+        session_repository.insert_discuss_session(engineer_id, tid, 3, '{"gap": "weak"}')
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -1132,14 +1225,16 @@ class DiscussSessionRepositoryTests(RepositoryDbTestCase):
             conn.close()
 
         self.assertIsNotNone(row)
+        self.assertEqual(row["engineer_id"], engineer_id)
         self.assertEqual(row["mode"], "discuss")
         self.assertEqual(row["teacher_quality"], 3)
         self.assertEqual(row["teacher_weak_areas"], '{"gap": "weak"}')
         self.assertIsNotNone(row["studied_at"])
 
     def test_insert_discuss_session_does_not_set_student_quality(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        session_repository.insert_discuss_session(tid, 5, "{}")
+        session_repository.insert_discuss_session(engineer_id, tid, 5, "{}")
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -1154,196 +1249,259 @@ class DiscussSessionRepositoryTests(RepositoryDbTestCase):
     # ------------------------------------------------------------------
 
     def test_get_discuss_session_count_returns_zero_when_no_sessions(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self.assertEqual(session_repository.get_discuss_session_count(tid), 0)
+        self.assertEqual(session_repository.get_discuss_session_count(engineer_id, tid), 0)
 
     def test_get_discuss_session_count_returns_zero_for_nonexistent_topic(self) -> None:
-        self.assertEqual(session_repository.get_discuss_session_count(99999), 0)
+        engineer_id = self._insert_engineer()
+        self.assertEqual(session_repository.get_discuss_session_count(engineer_id, 99999), 0)
 
     def test_get_discuss_session_count_counts_only_discuss_mode(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="discuss")
-        self._insert_session_raw(tid, mode="discuss")
-        self._insert_session_raw(tid, mode="mock")
-        self._insert_session_raw(tid, mode=None)
+        self._insert_session_raw(engineer_id, tid, mode="discuss")
+        self._insert_session_raw(engineer_id, tid, mode="discuss")
+        self._insert_session_raw(engineer_id, tid, mode="mock")
+        self._insert_session_raw(engineer_id, tid, mode=None)
 
-        self.assertEqual(session_repository.get_discuss_session_count(tid), 2)
+        self.assertEqual(session_repository.get_discuss_session_count(engineer_id, tid), 2)
 
     def test_get_discuss_session_count_correct_across_topics(self) -> None:
+        engineer_id = self._insert_engineer()
         t1 = self._insert_topic(name="T1")
         t2 = self._insert_topic(name="T2")
-        self._insert_session_raw(t1, mode="discuss")
-        self._insert_session_raw(t2, mode="discuss")
-        self._insert_session_raw(t2, mode="discuss")
+        self._insert_session_raw(engineer_id, t1, mode="discuss")
+        self._insert_session_raw(engineer_id, t2, mode="discuss")
+        self._insert_session_raw(engineer_id, t2, mode="discuss")
 
-        self.assertEqual(session_repository.get_discuss_session_count(t1), 1)
-        self.assertEqual(session_repository.get_discuss_session_count(t2), 2)
+        self.assertEqual(session_repository.get_discuss_session_count(engineer_id, t1), 1)
+        self.assertEqual(session_repository.get_discuss_session_count(engineer_id, t2), 2)
+
+    def test_get_discuss_session_count_only_returns_target_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        tid = self._insert_topic(name="Shared")
+        self._insert_session_raw(engineer_a, tid, mode="discuss")
+        self._insert_session_raw(engineer_b, tid, mode="discuss")
+        self._insert_session_raw(engineer_b, tid, mode="discuss")
+
+        self.assertEqual(session_repository.get_discuss_session_count(engineer_a, tid), 1)
+        self.assertEqual(session_repository.get_discuss_session_count(engineer_b, tid), 2)
 
     # ------------------------------------------------------------------
     # get_discuss_sessions
     # ------------------------------------------------------------------
 
     def test_get_discuss_sessions_returns_empty_when_none(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self.assertEqual(session_repository.get_discuss_sessions(tid), [])
+        self.assertEqual(session_repository.get_discuss_sessions(engineer_id, tid), [])
 
     def test_get_discuss_sessions_excludes_mock_and_null_mode(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="mock", teacher_quality=5)
-        self._insert_session_raw(tid, mode=None, teacher_quality=3)
+        self._insert_session_raw(engineer_id, tid, mode="mock", teacher_quality=5)
+        self._insert_session_raw(engineer_id, tid, mode=None, teacher_quality=3)
 
-        self.assertEqual(session_repository.get_discuss_sessions(tid), [])
+        self.assertEqual(session_repository.get_discuss_sessions(engineer_id, tid), [])
 
     def test_get_discuss_sessions_returns_correct_fields(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="discuss", teacher_quality=3,
+        self._insert_session_raw(engineer_id, tid, mode="discuss", teacher_quality=3,
                                   teacher_weak_areas='{"x": "y"}', studied_at="2025-06-01 10:00:00")
 
-        rows = session_repository.get_discuss_sessions(tid)
+        rows = session_repository.get_discuss_sessions(engineer_id, tid)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["teacher_quality"], 3)
         self.assertEqual(rows[0]["teacher_weak_areas"], '{"x": "y"}')
         self.assertEqual(rows[0]["studied_at"], "2025-06-01 10:00:00")
 
     def test_get_discuss_sessions_ordered_most_recent_first(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="discuss", teacher_quality=2, studied_at="2025-01-01 10:00:00")
-        self._insert_session_raw(tid, mode="discuss", teacher_quality=5, studied_at="2025-06-01 10:00:00")
+        self._insert_session_raw(engineer_id, tid, mode="discuss", teacher_quality=2, studied_at="2025-01-01 10:00:00")
+        self._insert_session_raw(engineer_id, tid, mode="discuss", teacher_quality=5, studied_at="2025-06-01 10:00:00")
 
-        rows = session_repository.get_discuss_sessions(tid)
+        rows = session_repository.get_discuss_sessions(engineer_id, tid)
         self.assertEqual(rows[0]["teacher_quality"], 5)
         self.assertEqual(rows[1]["teacher_quality"], 2)
 
     def test_get_discuss_sessions_respects_limit(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
         for i in range(7):
-            self._insert_session_raw(tid, mode="discuss",
+            self._insert_session_raw(engineer_id, tid, mode="discuss",
                                       studied_at=f"2025-0{i % 9 + 1}-01 10:00:00")
 
-        self.assertEqual(len(session_repository.get_discuss_sessions(tid, limit=3)), 3)
+        self.assertEqual(len(session_repository.get_discuss_sessions(engineer_id, tid, limit=3)), 3)
 
     def test_get_discuss_sessions_default_limit_is_five(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
         for i in range(7):
-            self._insert_session_raw(tid, mode="discuss",
+            self._insert_session_raw(engineer_id, tid, mode="discuss",
                                       studied_at=f"2025-0{i % 9 + 1}-01 10:00:00")
 
-        self.assertEqual(len(session_repository.get_discuss_sessions(tid)), 5)
+        self.assertEqual(len(session_repository.get_discuss_sessions(engineer_id, tid)), 5)
+
+    def test_get_discuss_sessions_only_returns_target_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        tid = self._insert_topic(name="Shared")
+        self._insert_session_raw(engineer_b, tid, mode="discuss", teacher_quality=5)
+
+        self.assertEqual(session_repository.get_discuss_sessions(engineer_a, tid), [])
 
     # ------------------------------------------------------------------
     # get_mock_sessions
     # ------------------------------------------------------------------
 
     def test_get_mock_sessions_returns_empty_when_none(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self.assertEqual(session_repository.get_mock_sessions(tid), [])
+        self.assertEqual(session_repository.get_mock_sessions(engineer_id, tid), [])
 
     def test_get_mock_sessions_excludes_discuss_mode(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="discuss", teacher_quality=5)
-        self.assertEqual(session_repository.get_mock_sessions(tid), [])
+        self._insert_session_raw(engineer_id, tid, mode="discuss", teacher_quality=5)
+        self.assertEqual(session_repository.get_mock_sessions(engineer_id, tid), [])
 
     def test_get_mock_sessions_includes_null_mode_legacy_rows(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode=None, student_quality=3,
+        self._insert_session_raw(engineer_id, tid, mode=None, student_quality=3,
                                   weak_areas="timing, confidence")
-        rows = session_repository.get_mock_sessions(tid)
+        rows = session_repository.get_mock_sessions(engineer_id, tid)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["weak_areas"], "timing, confidence")
 
     def test_get_mock_sessions_legacy_weak_areas_not_lost_when_no_teacher_weak_areas(self) -> None:
         """Legacy weak_areas column must surface when teacher_weak_areas is NULL."""
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T2")
-        self._insert_session_raw(tid, mode=None, student_quality=3,
+        self._insert_session_raw(engineer_id, tid, mode=None, student_quality=3,
                                   weak_areas="legacy gap", teacher_weak_areas=None)
-        rows = session_repository.get_mock_sessions(tid)
+        rows = session_repository.get_mock_sessions(engineer_id, tid)
         self.assertEqual(rows[0]["weak_areas"], "legacy gap")
 
     def test_get_mock_sessions_teacher_weak_areas_takes_priority_over_legacy(self) -> None:
         """teacher_weak_areas wins when both columns are populated."""
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T3")
-        self._insert_session_raw(tid, mode="mock", student_quality=3,
+        self._insert_session_raw(engineer_id, tid, mode="mock", student_quality=3,
                                   weak_areas="old", teacher_weak_areas='{"new": "data"}')
-        rows = session_repository.get_mock_sessions(tid)
+        rows = session_repository.get_mock_sessions(engineer_id, tid)
         self.assertEqual(rows[0]["weak_areas"], '{"new": "data"}')
 
     def test_get_mock_sessions_coalesces_teacher_quality_first(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="mock", teacher_quality=5,
+        self._insert_session_raw(engineer_id, tid, mode="mock", teacher_quality=5,
                                   student_quality=2, quality_score=3)
-        rows = session_repository.get_mock_sessions(tid)
+        rows = session_repository.get_mock_sessions(engineer_id, tid)
         self.assertEqual(rows[0]["quality"], 5)
 
     def test_get_mock_sessions_coalesces_student_quality_when_no_teacher(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="mock", teacher_quality=None,
+        self._insert_session_raw(engineer_id, tid, mode="mock", teacher_quality=None,
                                   student_quality=2, quality_score=3)
-        rows = session_repository.get_mock_sessions(tid)
+        rows = session_repository.get_mock_sessions(engineer_id, tid)
         self.assertEqual(rows[0]["quality"], 2)
 
     def test_get_mock_sessions_coalesces_quality_score_as_last_resort(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="mock", teacher_quality=None,
+        self._insert_session_raw(engineer_id, tid, mode="mock", teacher_quality=None,
                                   student_quality=None, quality_score=3)
-        rows = session_repository.get_mock_sessions(tid)
+        rows = session_repository.get_mock_sessions(engineer_id, tid)
         self.assertEqual(rows[0]["quality"], 3)
 
     def test_get_mock_sessions_quality_is_none_when_all_null(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="mock", teacher_quality=None,
+        self._insert_session_raw(engineer_id, tid, mode="mock", teacher_quality=None,
                                   student_quality=None, quality_score=None)
-        rows = session_repository.get_mock_sessions(tid)
+        rows = session_repository.get_mock_sessions(engineer_id, tid)
         self.assertIsNone(rows[0]["quality"])
 
     def test_get_mock_sessions_ordered_most_recent_first(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="mock", teacher_quality=2, studied_at="2025-01-01 10:00:00")
-        self._insert_session_raw(tid, mode="mock", teacher_quality=5, studied_at="2025-06-01 10:00:00")
+        self._insert_session_raw(engineer_id, tid, mode="mock", teacher_quality=2, studied_at="2025-01-01 10:00:00")
+        self._insert_session_raw(engineer_id, tid, mode="mock", teacher_quality=5, studied_at="2025-06-01 10:00:00")
 
-        rows = session_repository.get_mock_sessions(tid)
+        rows = session_repository.get_mock_sessions(engineer_id, tid)
         # quality is the COALESCE alias — most recent (teacher_quality=5) should be first
         self.assertEqual(rows[0]["quality"], 5)
         self.assertEqual(rows[1]["quality"], 2)
 
     def test_get_mock_sessions_respects_limit(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
         for i in range(7):
-            self._insert_session_raw(tid, mode="mock",
+            self._insert_session_raw(engineer_id, tid, mode="mock",
                                       studied_at=f"2025-0{i % 9 + 1}-01 10:00:00")
-        self.assertEqual(len(session_repository.get_mock_sessions(tid, limit=2)), 2)
+        self.assertEqual(len(session_repository.get_mock_sessions(engineer_id, tid, limit=2)), 2)
+
+    def test_get_mock_sessions_only_returns_target_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        tid = self._insert_topic(name="Shared")
+        self._insert_session_raw(engineer_b, tid, mode="mock", teacher_quality=5)
+
+        self.assertEqual(session_repository.get_mock_sessions(engineer_a, tid), [])
 
     # ------------------------------------------------------------------
     # has_mock_history
     # ------------------------------------------------------------------
 
     def test_has_mock_history_false_when_no_sessions(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self.assertFalse(session_repository.has_mock_history(tid))
+        self.assertFalse(session_repository.has_mock_history(engineer_id, tid))
 
     def test_has_mock_history_false_for_nonexistent_topic(self) -> None:
-        self.assertFalse(session_repository.has_mock_history(99999))
+        engineer_id = self._insert_engineer()
+        self.assertFalse(session_repository.has_mock_history(engineer_id, 99999))
 
     def test_has_mock_history_true_for_mock_mode(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="mock")
-        self.assertTrue(session_repository.has_mock_history(tid))
+        self._insert_session_raw(engineer_id, tid, mode="mock")
+        self.assertTrue(session_repository.has_mock_history(engineer_id, tid))
 
     def test_has_mock_history_true_for_null_mode_legacy_row(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode=None)
-        self.assertTrue(session_repository.has_mock_history(tid))
+        self._insert_session_raw(engineer_id, tid, mode=None)
+        self.assertTrue(session_repository.has_mock_history(engineer_id, tid))
 
     def test_has_mock_history_false_when_only_discuss_sessions(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="discuss")
-        self._insert_session_raw(tid, mode="discuss")
-        self.assertFalse(session_repository.has_mock_history(tid))
+        self._insert_session_raw(engineer_id, tid, mode="discuss")
+        self._insert_session_raw(engineer_id, tid, mode="discuss")
+        self.assertFalse(session_repository.has_mock_history(engineer_id, tid))
 
     def test_has_mock_history_true_when_mixed_modes(self) -> None:
+        engineer_id = self._insert_engineer()
         tid = self._insert_topic(name="T")
-        self._insert_session_raw(tid, mode="discuss")
-        self._insert_session_raw(tid, mode="mock")
-        self.assertTrue(session_repository.has_mock_history(tid))
+        self._insert_session_raw(engineer_id, tid, mode="discuss")
+        self._insert_session_raw(engineer_id, tid, mode="mock")
+        self.assertTrue(session_repository.has_mock_history(engineer_id, tid))
+
+    def test_has_mock_history_only_true_for_target_engineer(self) -> None:
+        engineer_a = self._insert_engineer(external_id="a")
+        engineer_b = self._insert_engineer(external_id="b")
+        tid = self._insert_topic(name="Shared")
+        self._insert_session_raw(engineer_b, tid, mode="mock")
+
+        self.assertFalse(session_repository.has_mock_history(engineer_a, tid))
+        self.assertTrue(session_repository.has_mock_history(engineer_b, tid))
 
 
 if __name__ == "__main__":

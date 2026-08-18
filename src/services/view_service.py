@@ -9,10 +9,11 @@ from src.repositories.topic_repository import (
 )
 
 
-def get_study_snapshot(today: date | None = None) -> dict:
-    """Return overdue, due-today, and in-progress topics.
+def get_study_snapshot(engineer_id: int, today: date | None = None) -> dict:
+    """Return an engineer's overdue, due-today, and in-progress topics.
 
     Args:
+        engineer_id: Engineer primary key.
         today: Reference date for due calculations. Defaults to date.today().
 
     Returns:
@@ -26,9 +27,9 @@ def get_study_snapshot(today: date | None = None) -> dict:
 
     today_str = today.isoformat()
 
-    overdue_rows = fetch_overdue_topics(today_str)
-    due_today_rows = fetch_due_today_topics(today_str)
-    in_progress_rows = fetch_in_progress_topics_with_weak_areas()
+    overdue_rows = fetch_overdue_topics(engineer_id, today_str)
+    due_today_rows = fetch_due_today_topics(engineer_id, today_str)
+    in_progress_rows = fetch_in_progress_topics_with_weak_areas(engineer_id)
 
     overdue = []
     for row in overdue_rows:

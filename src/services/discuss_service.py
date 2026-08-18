@@ -70,10 +70,11 @@ def _find_repeated_weak_areas(sessions: list[dict]) -> list[str]:
 # Public service functions
 # ---------------------------------------------------------------------------
 
-def get_discuss_context(topic_name: str) -> dict[str, Any]:
+def get_discuss_context(engineer_id: int, topic_name: str) -> dict[str, Any]:
     """Fetch all context needed to run a discuss session for a topic.
 
     Args:
+        engineer_id: Engineer primary key.
         topic_name: Topic display name (case-insensitive lookup).
 
     Returns:
@@ -91,10 +92,10 @@ def get_discuss_context(topic_name: str) -> dict[str, Any]:
         return {"error": f"Topic not found: {topic_name}"}
 
     try:
-        context = topic_repository.get_topic_context(topic_id)
-        discuss_history = session_repository.get_discuss_sessions(topic_id, limit=5)
-        mock_history = session_repository.get_mock_sessions(topic_id, limit=5)
-        mock_history_exists = session_repository.has_mock_history(topic_id)
+        context = topic_repository.get_topic_context(engineer_id, topic_id)
+        discuss_history = session_repository.get_discuss_sessions(engineer_id, topic_id, limit=5)
+        mock_history = session_repository.get_mock_sessions(engineer_id, topic_id, limit=5)
+        mock_history_exists = session_repository.has_mock_history(engineer_id, topic_id)
     except Exception as exc:
         logger.error("get_discuss_context DB error for topic_id=%d: %s", topic_id, exc)
         return {"error": f"Database error: {exc}"}
@@ -111,6 +112,7 @@ def get_discuss_context(topic_name: str) -> dict[str, Any]:
 
 
 def assess_discuss_readiness(
+    engineer_id: int,
     topic_name: str,
     teacher_quality: int,
     teacher_weak_areas: str,
@@ -128,6 +130,7 @@ def assess_discuss_readiness(
     - Otherwise → ``not_ready``
 
     Args:
+        engineer_id: Engineer primary key.
         topic_name: Topic display name (case-insensitive lookup).
         teacher_quality: Quality score for this discuss session (integer).
         teacher_weak_areas: JSON string representing weak areas observed
@@ -153,15 +156,15 @@ def assess_discuss_readiness(
 
     # Insert the current session first so it is included in the repetition check.
     try:
-        session_repository.insert_discuss_session(topic_id, teacher_quality, teacher_weak_areas)
+        session_repository.insert_discuss_session(engineer_id, topic_id, teacher_quality, teacher_weak_areas)
     except Exception as exc:
         logger.error("assess_discuss_readiness insert failed for topic_id=%d: %s", topic_id, exc)
         return {"error": f"Failed to insert session: {exc}"}
 
     # Fetch last 10 discuss sessions (includes the one just inserted).
     try:
-        sessions = session_repository.get_discuss_sessions(topic_id, limit=10)
-        is_reentry = session_repository.has_mock_history(topic_id)
+        sessions = session_repository.get_discuss_sessions(engineer_id, topic_id, limit=10)
+        is_reentry = session_repository.has_mock_history(engineer_id, topic_id)
     except Exception as exc:
         logger.error("assess_discuss_readiness query failed for topic_id=%d: %s", topic_id, exc)
         return {"error": f"Database error: {exc}"}
@@ -202,7 +205,7 @@ def assess_discuss_readiness(
     was_moved = False
     if recommendation == "go_back_to_study":
         try:
-            was_moved = topic_repository.set_topic_back_to_in_progress(topic_id)
+            was_moved = topic_repository.set_topic_back_to_in_progress(engineer_id, topic_id)
         except Exception as exc:
             logger.error(
                 "assess_discuss_readiness: status rollback failed for topic_id=%d: %s",
